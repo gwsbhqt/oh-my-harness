@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createServer, request } from 'node:http'
 import { invokeCli } from './cli-fixture.ts'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RemoteService, type Deps, type RestartRecoveryResult, type SessionSummaryWire, type MonitorStartRequest } from '../src/service.ts'
@@ -1491,8 +1491,8 @@ test('通信口权限：目录 0700、socket 0600', async () => {
   const socketPath = join(dir, 'perm', 'dsh.sock')
   const server = await startServer({ socketPath, commands: () => [], run: async () => ({ text: '' }), info: () => ({}), log: () => {} })
   try {
-    const st = spawnSync('stat', ['-f', '%Lp', join(dir, 'perm'), socketPath], { encoding: 'utf8' }).stdout.trim().split('\n')
-    assert.deepEqual(st, ['700', '600'])
+    assert.equal(statSync(join(dir, 'perm')).mode & 0o777, 0o700)
+    assert.equal(statSync(socketPath).mode & 0o777, 0o600)
   } finally {
     await server.close()
   }
@@ -1517,7 +1517,7 @@ test('通信口文件被删后自动在原路径重新监听；路径被别的 s
     await new Promise((r) => setTimeout(r, 700))
     assert.equal(await health(socketPath), 200)
     assert.deepEqual(lines, ['socket rebound'])
-    assert.equal(spawnSync('stat', ['-f', '%Lp', socketPath], { encoding: 'utf8' }).stdout.trim(), '600')
+    assert.equal(statSync(socketPath).mode & 0o777, 0o600)
     rmSync(socketPath)
     other = createServer((_req, res) => { res.writeHead(418); res.end() })
     await new Promise<void>((resolve) => other!.listen(socketPath, resolve))

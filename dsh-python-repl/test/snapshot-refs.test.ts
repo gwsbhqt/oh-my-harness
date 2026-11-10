@@ -14,7 +14,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 it('snapshot-by-name unit tests pass with dill and skip nothing', { timeout: 300_000 }, async () => {
   const python = await testKernelPython()
-  const { stderr } = await promisify(execFile)(python, ['-m', 'unittest', 'test/python/test_snapshot_refs.py', '-v'], { cwd: root, env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } })
+  const { stderr } = await promisify(execFile)(python, ['-m', 'unittest', 'discover', '-s', 'test/python', '-p', 'test_snapshot_refs.py', '-v'], { cwd: root, env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } })
   assert.match(stderr, /\nOK\n?$/, stderr)
   assert.doesNotMatch(stderr, /skipped/, stderr)
 })

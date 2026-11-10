@@ -1,0 +1,37 @@
+name: Feature proposal
+description: Discuss a concrete problem and a small, testable change.
+title: "[Feature] "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and intended user
+      description: Describe an actual workflow using fictional examples, without private accounts or infrastructure.
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: Current behavior and alternatives
+      description: What does the host or an existing component already provide? Why is it insufficient?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior and boundary
+      description: Name the owning component, expected interaction, and affected permissions or dependencies.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Observable acceptance criteria
+      description: Explain how to verify success, cancellation, failure, and relevant limits without production access.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and tradeoffs
+      description: Include unsupported platforms, added maintenance, and what should stay out of this change.

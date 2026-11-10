@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Private vulnerability report
+    url: https://github.com/gwsbhqt/oh-my-harness/security/advisories/new
+    about: Use private reporting for vulnerabilities; if unavailable, do not post sensitive details in an issue.
+  - name: Security boundaries
+    url: https://github.com/gwsbhqt/oh-my-harness/blob/main/SECURITY.md
+    about: Read the trust model and reporting guidance before sharing evidence.

@@ -1,0 +1,170 @@
+{
+  "compaction": {
+    "cases": [
+      {
+        "appendix_estimated_tokens": 283,
+        "appendix_utf16_units": 1132,
+        "framing_utf16_units": 401,
+        "full_items": 10,
+        "illustrative_text_target_estimated_tokens": 15283,
+        "index_items": 0,
+        "index_line_utf16_units": 0,
+        "merged_messages": 0,
+        "name": "short",
+        "unbounded_appendix_utf16_units": 1132,
+        "user_messages": 10,
+        "verbatim_line_utf16_units": 731
+      },
+      {
+        "appendix_estimated_tokens": 2659,
+        "appendix_utf16_units": 10636,
+        "framing_utf16_units": 732,
+        "full_items": 22,
+        "illustrative_text_target_estimated_tokens": 17659,
+        "index_items": 23,
+        "index_line_utf16_units": 1983,
+        "merged_messages": 55,
+        "name": "medium",
+        "unbounded_appendix_utf16_units": 36394,
+        "user_messages": 100,
+        "verbatim_line_utf16_units": 7921
+      },
+      {
+        "appendix_estimated_tokens": 2650,
+        "appendix_utf16_units": 10598,
+        "framing_utf16_units": 733,
+        "full_items": 22,
+        "illustrative_text_target_estimated_tokens": 17650,
+        "index_items": 22,
+        "index_line_utf16_units": 1922,
+        "merged_messages": 956,
+        "name": "long",
+        "unbounded_appendix_utf16_units": 361296,
+        "user_messages": 1000,
+        "verbatim_line_utf16_units": 7943
+      },
+      {
+        "appendix_estimated_tokens": 2662,
+        "appendix_utf16_units": 10645,
+        "framing_utf16_units": 734,
+        "full_items": 22,
+        "illustrative_text_target_estimated_tokens": 17662,
+        "index_items": 22,
+        "index_line_utf16_units": 1946,
+        "merged_messages": 9956,
+        "name": "extended",
+        "unbounded_appendix_utf16_units": 3619298,
+        "user_messages": 10000,
+        "verbatim_line_utf16_units": 7965
+      },
+      {
+        "appendix_estimated_tokens": 204,
+        "appendix_utf16_units": 816,
+        "framing_utf16_units": 730,
+        "full_items": 0,
+        "illustrative_text_target_estimated_tokens": 15204,
+        "index_items": 1,
+        "index_line_utf16_units": 86,
+        "merged_messages": 0,
+        "name": "oversize-message",
+        "unbounded_appendix_utf16_units": 16444,
+        "user_messages": 1,
+        "verbatim_line_utf16_units": 0
+      },
+      {
+        "appendix_estimated_tokens": 2644,
+        "appendix_utf16_units": 10574,
+        "framing_utf16_units": 732,
+        "full_items": 21,
+        "illustrative_text_target_estimated_tokens": 17644,
+        "index_items": 22,
+        "index_line_utf16_units": 1988,
+        "merged_messages": 157,
+        "name": "escaped-unicode",
+        "unbounded_appendix_utf16_units": 75094,
+        "user_messages": 200,
+        "verbatim_line_utf16_units": 7854
+      }
+    ],
+    "defaults": {
+      "retainTokens": 12000,
+      "summaryChars": 12000,
+      "userIndexChars": 2000,
+      "userMessageChars": 8000
+    },
+    "limits": [
+      "The recent-history retention setting is a host estimate, not a strict request-size ceiling.",
+      "An oversize model summary is retained when its one shortening attempt fails validation.",
+      "Framing is outside both appendix budgets; custom reader hints have unrestricted length.",
+      "The illustrative target assumes the model summary fits and the retained tail meets its estimate.",
+      "System instructions, tool schemas, attachments, provider formatting and indivisible host messages are excluded."
+    ],
+    "measured_with": [
+      "boundItems",
+      "attachmentText",
+      "itemLine",
+      "parseAttachment"
+    ],
+    "production_sources": {
+      "schema": {
+        "path": "dsh-compaction-bound/src/index.ts",
+        "sha256": "029f65029ad49305f930f7537518a48e2c35ef4b34f36f8cd1058a69db351dc7"
+      },
+      "summary": {
+        "path": "dsh-compaction-bound/src/summary.ts",
+        "sha256": "db7eb5987dcb891e9b3ec89e46a3ac49a3484c4006f2b44c3bf9a5d1f2c73666"
+      }
+    }
+  },
+  "estimator": "ceil(UTF-16 code units / 4), separately per displayed text; not a model tokenizer",
+  "format_version": 1,
+  "locality": {
+    "estimated_reduction_percent": 99.9824,
+    "filtered": {
+      "estimated_tokens": 87,
+      "utf16_units": 345,
+      "utf8_bytes": 345
+    },
+    "fixture_rows": 10000,
+    "fixture_sha256": "34869800f40e2bc218bd52d435fcfe802dd6fed67dd4d2339b6457b2f23ece5a",
+    "raw": {
+      "estimated_tokens": 494025,
+      "utf16_units": 1976098,
+      "utf8_bytes": 1976098
+    },
+    "result": {
+      "error_rows": 104,
+      "errors_by_service": {
+        "catalog": 35,
+        "checkout": 35,
+        "search": 34
+      },
+      "first_error_samples": [
+        {
+          "latency_ms": 0,
+          "seq": 0,
+          "service": "catalog",
+          "status": 503
+        },
+        {
+          "latency_ms": 3589,
+          "seq": 97,
+          "service": "checkout",
+          "status": 503
+        },
+        {
+          "latency_ms": 3178,
+          "seq": 194,
+          "service": "search",
+          "status": 503
+        }
+      ],
+      "max_latency_ms": 3999,
+      "slow_rows": 4972,
+      "total_rows": 10000
+    },
+    "scope": "Only returned text. Excludes prompts, code, tool schemas, provider overhead, reasoning, images, and cache accounting."
+  },
+  "network_calls": 0,
+  "paid_model_calls": 0
+}

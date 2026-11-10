@@ -1,0 +1,56 @@
+name: Bug report
+description: Report a reproducible defect with fictional, non-sensitive evidence.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For vulnerabilities, use GitHub private reporting from SECURITY.md. Do not paste credentials, authenticated screenshots, private endpoints, or real session logs here.
+  - type: input
+    id: component
+    attributes:
+      label: Component and source revision
+      placeholder: dsh-monitor at a commit hash
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Relevant environment
+      description: Host/component versions, operating system, and relevant runtime versions. Remove machine identifiers and account information.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal fictional reproduction
+      description: Include the input shape, commands or calls, and steps needed to reproduce. Explain what the fixture represents.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Observed behavior and evidence
+      description: Preserve relevant exit codes and error text. Separate command acceptance from the final result.
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Checks performed and limitations
+      description: What did you actually run? What is synthetic, inspected only, or not verified live?
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Public report review
+      options:
+        - label: I removed private data and used fictional or explicitly public reproduction inputs.
+          required: true

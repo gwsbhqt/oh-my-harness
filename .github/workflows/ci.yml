@@ -34,6 +34,10 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: '3.14'
+      - name: Install shells for argument quoting tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fish zsh
       - name: Check tooling and every plugin
         env:
           DSH_HOME: ${{ runner.temp }}/dsh-ci-home
@@ -43,14 +47,6 @@ jobs:
         run: |
           set -euo pipefail
           ci_failures=()
-          echo "::group::tooling"
-          if node --test tooling/test/*.test.mjs; then
-            echo "Tooling checks passed"
-          else
-            ci_failures+=("tooling:$?")
-            echo "::error::Tooling checks failed"
-          fi
-          echo "::endgroup::"
           plugins=(
             dsh-python-repl
             dsh-control
@@ -76,9 +72,16 @@ jobs:
             fi
             echo "::endgroup::"
           done
+          echo "::group::tooling"
+          if node --test tooling/test/*.test.mjs; then
+            echo "Tooling checks passed"
+          else
+            ci_failures+=("tooling:$?")
+            echo "::error::Tooling checks failed"
+          fi
+          echo "::endgroup::"
           if (( ${#ci_failures[@]} )); then
-            printf 'Failed checks: %s
-          ' "${ci_failures[@]}"
+            printf 'Failed checks: %s\n' "${ci_failures[@]}"
             exit 1
           fi
 
@@ -127,7 +130,6 @@ jobs:
             echo "::endgroup::"
           done
           if (( ${#ci_failures[@]} )); then
-            printf 'Failed test suites: %s
-          ' "${ci_failures[@]}"
+            printf 'Failed test suites: %s\n' "${ci_failures[@]}"
             exit 1
           fi
