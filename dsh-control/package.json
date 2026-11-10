@@ -1,0 +1,125 @@
+{
+  "name": "dsh-control",
+  "version": "0.1.0",
+  "private": true,
+  "description": "把正在运行的 DSH 通过本机通信口开放给外部 agent（Hermes / Claude Code / Codex）：看会话、发消息、等完成、按额度挑模型、调任意内部接口；配套 dsh-control 命令行和 skill",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "dsh-control",
+    "cli"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "./lib/index.js",
+  "bin": {
+    "dsh-control": "./bin/dsh-control"
+  },
+  "exports": {
+    ".": "./lib/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json",
+    "./client": "./lib/client.js"
+  },
+  "files": [
+    "lib/*.js",
+    "bin/dsh-control",
+    "skills",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "AGENTS.md"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-connection"
+      ]
+    },
+    "build": {
+      "manifest": "./lib/dsh-build.json",
+      "inputs": [
+        "src",
+        "bin",
+        "skills",
+        "package.json",
+        "scripts/build.mjs",
+        "cordis.patch.yml",
+        "pnpm-lock.yaml",
+        "tsconfig.json",
+        "tsdown.config.ts"
+      ],
+      "outputs": [
+        "lib"
+      ],
+      "repositoryInputs": [
+        "tooling/runtime/restart-state.mjs",
+        "tooling/runtime/restart-state.d.mts",
+        "tooling/build.mjs",
+        "tooling/build-manifest.mjs",
+        "tooling/build-manifest.d.mts",
+        "tooling/doctor.mjs",
+        "tooling/doctor-cli.mjs",
+        "tooling/app-probe.mjs",
+        "tooling/ready-probe.mjs",
+        "tooling/preset-drift.mjs",
+        "tooling/tsdown.mjs",
+        "tooling/tsdown.d.mts",
+        "tooling/tsconfig.base.json",
+        "tooling/tsconfig.node.json",
+        "tooling/runtime/live.d.mts",
+        "tooling/runtime/live.mjs",
+        "tooling/runtime/gateway.d.mts",
+        "tooling/runtime/gateway.mjs",
+        "tooling/tsconfig.web.json",
+        "tooling/runtime/routes.d.mts",
+        "tooling/runtime/routes.mjs",
+        "tooling/runtime/notice.mjs",
+        "tooling/runtime/notice.d.mts"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test 'test/*.test.ts' && python3 -m unittest discover -s test/python -v",
+    "check": "pnpm run typecheck && pnpm run build && pnpm run test"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/dsh-llm": ">=0.2.1-rc.2",
+    "@deepseek-ai/schemastery": "^3.18.4"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-api-remotes": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-connection": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-settings": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/schemastery": "3.19.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "~18.3.31",
+    "react": "^18.3.1",
+    "tsdown": "^0.22.2",
+    "typescript": "^5.9.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "zod": "3.25.76"
+  }
+}

@@ -1,0 +1,45 @@
+# dsh-monitor bundle 补丁层：把「长驻命令输出流进会话」这条能力插进加载器。
+#
+# 关掉它不需要动这里：在 profile 的 cordis.patch.yml 里给同一个 id 写
+# `disabled: true`（GUI 的「插件列表」页点禁用写的也是那一行）。
+- insert:
+    - id: monitor
+      name: "dsh-monitor"
+      config:
+        # 事件到达时怎么送进会话：
+        #   steer    —— 忙时在下一步边界收，闲时直接开一轮（默认，监听类场景要这个）
+        #   inject   —— 不唤醒，只在下一步顺带带上（纯日志类场景）
+        #   followup —— 每条单独开一轮（一般不用）
+        delivery: steer
+        # 攒多少毫秒合成一条消息再送。0 = 每读到一行就送。
+        coalesceMs: 200
+        # 单条消息最多带多少行 / 多少字节（超出的留在队列里下一批继续送）。
+        maxLinesPerNotice: 50
+        maxBytesPerNotice: 32768
+        # 单行超过这个字节数就截断，并显式标注截掉了多少。
+        maxLineBytes: 8192
+        # 内存里保留最近多少行，供 monitor_output 回看（job_output 也读它）。
+        historyLines: 2000
+        # 进程退出时，把 stderr 末尾多少行附在结束通知里。
+        stderrTailLines: 20
+        # timeout_ms 缺省值 / 上限。0 = 默认不设上限（**监听要一直活着，别改这个**）。
+        defaultTimeoutMs: 0
+        maxTimeoutMs: 86400000
+        # 终止进程时给它的宽限期（毫秒）。
+        graceMs: 3000
+        # 进程自己退出后要不要重拉：
+        #   never      —— 退出即结束（默认，一次性命令要这个）
+        #   on-failure —— 非 0 退出 / 起不来才重拉（挂几个星期的监听用这个）
+        #   always     —— 只要不是被人叫停的一律重拉
+        # 被人叫停（kill / 超时 / 会话销毁 / 插件卸载）**永远不重拉**。
+        restart: never
+        # 第一次重拉前等多久；连续失败按 2 倍退避，封顶 restartMaxDelayMs。
+        restartDelayMs: 1000
+        restartMaxDelayMs: 60000
+        # 连续重拉次数上限；0 = 不限。跑到上限就按失败结算并报一次。
+        restartLimit: 0
+        # 一轮活过这么久就算「健康」，退避计数清零（把「崩溃循环」和
+        # 「跑了一周崩一次」分开）。0 = 从不判定健康，所有失败都算连续。
+        restartResetMs: 60000
+        # stderr 日志目录。留空则用 $DSH_HOME/monitor-logs。
+        logDir: ""

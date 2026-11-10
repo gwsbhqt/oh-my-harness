@@ -1,0 +1,16 @@
+# dsh-message-tidy bundle 补丁层。整个关掉：在 profile 的 cordis.patch.yml 写
+# `- id: message-tidy` 加 `disabled: true`；只关某一项，把对应开关设成 false。
+- insert:
+    - id: message-tidy
+      name: "dsh-message-tidy"
+      config:
+        # 通知加框：插件通知包上 <system-reminder>，注明不是用户说的。
+        noticeLabel: true
+        noticeSources: [repeat-tool-reminder, tool-jobs]
+        # 任务改名：后台任务完成通知用 description 当名字。
+        jobLabel: true
+        jobLabelMaxChars: 120
+        # 指令只发差异：AGENTS.md 中途改动只发 diff；太大/没上一版/被截断时照旧发全文。
+        instructionsDiff: true
+        maxDiffRatio: 0.5
+        contextLines: 2

@@ -1,0 +1,18 @@
+# dsh-image-cap bundle 补丁层：把「发图前收紧面积预算 + 限制请求图片张数」
+# 这两条定制插进加载器。
+#
+# 关掉它不需要动这里：在 profile 的 cordis.patch.yml 里给同一个 id 写
+# `disabled: true`（GUI 的「插件列表」页点禁用写的也是那一行）。
+- insert:
+    - id: image-cap
+      name: "dsh-image-cap"
+      config:
+        # Anthropic 在「一个请求 >20 张图」时对每张图施加的单边红线。
+        maxLongEdge: 2000
+        # 一个请求最多发多少张图；超过就把最老的换成文字占位符。
+        # 随包策略保留 16 张，减少历史图片的重复传输；不表示所有 provider 的硬上限。
+        maxImagesPerRequest: 16
+        # 张数裁剪步长：越大越省缓存（前缀不常变），越小越省图。
+        imageCountQuantum: 8
+        # 逐条线路覆盖张数上限，例如 { claude: 100 }；没写的线路用上面的全局值。
+        providerMaxImages: {}

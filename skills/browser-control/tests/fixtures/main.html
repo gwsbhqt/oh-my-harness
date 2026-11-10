@@ -1,0 +1,8 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>browser-control 安全验收页</title>
+<style>body{font:18px sans-serif;padding:30px}button,input{font:inherit;margin:10px}#scroll{height:90px;overflow:auto;border:1px solid} .item{height:50px}</style>
+<h1>browser-control 安全验收页</h1><label>姓名<input id="name"></label><button id="query" onclick="query()">查询</button><p id="result" role="status">待查询</p>
+<button id="duplicate1">重名</button><button id="duplicate2">重名</button><button id="remove" onclick="this.remove()">移除自己</button>
+<button id="dialog" onclick="alert('browser-control 弹窗')">弹窗</button><input type="file" id="upload"><a href="/download" download="browser_control.txt">下载文件</a>
+<div id="scroll" tabindex="0"><div class="item">第一项</div><div class="item">第二项</div><div class="item">第三项</div></div>
+<div id="shadow"></div><iframe title="嵌套页面" src="/frame"></iframe>
+<script>let clicks=0; async function query(){clicks++;const r=await fetch('/api/query?name='+encodeURIComponent(document.querySelector('#name').value));const d=await r.json();document.querySelector('#result').textContent='结果：'+d.name+'；点击次数：'+clicks;}document.querySelector('#shadow').attachShadow({mode:'open'}).innerHTML='<button id="shadow-button">影子按钮</button>';</script></html>

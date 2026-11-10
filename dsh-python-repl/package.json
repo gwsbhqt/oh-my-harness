@@ -1,0 +1,134 @@
+{
+  "name": "dsh-python-repl",
+  "version": "0.1.0",
+  "private": true,
+  "description": "给模型一个持久的 Python 环境：变量跨轮保留，模型可以写 Python 编排工具、处理数据",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "python",
+    "ptc",
+    "repl",
+    "prime-agent"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json",
+    "./client": "./lib/client.js"
+  },
+  "files": [
+    "lib/*.js",
+    "lib/dsh-build.json",
+    "python/**/*.py",
+    "python/compat/README.md",
+    "vendor/**/*.py",
+    "vendor/**/*.md",
+    "vendor/**/LICENSE*",
+    "cordis.patch.yml",
+    "AGENTS.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "build": {
+      "manifest": "./lib/dsh-build.json",
+      "inputs": [
+        "src",
+        "python",
+        "vendor",
+        "scripts",
+        "package.json",
+        "cordis.patch.yml",
+        "pnpm-lock.yaml",
+        "tsconfig.json",
+        "tsdown.config.ts"
+      ],
+      "outputs": [
+        "lib"
+      ],
+      "repositoryInputs": [
+        "tooling/build.mjs",
+        "tooling/build-manifest.mjs",
+        "tooling/build-manifest.d.mts",
+        "tooling/tsdown.mjs",
+        "tooling/tsdown.d.mts",
+        "tooling/tsconfig.base.json",
+        "tooling/tsconfig.web.json",
+        "tooling/runtime/card.d.mts",
+        "tooling/runtime/card.mjs",
+        "tooling/runtime/fields.d.mts",
+        "tooling/runtime/fields.mjs",
+        "tooling/runtime/workflow-guard.mjs",
+        "tooling/runtime/workflow-guard.d.mts",
+        "tooling/runtime/notice.mjs",
+        "tooling/runtime/notice.d.mts"
+      ]
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-tool",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "watch": "tsdown --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import ./test/fixtures/isolated-home.mjs --test 'test/*.test.ts'",
+    "test:py": "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s test/python -p 'test_*.py' -v",
+    "smoke": "node --test 'test/smoke.test.ts'",
+    "check": "pnpm run typecheck && pnpm run build && pnpm run test && pnpm run test:py"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/dsh-llm": ">=0.2.2-rc.1",
+    "@deepseek-ai/dsh-ptc-runtime": ">=0.2.2-rc.1",
+    "@deepseek-ai/dsh-tool-executor-ptc": ">=0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": ">=0.2.2-rc.1",
+    "@deepseek-ai/schemastery": "^3.18.4"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/cordis-plugin-loader": "1.1.0",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-locale": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-conversation": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-plugin-manager": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-settings": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-tool": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-ptc-runtime": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session-projection": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tool-executor-native": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tool-executor-ptc": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
+    "@deepseek-ai/schemastery": "3.19.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^18.3.31",
+    "react": "^18.3.1",
+    "tsdown": "^0.22.2",
+    "typescript": "^5.9.0",
+    "yaml": "^2.9.1"
+  }
+}

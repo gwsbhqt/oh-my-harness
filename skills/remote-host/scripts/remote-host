@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+"""运行 remote-host，与 Python 技能共用正式源码包。"""
+from pathlib import Path
+import sys
+
+root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(root / "src"))
+from remote_host.commands.cli import main
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,14 @@
+# dsh-control bundle 补丁层：挂一个本机通信口，把正在运行的 DSH 开放给外部 agent。
+#
+# 只 insert 自己的条目，不禁用任何东西。关掉：profile 的 cordis.patch.yml 写
+# `- id: dsh-control` 加 `disabled: true`。
+- insert:
+    - id: dsh-control
+      name: dsh-control
+      config:
+        # 设置「远程机器」一页。清单里每个服务的本机端口 = 服务端口 + 10000 + 机器编号；
+        # 临时端口用对面同一个号，本机被占就往上 +1。
+        # profile 里再写 `- id: dsh-control` 加 config 会整块替换这里，要连这两项一起抄过去。
+        machines: []
+        services: []
+

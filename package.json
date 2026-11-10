@@ -1,0 +1,13 @@
+{
+  "name": "oh-my-harness",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "pnpm run test:tooling && node tooling/cli.mjs check",
+    "list": "node tooling/cli.mjs list",
+    "build": "node tooling/cli.mjs build",
+    "create": "node tooling/cli.mjs create",
+    "test:tooling": "node --test tooling/test/*.test.mjs"
+  },
+  "license": "MIT"
+}

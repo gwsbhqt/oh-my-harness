@@ -1,0 +1,51 @@
+# dsh-python-repl bundle 补丁层：把 Host 的 ctx.ptcRuntime 换成持久 Python 内核。
+#
+# 两件事必须一起做，缺一不可：
+#   1. 关掉官方 TypeScript 后端（0.1.7 的 dsh-ptc-runtime-node，补丁 id 是 ptc-runtime）
+#   2. 插入本插件
+# 因为 ptcRuntime 是**单例服务**：两个后端同时注册，后注册的未必赢，
+# 而 dsh-tools 只会拿到 ctx.get('ptcRuntime') 的那一个。
+#
+# 影响范围：Host 这一层只剩 Python 后端，PTC 模式的 run_code 走它。
+# workflow-ptc（工作流引擎）一加载就要求 TypeScript 后端，否则报错，所以工作流整个不用
+# （用户 2026-11-04 定：Python 代码格里已经能派子代理，不留 TypeScript 后端）：
+#   - Host 这一层的 workflow-ptc、tool-workflow 在下面关掉；
+#   - cordis、standard 模式 delegation 组里的那两条，补丁层够不着，
+#     插件启动后在模式注册表的记录上关掉再按宿主的方式重新挂载（src/preset-workflow.ts），
+#     和官方 PTC 模式的写法一样。
+#
+# 关掉本插件不需要动这里：在 profile 的 cordis.patch.yml 里给同一个 id 写
+# `disabled: true`（GUI 的「插件列表」页点禁用写的也是那一行）——但记得
+# 同时把 ptc-runtime 那条 disabled 去掉，否则就没有 ptc runtime 了。
+# 插件卸载时会把模式里关掉的工作流按原样还回去。
+- id: ptc-runtime
+  disabled: true
+
+- id: workflow-ptc
+  disabled: true
+
+- id: tool-workflow
+  disabled: true
+
+- insert:
+    - id: python-repl
+      name: "dsh-python-repl"
+      config:
+        # 会话内核用哪个 Python 建专用 venv。**必须 >= 3.11**，和 Prime 内核的下限一致。
+        # 写版本号就用 uv 管理的 Python，缺了首次用到时装上；和 Prime 一样停在
+        # dill 能完整快照的版本（dill 0.4.1 在 3.15 上存不了函数和类）。
+        # 写裸名字按 DSH 的 PATH 找；写绝对路径是单机事实，换台机器就找不到。
+        python: "3.14"
+        # 等内核握手多久（毫秒）。冷启动含解释器启动 + 协议握手。
+        startupTimeoutMs: 30000
+        # 格结束清理的**宿主侧**上限（毫秒）。到点直接 SIGKILL 内核并报状态丢失。
+        # 为什么不能只靠 Python 自己的超时：用户任务在 except CancelledError 里
+        # 进同步死循环时，asyncio 根本跑不起来，它自己的超时永远不会触发。
+        teardownGraceMs: 5000
+        # 取消后停不下来的格，最多再等多久就强杀内核（毫秒）。撤权在 abort 那一刻就发生，与本值无关。
+        # 和 Prime 一样，取消本身等 1 秒就返回、不杀内核；从下一格到来时算起，
+        # 每 0.5 秒再中断一次，到本值还没停才强杀——装了 SIG_IGN 的格只能这么停。
+        interruptGraceMs: 5000
+        # 扫描 Python 技能的可信目录列表。**导入会执行模块顶层代码**，
+        # 只写你信任的目录；工作区不会被隐式扫描。留空则不加载任何技能。
+        skillRoots: []

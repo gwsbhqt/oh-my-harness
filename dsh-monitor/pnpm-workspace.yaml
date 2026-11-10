@@ -1,0 +1,10 @@
+# pnpm 11 的构建脚本白名单。这三个包带 install/postinstall 脚本
+# （koffi / node-pty 是 dsh-subprocess-local 的可选原生加速件）。
+#
+# 一律 false：本插件只在**集成测试**里用 dsh-subprocess-local，走的是它退化成
+# 普通 child_process 的那条路，原生件不需要编；但也不能留空，否则 pnpm 每次
+# `pnpm run` 都会因为「有脚本没被表态」而报错退出。
+allowBuilds:
+  '@deepseek-ai/dsh-subprocess-local': false
+  koffi: false
+  node-pty: false

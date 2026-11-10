@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""选择目标机器，再运行该机器的 DSH 控制命令。"""
+import json
+import os
+from pathlib import Path
+import sys
+
+
+def main():
+    capability_args = sys.argv[1:]
+    if capability_args[:1] == ["--local"]:
+        capability_args = capability_args[1:]
+    if capability_args == ["--capabilities", "--json"]:
+        print(json.dumps({"ok": True, "tool": "dsh-control", "protocol": 1,
+                          "features": ["local-routing", "task-outcomes", "send-receipts", "chat-preflight", "restart-receipts", "settled-wait", "done-notify"]}))
+        return 0
+    # MCP 桥只连本机，先于远程机器选择分流；不能让 mcp 被当成普通命令转发到别的机器。
+    mcp_args = None
+    if sys.argv[1:2] == ["mcp"]:
+        mcp_args = sys.argv[2:]
+    elif sys.argv[1:3] == ["--local", "mcp"]:
+        mcp_args = sys.argv[3:]
+    if mcp_args is not None:
+        if mcp_args:
+            print("dsh-control mcp 不接受参数：它是给 Raycast 等 MCP 客户端用的标准输入输出进程", file=sys.stderr)
+            return 2
+        root = Path(__file__).resolve().parent.parent
+        entry = root / "lib" / "dsh-control-mcp.js"
+        if not entry.is_file():
+            print(f"dsh-control: 找不到 {entry}；先在插件目录运行 pnpm run build", file=sys.stderr)
+            return 1
+        os.execvp("node", ["node", str(entry)])
+    args = sys.argv[1:]
+    # Explicit local calls ignore the optional remote target library and pin.
+    local = args[:1] == ["--local"]
+    if local:
+        args = args[1:]
+    command = next((word for word in args if not word.startswith("-")), "")
+    prefix = args[:args.index(command)] if command else args
+    routed = any(word in ("-H", "--host") or word.startswith("--host=")
+                 or word.startswith("-H") and len(word) > 2 for word in prefix)
+    needs_shared = command in ("use", "pin", "hosts") or routed
+    if not local and not needs_shared:
+        state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state")
+        pin = state / "dsh-control" / "pin.json"
+        if pin.is_file():
+            settings = json.loads(pin.read_text())
+            if not isinstance(settings, dict) or ("host" in settings and
+                    (not isinstance(settings["host"], str) or not settings["host"].strip())):
+                raise ValueError(f"Invalid default machine settings in {pin}")
+            needs_shared = settings.get("host", "local") != "local"
+    if needs_shared:
+        shared = Path(os.environ.get("DSH_CONTROL_SHARED_ROOT") or
+                      Path(__file__).resolve().parents[2] / "skills" / "_shared").expanduser()
+        if not (shared / "agentkit" / "remote" / "__init__.py").is_file():
+            raise RuntimeError("Remote commands require the shared agentkit/remote package; "
+                               "install the shared remote support alongside the remote-control skills "
+                               "or set DSH_CONTROL_SHARED_ROOT to its installation directory. "
+                               "The command was not executed locally.")
+        sys.path.insert(0, str(shared))
+        from agentkit.remote.target import dispatch
+
+        args, code = dispatch("dsh-control", sys.argv[1:])
+        if code is not None:
+            return code
+    root = Path(__file__).resolve().parent.parent
+    os.execvp("node", ["node", str(root / "lib/dsh-control.js"), *args])
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception as exc:
+        if "--json" in sys.argv:
+            print(json.dumps({"ok": False, "error": {"code": "transport-failed", "message": str(exc)}}, ensure_ascii=False))
+        print(f"dsh-control: {exc}", file=sys.stderr)
+        sys.exit(1)

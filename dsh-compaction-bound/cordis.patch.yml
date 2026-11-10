@@ -1,0 +1,3 @@
+- insert:
+    - id: compaction-bound
+      name: dsh-compaction-bound
