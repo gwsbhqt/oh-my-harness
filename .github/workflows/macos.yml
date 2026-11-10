@@ -22,3 +22,14 @@ jobs:
           sdk_path="$(xcrun --sdk macosx --show-sdk-path)"
           xcrun swiftc -sdk "$sdk_path" -O skills/computer-control/bin/computer-control.swift -o "$RUNNER_TEMP/computer-control"
           file "$RUNNER_TEMP/computer-control"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26.13.0'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '12.18.0'
+      - name: Test macOS app install and rollback
+        working-directory: dsh-control
+        run: |
+          pnpm install --frozen-lockfile
+          node --test --test-name-pattern='restart --install-app|upgrade：安装包' test/restart.test.ts

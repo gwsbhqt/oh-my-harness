@@ -9,6 +9,7 @@ import argparse
 import io
 import os
 import re
+import shlex
 import socket
 import subprocess
 import sys
@@ -397,11 +398,17 @@ class Jobs(TempHome):
         self.assertIn(b"err", done.stdout)
 
     def test_wait_timeout_is_124_and_job_keeps_running(self):
-        self.start("j2", "sleep 30")
-        self.assertEqual(self.bash(jobs.job_wait_script("j2", 1, False, 5)).returncode, 124)
-        self.assertIn(b"running", self.bash(jobs.job_list_script()).stdout)
-        self.bash(jobs.job_kill_script("j2"))
-        self.assertIn(b"exited 143", self.bash(jobs.job_list_script()).stdout)
+        with mock.patch.dict(os.environ, {"COLUMNS": "80"}):
+            started = self.start("j2", "sleep 30")
+        self.assertEqual(started.returncode, 0, started.stderr)
+        job_dir = self.home / ".cache/remote-host/jobs/j2"
+        # The token is after the long worker script in argv; the identity must include it.
+        self.assertIn((job_dir / "token").read_text(), (job_dir / "identity").read_text())
+        with mock.patch.dict(os.environ, {"COLUMNS": "1000"}):
+            self.assertEqual(self.bash(jobs.job_wait_script("j2", 1, False, 5)).returncode, 124)
+            self.assertIn(b"running", self.bash(jobs.job_list_script()).stdout)
+            self.bash(jobs.job_kill_script("j2"))
+            self.assertIn(b"exited 143", self.bash(jobs.job_list_script()).stdout)
 
     def test_a_running_name_is_not_reused(self):
         self.start("j3", "sleep 30")
@@ -755,6 +762,8 @@ class Onboard(TempHome):
         `brew install` can install; `apt` makes `sudo -n apt-get install` work."""
         bin_ = Path(self.home) / "stubs"
         bin_.mkdir()
+        (bin_ / "chmod").symlink_to("/bin/chmod")
+
         def stub(name, body):
             (bin_ / name).write_text("#!/bin/sh\n" + body + "\n")
             (bin_ / name).chmod(0o755)
@@ -763,12 +772,14 @@ class Onboard(TempHome):
         if brew is not None:
             stub("brew", f'case " {" ".join(brew)} " in *" $2 "*) printf "#!/bin/sh\\n" > "{bin_}/$2"; '
                          f'chmod +x "{bin_}/$2";; *) exit 1;; esac')
-        stub("sudo", 'if [ "$1" = -n ]; then shift; fi; ' + ('exec "$@"' if sudo else "exit 1"))
+        stub("true", "exit 0")
+        stub("sudo", '[ "$1" = -n ] || exit 1; shift; ' + ('exec "$@"' if sudo else "exit 1"))
         if apt:
-            stub("apt-get", f'[ "$1" = install ] && printf "#!/bin/sh\\n" > "{bin_}/$3"; '
-                            f'[ "$1" = install ] && chmod +x "{bin_}/$3"; exit 0')
-        done = subprocess.run(["/bin/sh", "-c", onboard.MUX_SCRIPT], capture_output=True, text=True,
-                              env={"PATH": f"{bin_}:/usr/bin:/bin", "HOME": str(self.home)})
+            stub("apt-get", f'[ "$1" = update ] && exit 0; '
+                            f'[ "$1" = install ] && printf "#!/bin/sh\\n" > "{bin_}/$3" && chmod +x "{bin_}/$3"')
+        script = onboard.MUX_SCRIPT.replace(onboard.MUX_LOG, shlex.quote(str(self.home / "mux-install.log")))
+        done = subprocess.run(["/bin/sh", "-c", script], capture_output=True, text=True, check=True,
+                              env={"PATH": str(bin_), "HOME": str(self.home)})
         return onboard.parse_mux(done.stdout)
 
     def test_mux_keeps_existing_tmux(self):

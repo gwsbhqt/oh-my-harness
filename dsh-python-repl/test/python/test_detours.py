@@ -42,7 +42,8 @@ class Flags(unittest.TestCase):
         self.assertTrue(notice('await bash({"command": "uv run --with pymupdf python -c \'import fitz\'"})'))
 
     def test_bare_python_c_importing_a_third_party_library(self) -> None:
-        lines = notice('await bash({"command": "python3 -c \'import yaml; print(1)\'"})')
+        with mock.patch("importlib.util.find_spec", return_value=None):
+            lines = notice('await bash({"command": "python3 -c \'import yaml; print(1)\'"})')
         self.assertIn('repl.install("yaml")', lines[0])
 
     def test_through_tools_attribute_and_a_named_script(self) -> None:

@@ -57,7 +57,7 @@ def directory(name):
         raise ValueError('job path escapes its root')
     return d
 def identity(pid):
-    r = subprocess.run(['ps','-p',str(pid),'-o','lstart=','-o','command='],capture_output=True,text=True)
+    r = subprocess.run(['ps','-ww','-p',str(pid),'-o','lstart=','-o','command='],capture_output=True,text=True)
     return r.stdout.strip() if r.returncode == 0 else ''
 def alive(d):
     try:

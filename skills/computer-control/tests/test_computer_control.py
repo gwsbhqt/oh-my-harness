@@ -577,7 +577,8 @@ class Build(unittest.TestCase):
             quick = cache / build._quick_key(build.SOURCE.read_bytes())
             quick.write_text("#!/bin/sh\n")
             quick.chmod(0o755)
-            with mock.patch.object(build.subprocess, "run", side_effect=AssertionError("不该调编译器")):
+            with (mock.patch.object(build.sys, "platform", "darwin"),
+                  mock.patch.object(build.subprocess, "run", side_effect=AssertionError("不该调编译器"))):
                 self.assertEqual(build.ensure_binary(), quick.resolve())
 
     def test_source_change_changes_the_quick_key(self):

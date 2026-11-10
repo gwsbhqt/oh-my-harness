@@ -1118,7 +1118,7 @@ function fakeApp(path: string, version: string): string {
   return path
 }
 
-test('restart --install-app：旧 App 退出后才换，拉起的是新版；旧版留备份，upgrade --rollback 能换回', async () => {
+test('restart --install-app：旧 App 退出后才换，拉起的是新版；旧版留备份，upgrade --rollback 能换回', { skip: process.platform === 'darwin' ? false : 'requires macOS plutil' }, async () => {
   let atOpen: string[] = []
   const f = await fixture(() => [], { onOpen: () => { atOpen.push(appVersion(join(f.dir, 'Apps/DeepSeek Harness.app'))) } })
   try {
@@ -1141,7 +1141,7 @@ test('restart --install-app：旧 App 退出后才换，拉起的是新版；旧
   } finally { await f.close() }
 })
 
-test('restart --install-app：新版拉不起来就结束它、换回旧版再拉起，并按失败报告', async () => {
+test('restart --install-app：新版拉不起来就结束它、换回旧版再拉起，并按失败报告', { skip: process.platform === 'darwin' ? false : 'requires macOS plutil' }, async () => {
   const f = await fixture(() => [], { openFails: 1 })
   try {
     const target = fakeApp(join(f.dir, 'Apps/DeepSeek Harness.app'), '0.2.1-rc.5')
@@ -1156,7 +1156,7 @@ test('restart --install-app：新版拉不起来就结束它、换回旧版再�
   } finally { await f.close() }
 })
 
-test('upgrade：安装包 sha512 和更新源对不上就删包、不退出 DSH；--install-app 路径不对直接拒绝', async () => {
+test('upgrade：安装包 sha512 和更新源对不上就删包、不退出 DSH；--install-app 路径不对直接拒绝', { skip: process.platform === 'darwin' ? false : 'requires macOS plutil' }, async () => {
   const f = await fixture(() => [])
   try {
     const target = fakeApp(join(f.dir, 'Apps/DeepSeek Harness.app'), '0.2.1-rc.5')

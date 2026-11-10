@@ -1,6 +1,7 @@
 """共用 SSH 层：远端目录写法、连不上时的提示和诊断、借代理时的局域网地址。不连网、不碰真主机。"""
 
 import contextlib
+import errno
 import io
 import os
 import socket
@@ -160,8 +161,13 @@ class LocalNetworkPrivacy(unittest.TestCase):
     """An Electron desktop app, 2026-09-23: python sockets got EHOSTUNREACH for every LAN
     host while ssh worked, so doctor said "turn on Remote Login"."""
 
+    def setUp(self):
+        blocked = mock.patch.dict(reach.LOCAL_NETWORK_BLOCKED, python=False)
+        blocked.start()
+        self.addCleanup(blocked.stop)
+
     def blocked(self, *a, **kw):
-        raise OSError(65, "No route to host")
+        raise OSError(errno.EHOSTUNREACH, "No route to host")
 
     def test_python_blocked_but_bash_reaches_counts_as_open(self):
         srv = socket.socket()
@@ -173,14 +179,12 @@ class LocalNetworkPrivacy(unittest.TestCase):
             with conn:
                 conn.sendall(b"SSH-2.0-test\r\n")
         threading.Thread(target=serve, daemon=True).start()
-        reach.LOCAL_NETWORK_BLOCKED["python"] = False
         try:
             with mock.patch.object(reach.socket, "create_connection", self.blocked):
                 self.assertEqual(reach.tcp_probe("127.0.0.1", port, 3, banner=True), ("open", "SSH-2.0-test"))
             self.assertTrue(reach.LOCAL_NETWORK_BLOCKED["python"])
         finally:
             srv.close()
-            reach.LOCAL_NETWORK_BLOCKED["python"] = False
 
     def test_python_blocked_and_nothing_listens_is_refused(self):
         probe = socket.socket()
@@ -189,6 +193,7 @@ class LocalNetworkPrivacy(unittest.TestCase):
         probe.close()
         with mock.patch.object(reach.socket, "create_connection", self.blocked):
             self.assertEqual(reach.tcp_probe("127.0.0.1", port, 2)[0], "refused")
+        self.assertTrue(reach.LOCAL_NETWORK_BLOCKED["python"])
 
     def test_public_address_is_not_retried(self):
         with mock.patch.object(reach.socket, "create_connection", self.blocked), \
