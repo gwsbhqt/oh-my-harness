@@ -1,0 +1,133 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: 'true'
+  PYTHONDONTWRITEBYTECODE: '1'
+  UV_NO_PROGRESS: '1'
+
+jobs:
+  plugins:
+    name: Tooling and plugin checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26.13.0'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '12.18.0'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.14'
+      - name: Check tooling and every plugin
+        env:
+          DSH_HOME: ${{ runner.temp }}/dsh-ci-home
+          XDG_CACHE_HOME: ${{ runner.temp }}/ci-cache
+          XDG_STATE_HOME: ${{ runner.temp }}/ci-state
+        shell: bash
+        run: |
+          set -euo pipefail
+          ci_failures=()
+          echo "::group::tooling"
+          if node --test tooling/test/*.test.mjs; then
+            echo "Tooling checks passed"
+          else
+            ci_failures+=("tooling:$?")
+            echo "::error::Tooling checks failed"
+          fi
+          echo "::endgroup::"
+          plugins=(
+            dsh-python-repl
+            dsh-control
+            dsh-monitor
+            dsh-output-guard
+            dsh-compaction-bound
+            dsh-message-tidy
+            dsh-image-cap
+            dsh-history-cap
+          )
+          for plugin in "${plugins[@]}"; do
+            echo "::group::$plugin"
+            if pnpm --dir "$plugin" install --frozen-lockfile; then
+              if uv run --no-project --python 3.14 --with dill --with httpx pnpm --dir "$plugin" run check; then
+                echo "$plugin checks passed"
+              else
+                ci_failures+=("$plugin:check:$?")
+                echo "::error::$plugin check failed"
+              fi
+            else
+              ci_failures+=("$plugin:install:$?")
+              echo "::error::$plugin dependency installation failed; check was not run"
+            fi
+            echo "::endgroup::"
+          done
+          if (( ${#ci_failures[@]} )); then
+            printf 'Failed checks: %s
+          ' "${ci_failures[@]}"
+            exit 1
+          fi
+
+  python:
+    name: Python tool tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+      - name: Test tools and shared transport
+        env:
+          DSH_HOME: ${{ runner.temp }}/dsh-ci-home
+          XDG_CACHE_HOME: ${{ runner.temp }}/ci-cache
+          XDG_STATE_HOME: ${{ runner.temp }}/ci-state
+        working-directory: skills
+        shell: bash
+        run: |
+          set -euo pipefail
+          ci_failures=()
+          for component in browser-control computer-control remote-host _shared; do
+            echo "::group::$component"
+            if [[ "$component" == "_shared" ]]; then
+              if uv run --no-project --python 3.12 python -m unittest discover -s _shared/tests -v; then
+                echo "$component tests passed"
+              else
+                ci_failures+=("$component:$?")
+              fi
+            elif [[ "$component" == "remote-host" ]]; then
+              if uv run --python 3.12 --project "$component" python -m unittest discover -s "$component/tests" -v; then
+                echo "$component tests passed"
+              else
+                ci_failures+=("$component:$?")
+              fi
+            else
+              if uv run --python 3.12 --project "$component" --extra test python -m unittest discover -s "$component/tests" -v; then
+                echo "$component tests passed"
+              else
+                ci_failures+=("$component:$?")
+              fi
+            fi
+            echo "::endgroup::"
+          done
+          if (( ${#ci_failures[@]} )); then
+            printf 'Failed test suites: %s
+          ' "${ci_failures[@]}"
+            exit 1
+          fi

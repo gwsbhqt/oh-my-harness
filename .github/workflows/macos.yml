@@ -1,0 +1,24 @@
+name: macOS Swift compile
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  swift:
+    name: Compile native executor
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Compile computer-control
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_path="$(xcrun --sdk macosx --show-sdk-path)"
+          xcrun swiftc -sdk "$sdk_path" -O skills/computer-control/bin/computer-control.swift -o "$RUNNER_TEMP/computer-control"
+          file "$RUNNER_TEMP/computer-control"

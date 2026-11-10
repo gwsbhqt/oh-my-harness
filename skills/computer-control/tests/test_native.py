@@ -235,6 +235,7 @@ if mode == "flags" {
 finish(0)
 """
 
+@unittest.skipUnless(sys.platform == "darwin", "needs macOS toolchain")
 class Native(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -534,6 +535,7 @@ class Native(unittest.TestCase):
                 first.communicate()
 
 
+@unittest.skipUnless(sys.platform == "darwin", "needs macOS toolchain")
 class NativeSafety(unittest.TestCase):
     """Actual native control flow, with AX and posting boundaries isolated."""
     @classmethod
