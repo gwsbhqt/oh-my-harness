@@ -1,8 +1,6 @@
 # Changelog
 
-Changes are grouped by release scope. The initial entry is prepared for a release; a tag and hosted release must be created separately.
-
-## [0.1.0] — Unreleased
+## 0.1.0
 
 ### Added
 
@@ -16,4 +14,4 @@ Changes are grouped by release scope. The initial entry is prepared for a releas
 
 ### Scope
 
-This is an independent extension collection, not an official DeepSeek release. Platform support is component-specific. Python execution is trusted, not sandboxed. Measurements do not establish provider billing or general task-quality gains. Demo recordings are tracked separately and are not implied by this entry.
+oh-my-harness is an independent extension collection for DeepSeek Harness. Platform support varies by component. Python cells run with the current process permissions. Offline measurements estimate the text payload of fictional fixtures.

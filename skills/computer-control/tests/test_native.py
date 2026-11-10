@@ -132,8 +132,7 @@ if mode == "flags" {
     let found = CommandLine.arguments.dropFirst(2).map { installedAppURL($0)?.path ?? "" }
     emitJSON(["ok": true, "paths": found])
 } else if mode == "open-missing" {
-    taskScope = "fixture"
-    args = [CommandLine.arguments[2]]
+    args = [CommandLine.arguments[2], "--scope", "fixture"]
     optionBoundary = nil
     runCommand("open")
 } else if mode == "quit" {

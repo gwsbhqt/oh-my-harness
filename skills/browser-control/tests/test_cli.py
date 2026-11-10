@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 from browser_control.commands import build_parser, execute, main
@@ -22,7 +23,7 @@ class FakeClient:
 class CliTests(unittest.IsolatedAsyncioTestCase):
     async def test_safe_separator_keeps_option_text(self):
         client = FakeClient()
-        result = await execute(["type", "exact", "--json", "--", "--json"], client=client)
+        result = await execute(["--session", "cli-test", "type", "exact", "--json", "--", "--json"], client=client)
         self.assertTrue(result["ok"])
         self.assertEqual(client.calls[-1][1], dict(text="--json", allow_newline=False))
         self.assertEqual(client.calls[-1][2]["target"], "exact")
@@ -35,8 +36,8 @@ class CliTests(unittest.IsolatedAsyncioTestCase):
         await execute(["snap","exact","--session","other","--browser","Chrome"], client=client)
         self.assertEqual(client.calls[-1][2]["session"], "other")
 
-    async def test_refuse_implicit_target_and_session(self):
-        for args in (["snap"], ["--session","mine","click","exact","1"]):
+    async def test_refuse_implicit_target_and_snapshot(self):
+        for args in (["--session", "mine", "snap"], ["--session", "mine", "click", "exact", "1"]):
             client = FakeClient()
             with self.assertRaises(BrowserControlError):
                 await execute(args, client=client)
@@ -44,7 +45,7 @@ class CliTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_snapshot_for_numbered_actions(self):
         client = FakeClient()
-        await execute(["click","exact","2","--snapshot","token"], client=client)
+        await execute(["--session","cli-test","click","exact","2","--snapshot","token"], client=client)
         self.assertEqual(client.calls[-1][1]["snapshot"], "token")
 
     async def test_tab_binding_and_close_authorization(self):
@@ -54,28 +55,28 @@ class CliTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.calls[-1][1]["lane"], {"env": "test"})
         await execute(["--session","mine","tab","new","https://example.invalid","--lane",'{"force-workbench":"1","x-tt-env":"ppe_a"}'], client=client)
         self.assertEqual(client.calls[-1][1]["lane"], {"headers": {"force-workbench": "1", "x-tt-env": "ppe_a"}}, "整段请求头不能被当成 env")
-        await execute(["tab","close","exact","--authorized"], client=client)
+        await execute(["--session","cli-test","tab","close","exact","--authorized"], client=client)
         self.assertTrue(client.calls[-1][1]["authorized"])
 
     async def test_network_and_lane_routing(self):
         client = FakeClient()
-        await execute(["network","exact","request","req-1","--body","--raw"], client=client)
+        await execute(["--session","cli-test","network","exact","request","req-1","--body","--raw"], client=client)
         self.assertEqual(client.calls[-1][0], "network_request")
         self.assertEqual(client.calls[-1][1]["id"], "req-1")
-        await execute(["lane","exact","set","test"], client=client)
+        await execute(["--session","cli-test","lane","exact","set","test"], client=client)
         self.assertEqual(client.calls[-1][1], {"env": "test"})
-        await execute(["lane","exact","set",'{"force-workbench":"1"}'], client=client)
+        await execute(["--session","cli-test","lane","exact","set",'{"force-workbench":"1"}'], client=client)
         self.assertEqual(client.calls[-1][1], {"headers": {"force-workbench": "1"}})
-        await execute(["lane","exact","set","--headers",'{"force-workbench":"1"}'], client=client)
+        await execute(["--session","cli-test","lane","exact","set","--headers",'{"force-workbench":"1"}'], client=client)
         self.assertEqual(client.calls[-1][1], {"headers": {"force-workbench": "1"}})
-        await execute(["lane","exact","clear"], client=client)
+        await execute(["--session","cli-test","lane","exact","clear"], client=client)
         self.assertEqual((client.calls[-1][0], client.calls[-1][1]), ("lane_clear", {}))
         await execute(["--session","mine","lane","status"], client=client)
         self.assertEqual(client.calls[-1][0], "lane_status")
         self.assertIsNone(client.calls[-1][2]["target"])
         for argv in (["lane","exact","get","x"], ["lane","exact","clear","--headers",'{"a":"b"}'], ["lane","exact","global-get"]):
             with self.assertRaises(BrowserControlError, msg=argv):
-                await execute(argv, client=client)
+                await execute(["--session", "cli-test", *argv], client=client)
 
 
 
@@ -103,13 +104,13 @@ class ExtendedCliTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_snap_screenshots_only_with_shot_flag(self):
         client = FakeClient()
-        await execute(["snap", "exact"], client=client)
+        await execute(["--session", "cli-test", "snap", "exact"], client=client)
         self.assertIs(client.calls[-1][1]["shot"], False)
-        await execute(["snap", "exact", "--shot"], client=client)
+        await execute(["--session", "cli-test", "snap", "exact", "--shot"], client=client)
         self.assertIs(client.calls[-1][1]["shot"], True)
 
     async def test_removed_options_are_rejected(self):
-        for args in (["snap", "exact", "--no-shot"], ["--session", "mine", "release", "--all-browsers"]):
+        for args in (["--session", "cli-test", "snap", "exact", "--no-shot"], ["--session", "mine", "release", "--all-browsers"]):
             client = FakeClient()
             with self.assertRaises(BrowserControlError) as raised:
                 await execute(args, client=client)
@@ -119,7 +120,7 @@ class ExtendedCliTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_tab_option_without_positional_target_and_safe_text(self):
         client = FakeClient()
-        await execute(["--tab","exact","type","--json","--","-H laptop --json"], client=client)
+        await execute(["--session","cli-test","--tab","exact","type","--json","--","-H laptop --json"], client=client)
         self.assertEqual(client.calls[-1][1], {"text":"-H laptop --json", "allow_newline":False})
         self.assertEqual(client.calls[-1][2]["target"], "exact")
 
@@ -142,7 +143,7 @@ class ExtendedCliTests(unittest.IsolatedAsyncioTestCase):
                       ["init", "remove", "s"], ["upload", "0", "fixture.txt", "--snapshot", "t"],
                       ["dialog"], ["viewport", "100", "100", "--scale", "2"], ["download"], ["popups"]]
         for command in operations:
-            await execute(["--tab", "exact", *command], client=client)
+            await execute(["--session", "cli-test", "--tab", "exact", *command], client=client)
 
     async def test_network_cli_matches_strict_core_fields(self):
         from browser_control.network import _PARAMS
@@ -157,7 +158,7 @@ class ExtendedCliTests(unittest.IsolatedAsyncioTestCase):
         client = StrictClient()
         for arguments in (["requests", "--status", "599"], ["clear"], ["console"], ["errors"],
                           ["har-start"], ["har-stop"], ["unroute", "route-1"], ["route", "*api*", "--action", "block"]):
-            await execute(["network", "exact", *arguments], client=client)
+            await execute(["--session", "cli-test", "network", "exact", *arguments], client=client)
 
     async def test_har_output_stays_local_for_path_and_option(self):
         import tempfile
@@ -170,7 +171,7 @@ class ExtendedCliTests(unittest.IsolatedAsyncioTestCase):
             for arguments, name in (([], "pos.har"), (["--out"], "opt.har")):
                 client = HarClient()
                 path = Path(directory)/name
-                args = ["network", "exact", "har-stop", *arguments, str(path)]
+                args = ["--session", "cli-test", "network", "exact", "har-stop", *arguments, str(path)]
                 result = await execute(args, client=client)
                 self.assertEqual(client.calls[-1][1], {})
                 self.assertEqual(result["path"], str(path))
@@ -191,36 +192,36 @@ class ExtendedCliTests(unittest.IsolatedAsyncioTestCase):
             existing.write_text("old")
             client = FakeClient()
             with self.assertRaises(FileExistsError):
-                await execute(["network", "exact", "har-stop", str(existing)], client=client)
+                await execute(["--session", "cli-test", "network", "exact", "har-stop", str(existing)], client=client)
             self.assertNotIn("network_har_stop", [c[0] for c in client.calls])
             self.assertEqual(existing.read_text(), "old")
             fresh = Path(directory) / "new.har"
             with self.assertRaises(BrowserControlError):
-                await execute(["network", "exact", "har-stop", str(fresh)], client=FailingClient())
+                await execute(["--session", "cli-test", "network", "exact", "har-stop", str(fresh)], client=FailingClient())
             self.assertFalse(fresh.exists())
 
     async def test_network_requests_status_is_sent_as_strict_filter(self):
         client = FakeClient()
-        await execute(["network", "exact", "requests", "--status", "599"], client=client)
+        await execute(["--session", "cli-test", "network", "exact", "requests", "--status", "599"], client=client)
         self.assertEqual(client.calls[-1][0], "network_requests")
         self.assertEqual(client.calls[-1][1], {"status": 599})
         with self.assertRaises(BrowserControlError):
-            await execute(["network", "exact", "route", "*api*", "--status", "599"], client=client)
+            await execute(["--session", "cli-test", "network", "exact", "route", "*api*", "--status", "599"], client=client)
 
     async def test_network_route_and_unroute_use_actual_core_keys(self):
         client = FakeClient()
-        await execute(["network","exact","route","*analytics*","--action","block"], client=client)
+        await execute(["--session","cli-test","network","exact","route","*analytics*","--action","block"], client=client)
         self.assertEqual(client.calls[-1][1]["action"], "abort")
         self.assertNotIn("body", client.calls[-1][1])
-        await execute(["network","exact","unroute","route-1"], client=client)
+        await execute(["--session","cli-test","network","exact","unroute","route-1"], client=client)
         self.assertEqual(client.calls[-1][1]["routeId"], "route-1")
-        await execute(["network","exact","route","*api*","--action","fulfill","--status-code","201","--response-body","hello"], client=client)
+        await execute(["--session","cli-test","network","exact","route","*api*","--action","fulfill","--status-code","201","--response-body","hello"], client=client)
         self.assertEqual(client.calls[-1][1]["status"], 201)
         self.assertEqual(client.calls[-1][1]["body"], "hello")
 
     async def test_download_timeout(self):
         client = FakeClient()
-        await execute(["download","exact","wait","--guid","g","--timeout","80"], client=client)
+        await execute(["--session","cli-test","download","exact","wait","--guid","g","--timeout","80"], client=client)
         self.assertEqual(client.calls[-1][0], "page_download")
         self.assertEqual(client.calls[-1][2]["timeout"], 85)
 
@@ -230,7 +231,8 @@ class ExtendedCliTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ProcessCliTests(unittest.TestCase):
-    def test_separate_process_prints_one_json_and_safe_text(self):
+    @staticmethod
+    def _run_type_command(*session_args):
         import os
         from pathlib import Path
         import socket
@@ -238,36 +240,67 @@ class ProcessCliTests(unittest.TestCase):
         import sys
         import tempfile
         import threading
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory)/"rpc.sock"
-            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+
+        calls = []
+        stop = threading.Event()
+        with tempfile.TemporaryDirectory() as directory, socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            path = Path(directory) / "rpc.sock"
             listener.bind(str(path))
             listener.listen()
-            calls = []
+            # The subprocess can exit before connecting. Closing the socket from
+            # this thread does not reliably wake a blocking accept on Linux.
+            listener.settimeout(0.1)
+
             def serve():
-                while len(calls) < 2:
-                    with listener.accept()[0] as conn:
-                        request = json.loads(conn.makefile("rb").readline())
-                        if request.get("action") == "service":
-                            conn.sendall((json.dumps({"ok": True, "result": {"fingerprint": source_fingerprint(), "pid": 1, "startedAt": 0, "draining": False, "holdings": []}}) + "\n").encode())
-                            continue
+                while not stop.is_set():
+                    try:
+                        conn, _ = listener.accept()
+                    except TimeoutError:
+                        continue
+                    with conn, conn.makefile("rb") as request_stream:
+                        conn.settimeout(5)
+                        request = json.loads(request_stream.readline())
                         calls.append(request)
-                        conn.sendall(b'{"ok":true,"result":{"delivered":true}}\n')
-            worker = threading.Thread(target=serve)
-            worker.start()
-            try:
-                env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]/"src"))
-                proc = subprocess.run([sys.executable,"-m","browser_control.commands","--socket",str(path),"type","exact","--json","--","--json"],
-                                      capture_output=True,text=True,env=env,timeout=5)
-                self.assertEqual(proc.returncode, 0, proc.stderr)
-                self.assertEqual(proc.stderr, "")
-                self.assertEqual(len(proc.stdout.splitlines()), 1)
-                self.assertTrue(json.loads(proc.stdout)["delivered"])
-            finally:
-                listener.close()
-                worker.join(timeout=2)
-            self.assertEqual(calls[-1]["params"], {"text":"--json", "allow_newline":False})
-            self.assertFalse(worker.is_alive())
+                        if request["action"] == "service":
+                            result = {"fingerprint": source_fingerprint(), "pid": 1, "startedAt": 0,
+                                      "draining": False, "holdings": []}
+                            conn.sendall((json.dumps({"ok": True, "result": result}) + "\n").encode())
+                        else:
+                            conn.sendall(b'{"ok":true,"result":{"delivered":true}}\n')
+
+            env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src"))
+            env.pop("BROWSER_CONTROL_CONTEXT_ID", None)
+            env.pop("DSH_SESSION_ID", None)
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                worker = pool.submit(serve)
+                try:
+                    proc = subprocess.run(
+                        [sys.executable, "-m", "browser_control.commands", "--local", "--socket", str(path),
+                         *session_args, "type", "exact", "--json", "--", "--json"],
+                        capture_output=True, text=True, env=env, timeout=5,
+                    )
+                finally:
+                    stop.set()
+                    worker.result()
+        return proc, calls
+
+    def test_separate_process_prints_one_json_and_safe_text(self):
+        proc, calls = self._run_type_command("--session", "cli-test")
+        self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+        self.assertEqual(proc.stderr, "")
+        self.assertEqual(len(proc.stdout.splitlines()), 1)
+        self.assertTrue(json.loads(proc.stdout)["delivered"])
+        self.assertEqual([call["action"] for call in calls if call["action"] != "service"], ["tab_bind", "page_type"])
+        self.assertEqual(calls[-1]["params"], {"text": "--json", "allow_newline": False})
+
+    def test_separate_process_without_scope_exits_before_rpc(self):
+        proc, calls = self._run_type_command()
+        self.assertEqual(proc.returncode, 2, proc.stderr or proc.stdout)
+        self.assertEqual(proc.stderr, "")
+        error = json.loads(proc.stdout)
+        self.assertEqual(error["code"], 2)
+        self.assertIn("没有任务 scope", error["error"])
+        self.assertEqual(calls, [])
 
 
 class FingerprintTests(unittest.TestCase):
