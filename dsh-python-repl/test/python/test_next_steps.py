@@ -41,6 +41,12 @@ class NextSteps(unittest.TestCase):
         hint = cell_errors.tool_hint(f'old_string was not found in "{path}"', {"file_path": str(path), "old_string": "zzzz qqqq", "new_string": "x"})
         self.assertIn("does not contain that exact text", hint)
 
+    def test_background_job_cap_says_to_batch_into_one_command(self):
+        hint = cell_errors.tool_hint("background job limit reached for this owner (limit: 10); use job_kill to stop an unneeded job, wait for it to finish, then retry")
+        self.assertIn("at most 10 run at once", hint)
+        self.assertIn("one command", hint)
+        self.assertIn("tools.job_list({})", hint)
+
     def test_offset_out_of_range_gives_the_line_count(self):
         hint = cell_errors.tool_hint(f'offset 90 is out of range for "{self.dir}/session.ts"')
         self.assertIn("The file has 3 lines", hint)

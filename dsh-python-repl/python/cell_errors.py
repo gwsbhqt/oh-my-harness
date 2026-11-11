@@ -222,6 +222,14 @@ def tool_hint(message: str, args=None) -> str | None:
         extra = None
     if extra is not None:
         return extra
+    cap = re.search(r"background job limit reached.*?\(limit: (\d+)\)", message)
+    if cap:
+        # 2026-11-11 evolve I-094: one cell gathered dozens of slow bash calls; each became a job and 8 were refused.
+        return (
+            f"A bash call still running after a few seconds becomes a background job, each call in an asyncio.gather included, "
+            f"and at most {cap.group(1)} run at once. Run the batch as one command (a shell loop, or xargs -P 4) so it is one job; "
+            "jobs left running by earlier cells count too: tools.job_list({}) lists them."
+        )
     if re.search(r"replace_all|provide a more specific|read it again|use glob", message, re.I):
         return None
     if re.search(r"old_string (?:matched|matches) \d+", message):
