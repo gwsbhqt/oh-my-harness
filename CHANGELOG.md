@@ -1,17 +1,19 @@
-# Changelog
+中文 | [English](CHANGELOG.en.md)
+
+# 更新记录
 
 ## 0.1.0
 
-### Added
+### 新增
 
-- Persistent Python execution for DeepSeek Harness with a host tool bridge, namespace inspection, supported-state snapshots, and trusted Python skills.
-- Running-instance control through CLI, Python, and MCP entry points, plus a controller/worker supervision skill with receipts and state-based observation.
-- Browser control over CDP, native macOS interaction, and SSH remote operations with explicit target selection and cooperative ownership.
-- Producer-driven session monitoring and separate checks for repeated, blank, oversized, or falsely completed model streams.
-- Context helpers for bounded compaction and exact-user-text indexing, message tidying, image limits, and UI history pagination.
-- Component usage guides, design articles, and deterministic offline measurements using fictional data and an explicit character estimator.
-- Community contribution, conduct, and security-reporting documents, with preserved upstream license and provenance notices.
+- 为 DeepSeek Harness 提供能在多次执行间保留变量的 Python 运行环境。还支持调用 DSH 工具、查看变量、保存受支持状态的快照，以及加载受信任的 Python 技能。
+- 通过命令行、Python 和 MCP（一种通用的工具接入协议）入口控制正在运行的实例。另附主控与长工分工的监督技能，使用回执和实际状态跟进任务。
+- 通过 CDP 控制浏览器，操作原生 macOS 界面，并通过 SSH 操作远程机器。每次操作都明确选择目标，并检查任务归属，减少协作时误操作。
+- 由事件来源主动唤醒会话的监控功能。另有独立检查，识别重复、空白、过大或虚假完成的模型输出流。
+- 帮助整理上下文的功能：为压缩后的内容设置预算，建立用户原话索引，整理消息，限制图片，以及对界面历史记录分页。
+- 部件使用教程、设计文章，以及使用虚构数据和明确字符估算方法的可重复离线测量。
+- 贡献说明、行为准则和安全报告说明，并保留上游许可证和来源声明。
 
-### Scope
+### 范围
 
-oh-my-harness is an independent extension collection for DeepSeek Harness. Platform support varies by component. Python cells run with the current process permissions. Offline measurements estimate the text payload of fictional fixtures.
+oh-my-harness 是为 DeepSeek Harness 提供的独立扩展集合。各部件支持的平台不同。Python 代码单元使用当前进程的权限运行。离线测量估算的是虚构样例返回给对话的文本量。

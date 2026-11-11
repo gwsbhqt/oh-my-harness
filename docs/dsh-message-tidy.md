@@ -1,13 +1,15 @@
-# Using dsh-message-tidy
+中文 | [English](dsh-message-tidy.en.md)
 
-Use this plugin when automatic notices obscure the user's actual requests, background job completions repeat long commands, or a small instruction edit causes a large message to be sent again. It processes messages before they enter the model's next step. Four switches control notice labels, exact notice deduplication, job labels, and instruction diffs independently. Follow the [plugin README](../dsh-message-tidy/README.md) for installation, full configuration, and the existing bundle entry to override.
+# 使用 dsh-message-tidy
 
-Notice labels identify selected plugin notices as automatic system reminders and explicitly state that the user did not write them. This supplies provenance, not permission: an automatically added notice does not become a new user request. The shipped bundle selects repeat-tool and background-job notices, while the schema default selects all plugin notices. Check the effective configuration before assuming every notice will be labeled. Already wrapped notices remain intact, and host source information remains available for bookkeeping.
+自动通知掩盖用户实际要求、后台任务完成时反复带上长命令，或指令小改动导致整篇重发时，可以使用这个插件。它在消息进入模型下一步之前处理消息。四个开关分别控制通知标签、相同通知去重、任务标签和指令差异。安装、完整配置和需要覆盖的现有配置组合（bundle）条目见[插件说明](../dsh-message-tidy/README.md)。
 
-Exact deduplication applies within a single step. If two notices have the same role, complete source metadata, and complete content, only the first is retained. Similar wording is not enough, and repeated user or assistant messages are preserved. This is useful when one step collects several identical reminders, but it does not reverse a wake-up the host has already scheduled. The plugin also leaves host repeat-reminder exclusions under host configuration; enabling tidy does not change those exclusions.
+通知标签把选定插件通知标为自动系统提醒，并明确说明不是用户写的。它说明来源，不提供授权：自动加入的通知不会变成新的用户要求。随包 bundle 选择重复工具和后台任务通知，配置定义的默认值则选择所有插件通知。先检查实际配置，不能假设每条通知都会标记。已有包装的通知保持不变，DSH 的来源信息仍保留用于记录。
 
-For a fictional example, an agent might start a background build with the description “Build sample preview.” When a successful Bash result identifies that background or automatically promoted job, the plugin remembers its description for that agent. Its completion notice can then use that short purpose instead of the whole command. Status and appended output remain part of the notice. Jobs without a recorded description keep their original labels, including jobs started before the relevant in-memory state existed. A cleaner label alone says nothing about whether the underlying work succeeded; inspect the completion status and result.
+精确去重只在同一步内生效。两条通知的角色、完整来源信息和完整内容都相同时，只保留第一条。措辞相近不够，重复的用户或助手消息也会保留。一步收集多个相同提醒时，这很有用，但不会撤销 DSH 已经安排的唤醒。重复提醒的排除规则仍在 DSH 配置中控制。启用 tidy 不会改变这些规则。
 
-Instruction diffs are useful while refining a session's instruction files. Once a complete baseline has actually been committed to the session, a small update can arrive as a unified diff with surrounding lines. Missing baselines, incomplete versions, large changes, or excessive comparison sizes fall back to full text. Failed or cancelled steps do not advance an uncommitted baseline. Disabling this feature clears its cache, so re-enabling it begins with a full version rather than an assumed baseline.
+举个虚构例子：Agent 启动后台构建，说明为“Build sample preview”。成功的 Bash 结果标识出后台任务或自动转后台任务后，插件会为这个 Agent 记住任务说明。完成通知随后可用简短用途代替整条命令。状态和追加输出仍在通知里。没记录说明的任务保留原标签，包括相关内存状态建立前启动的任务。标签更清楚，不代表任务成功。仍要检查完成状态和结果。
 
-To check the result, inspect the messages supplied to a subsequent model step: look for source labels, a single copy of an identical notice, the recorded job description, or an instruction diff against a delivered baseline. These checks concern model-context messages; do not infer GUI delivery from a synthetic test. All settings are volatile and apply to subsequent processing. If a host upgrade changes recognized message headings, unrecognized text passes through unchanged. The README documents verification commands and compatibility coverage; neither the implementation nor those tests establish a fixed live-provider token saving.
+反复修改会话指令文件时，差异展示很有用。完整基准确实写入会话后，小改动可以带着上下文行，以统一差异格式送达。缺基准、版本不完整、变化很大或比较内容过多时，退回完整文本。失败或取消的步骤不会推进尚未写入会话的基准。关闭功能会清空缓存，所以重新启用时先发送完整版本，而不是假设已有基准。
+
+要检查结果，查看后续模型步骤实际收到的消息：检查来源标签、相同通知只留一份、已记录的任务说明，以及基于已送达基准的指令差异。这些检查针对模型上下文消息，不能从虚构数据测试推断界面投递已验证。所有设置都是可即时调整的，对后续处理生效。DSH 升级改变了已识别消息标题时，无法识别的文本会原样通过。插件说明记录了验证命令和兼容性覆盖。实现和测试都不能证明在真实服务商上能节省固定数量的 token。

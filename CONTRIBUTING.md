@@ -1,46 +1,48 @@
-# Contributing
+中文 | [English](CONTRIBUTING.en.md)
 
-Start with a small problem, an observed result, and a proposed change. Discuss broad architecture, a new component, or a new dependency in an issue before investing in an implementation. This is an independent project with best-effort maintenance, not a support service with a response deadline.
+# 如何参与贡献
 
-Read the [overview](README.md), the relevant component README, and the [security policy](SECURITY.md). Follow the [Code of Conduct](CODE_OF_CONDUCT.md). Use private vulnerability reporting for security findings; do not attach real accounts or session data to public reports.
+先说清一个具体问题、你看到的结果，以及打算怎么改。涉及整体架构、新部件或新依赖时，先在 issue 中讨论，再开始实现。这是尽力维护的独立项目，不是承诺限时响应的支持服务。
 
-## Work in the component that owns the behavior
+先读[首页](README.md)、相关部件说明和[安全说明](SECURITY.md)。请遵守[行为准则](CODE_OF_CONDUCT.md)。安全问题请走私密漏洞报告，不要在公开报告中附上真实账号或会话数据。
 
-DSH supplies the host runtime. Plugins live in the root `dsh-*` directories and use adjacent `tooling/`. The browser, desktop, and SSH tools live in `skills/` with shared transport code in `skills/_shared`. Usage documents live in `docs/`; deeper reasoning belongs in `docs/design/`. Avoid copying a second parameter table into several places.
+## 在负责这项行为的部件里修改
 
-Preserve upstream notices and provenance. Do not vendor another project's code without recording its source and license. Do not add a dependency on a component outside this repository or make a public component depend on an optional private integration.
+插件由 DSH 加载和运行。插件在根目录的 `dsh-*` 目录中，共用旁边的 `tooling/`。浏览器、桌面和 SSH 工具在 `skills/` 中，公共传输代码在 `skills/_shared`。使用文档放在 `docs/`，更深入的设计理由放在 `docs/design/`。不要把同一份参数表复制到多处。
 
-Use fictional fixtures. No real names, account records, credential material, private addresses, machine identities, authenticated screenshots, or working-directory snapshots should enter a patch. An anonymized summary is usually more useful than an exported transcript. Preserve another contributor's work and staging choices.
+保留上游声明和来源信息。引入其他项目的源码时，必须记录来源和许可证。不要依赖本仓库之外的部件，也不要让公开部件依赖可选的私有集成。
 
-## Implement and verify
+测试样例必须是虚构的。补丁中不能出现真实姓名、账号记录、凭据、私有地址、机器身份信息、已登录界面的截图或工作目录快照。去掉身份信息的摘要通常比整段会话导出更有用。保留其他贡献者的改动和暂存选择。
 
-Keep installation and component dependencies separate. Follow the component README's package-manager instructions rather than introducing a new workspace or installing everything in the repository root. A typical plugin check is:
+## 实现并验证
+
+把安装与各部件的依赖分开处理。按部件说明使用包管理器，不要新建一套工作区，也不要把所有东西都装在仓库根目录。常见的插件检查方式是：
 
 ```sh
 pnpm --dir dsh-monitor install --frozen-lockfile
 pnpm --dir dsh-monitor run check
 ```
 
-Use the equivalent commands for the plugin you changed. Run Python skill checks in that skill's own documented environment. Desktop permissions, Swift integration, and other macOS behavior require the supported platform; do not claim a pure Linux test validates them. CI workflows may check portable parts without running a real desktop.
+对你改的插件运行对应命令。Python 技能的检查要在该技能文档指定的环境中运行。桌面权限、Swift 集成及其他 macOS 行为需要在支持的平台上验证，不能说纯 Linux 测试验证了这些行为。CI 工作流可以只检查跨平台部分，而不操作真实桌面。
 
-For a defect, reproduce the original input shape and cover the failure boundary. Meaningful tests exercise actual contracts, error propagation, cancellation, and ownership. Do not add assertions that merely restate a harmless text edit. Shared changes need the affected consumers checked. If you cannot perform a live check, state what was checked and what remains unverified.
+修缺陷时，用原始输入的形式重现问题，并覆盖出错边界。有意义的测试会检查真实接口约定、错误传递、取消和归属。不要为无害的文字修改添加复述实现的断言。修改公共代码时，需要检查受影响的使用方。无法做真实环境验证时，说清已经检查什么、还有什么没验证。
 
-Plugin code is not necessarily reloaded just because a settings file changes. Use the host's startup checks before applying changes; follow the component's documented restart path and authorization. Do not use someone else's running session or desktop as an automated test fixture.
+设置文件改了，不代表插件代码已经重新加载。应用改动前，先运行 DSH 的启动检查，再按部件文档规定的重启方式和授权执行。不要拿别人的运行中会话或桌面当自动化测试样例。
 
-For documented measurement changes, run:
+修改文档中的测量结果时，运行：
 
 ```sh
 python3 benchmarks/run.py --check benchmarks/results.json
 ```
 
-A changed source hash requires review. Regenerate deliberately after establishing why the results changed; do not remove the check to make it pass. Quote the estimator, input, boundary, and exclusions whenever a result is used. No synthetic result establishes provider bills or general productivity gains.
+源码哈希变了，需要审查原因。先查明结果为什么变动，再决定是否重新生成。不要为了通过而删除检查。引用结果时，要同时说明估算方法、输入、测量范围和未计入项。虚构数据的结果不能证明实际账单或普遍的效率提升。
 
-## Submit a reviewable change
+## 提交可供审查的改动
 
-Explain the concrete problem, resulting behavior, and evidence. List commands actually run and their outcomes. Distinguish inspected test code, a test run, and a live end-to-end result. Include limitations and remaining external steps. For a visual change, provide real before/after evidence with private content removed; do not simulate a successful screen.
+说明具体问题、改后的行为和证据。列出实际运行的命令及结果。区分看过测试代码、跑过测试和真实环境的完整验证。说明限制和仍需外部完成的步骤。视觉改动要提供真实的前后对比，并去掉私人内容。不要模拟一个成功画面。
 
-Use the [pull request template](.github/pull_request_template.md). Keep the change focused; do not mix an unrelated cleanup or another contributor's edits into it. Human contributors remain responsible for code generated with agents, its provenance, its tests, and any external action it takes.
+使用[合并请求模板](.github/pull_request_template.md)。让改动围绕本次目标，不要混入无关清理或其他贡献者的修改。使用 Agent 生成代码后，贡献者仍需对代码、来源、测试及其产生的外部操作负责。
 
-## Community and release work
+## 社区与发布工作
 
-The [changelog](CHANGELOG.md) describes release scope. A heading for an upcoming release does not prove its tag exists. Workflow files, repository settings, media recordings, tags, and publishing each require their own evidence and task authorization. Do not infer permission to deploy or change visibility from permission to edit documentation.
+[更新记录](CHANGELOG.md)说明发布范围。写好下一版的标题，不代表对应标签已经存在。工作流文件、仓库设置、演示录制、标签和发布，各自都需要证据和任务授权。允许改文档，不等于允许部署或改变仓库可见性。

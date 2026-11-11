@@ -1,53 +1,55 @@
-# Keep the data in Python, put the evidence in the conversation
+中文 | [English](python-data-locality.en.md)
 
-A tool can return a large, useful dataset while the next decision needs only a count and a few exceptions. Sending the entire dataset through the conversation makes the model read material that a program could have filtered. Repeating the tool call later is worse when the source has changed or the operation had side effects. The design of `dsh-python-repl` gives a session a persistent Python process so that data can stay in variables and the conversation can carry the evidence needed for the next decision.
+# 数据留在 Python，证据放进对话
 
-This is an implementation-backed design, not a claim about personal productivity or provider bills. The relevant questions are narrower: does the value remain available, does a later cell use it without fetching it again, and what survives replacement of the Python process?
+工具可能返回一份很大且有用的数据集，但下一步判断只需要一个计数和少量例外。把全部数据塞进对话，会让模型阅读程序本可筛选的内容。之后再调用一次工具更麻烦：来源可能已经变化，原操作也可能产生过外部影响。`dsh-python-repl` 为每个会话保留一个 Python 进程，让数据留在变量里，对话只承载下一步需要的证据。
 
-## What the plugin adds to the host
+这是有实现依据的设计，不是关于个人效率或服务商账单的承诺。要检查的问题更具体：值是否仍可用，后续代码单元能否不重新获取就使用它，以及 Python 进程替换后什么能恢复。
 
-DSH supplies the `run_code` tool and the programmatic tool execution interface, which gives code access to tools under the calling agent's permissions. Its built-in code runtime is TypeScript. This plugin supplies a Python runtime with a process per session, using the upstream Prime Agent REPL core. It adds the DSH tool bridge, namespace inspection, snapshot coordination, trusted Python skill loading, and bounded cell output. It does not install a second agent runtime or substitute Prime's native tools for DSH tools. The [README](../../dsh-python-repl/README.md) and [runtime registration](../../dsh-python-repl/src/index.ts) describe this boundary; [vendor provenance](../../dsh-python-repl/vendor/PROVENANCE.md) records the upstream material.
+## 插件给 DSH 补了什么
 
-A cell is a persistent program fragment. Top-level `await` works, the last expression can be displayed, and definitions remain in the namespace. A later cell can operate on a previously assigned value. Ending a cell is therefore different from ending a process. This changes the natural workflow from “fetch, print, reason over the printout” to “fetch, retain, compute, display the relevant result.”
+DSH 提供 `run_code` 和程序化工具执行接口，让代码在调用 Agent 的权限下访问工具。其内置代码运行环境是 TypeScript。本插件基于上游 Prime Agent 的 REPL 核心，为每个会话提供一个 Python 进程。它还支持调用 DSH 工具、查看变量、协调快照、加载受信任的 Python 技能，以及限制代码单元的展示量。它不安装第二套 Agent 运行环境，也不拿 Prime 原生工具替换 DSH 工具。[部件说明](../../dsh-python-repl/README.md)和[运行环境注册](../../dsh-python-repl/src/index.ts)解释这个边界，[上游来源记录](../../dsh-python-repl/vendor/PROVENANCE.md)说明引入了哪些材料。
 
-## The value and its display are different things
+代码单元是一段在持久环境中运行的程序。它支持顶层 `await`，能显示最后表达式，定义也会留在变量空间。后续单元能操作之前赋值的结果。因此单元结束不同于进程结束，工作方式也从“获取、打印、对打印内容推理”变成“获取、保留、计算、展示相关结果”。
 
-A tool proxy sends the tool name, arguments, cell identifier, and kernel generation to the host. The host resolves the call against that cell's bound tools and replies with a result envelope. The Python bridge unwraps the canonical JSON value and adds readable views for known result shapes. Those views remain dictionaries and lists: indexing and JSON serialization still work. The [bridge implementation](../../dsh-python-repl/python/dsh_kernel.py) separates this value from its representation.
+## 值和展示不是一回事
 
-For example, a fictional worker can assign a search result to `matches`, inspect its completeness metadata, and display only the matching paths relevant to a decision. The next cell can group the same `matches` by directory. No second search is required merely because the first display was short. A short display, however, does not prove that the search itself was complete. Unreadable paths, clipped upstream text, and pagination remain properties of the source result.
+工具代理把工具名、参数、单元标识和内核代次发送给 DSH。DSH 使用该单元绑定的工具解析调用，并返回结果封装。Python 桥接取出规范 JSON 值，为已知结果形式增加可读展示。这些展示仍是字典和列表，索引和 JSON 序列化仍可用。[桥接实现](../../dsh-python-repl/python/dsh_kernel.py)把值与表示分开处理。
 
-The distinction is executable in the repository. The [result-safety integration test](../../dsh-python-repl/test/result-safety.test.ts) supplies large mutation results, checks that the displayed view stays short, and then checks the full strings in another cell. The [output-budget test](../../dsh-python-repl/test/output-budget.test.ts) ends a real cell on a 200,000-item list, bounds the displayed text, and asks for `len(_)` in the next cell. Here `_` is the last non-`None` expression result. An assignment-only cell does not replace it, so meaningful data should have an explicit name rather than depend on that convenience binding.
+例如，示例长工把搜索结果赋给 `matches`，检查完整性信息后，只展示影响判断的匹配路径。下一单元可以按目录分组同一个 `matches`。不能因为第一次展示短就再搜一次。但短展示也不能证明搜索本身完整。无法读取的路径、上游截短文本和分页，仍是来源结果自身的性质。
 
-The Python process is not a copy of the conversation. The model only sees displayed output; a variable can contain more than that output shows. Conversely, remembering a variable's name in a conversation summary does not prove the value still exists. Namespace inspection through `repl.info`, `repl.list`, and `repl.describe` checks the running kernel instead of relying on conversational memory.
+这个区别可以在仓库中实际验证。[结果安全集成测试](../../dsh-python-repl/test/result-safety.test.ts)提供大的写操作结果，检查展示保持短小，再在另一个单元检查完整字符串。[输出预算测试](../../dsh-python-repl/test/output-budget.test.ts)让真实单元以 200,000 项列表结束，限制展示文字，再在下一单元求 `len(_)`。这里的 `_` 是最后一个非 `None` 表达式结果。只做赋值的单元不会替换它，所以重要数据应明确命名，不依赖这个便捷绑定。
 
-## Variable lifetime is deliberately finite
+Python 进程不是对话的副本。模型只看到展示输出，变量可以含有更多内容。反过来，在对话摘要里记住变量名，也不证明值仍存在。`repl.info`、`repl.list` 和 `repl.describe` 检查的是运行中的内核，而不是对话记忆。
 
-Persistence needs a retention policy. The [name lifecycle implementation](../../dsh-python-repl/python/lifecycle.py) counts unused user cells rather than elapsed wall time. Its configurable defaults archive unpinned names after 100 unused cells and delete them after 200. An idle session does not age simply because time passes. Names found in later source can be brought back from the archive before execution; `repl.unarchive` provides an explicit route, and `repl.keep` protects important names.
+## 变量存活时间有意设置了上限
 
-Source analysis is bounded rather than omniscient. Dynamic lookup can hide a dependency from the automatic mechanism. Long-lived work should pin a costly intermediate value or explicitly restore it instead of assuming every indirect reference will be detected. The [lifecycle integration tests](../../dsh-python-repl/test/name-lifecycle.test.ts) use shorter configured thresholds to exercise archive, reuse, deletion, pinning, and continuity across a restart. These are behavior checks, not evidence that the defaults suit every workload.
+持久状态需要保留策略。[变量生命周期实现](../../dsh-python-repl/python/lifecycle.py)按未使用的用户代码单元数计数，不按实际时间。可配置的默认值是：未固定的名字闲置 100 个单元后归档，200 个单元后删除。会话空闲时，不会仅因时间流逝而老化。后续源码中出现的名字可在执行前自动从归档取回。也可以用 `repl.unarchive` 明确恢复，用 `repl.keep` 保护重要名字。
 
-This policy trades unlimited retention for lower memory pressure and smaller snapshots. Keeping every object indefinitely and externalizing every intermediate result to a file are possible design choices. This article does not present them as alternatives measured in a controlled comparison. The implemented choice keeps interactive reuse convenient while exposing retention controls.
+源码分析有边界，不是无所不知。动态查找可能让自动机制看不到依赖。长任务应固定代价高的中间结果，或明确恢复它，而不能假设所有间接引用都能被识别。[生命周期集成测试](../../dsh-python-repl/test/name-lifecycle.test.ts)使用更短的配置阈值，覆盖归档、复用、删除、固定和跨重启连续性。这些是行为检查，不证明默认值适合所有工作量。
 
-## Restart restores a namespace, not the world
+这项策略用有限保留换取更低内存压力和更小快照。无限保留所有对象、把每个中间结果都存成文件，也都是可能的设计。本文没有把它们当作受控测量的对照方案。当前选择让交互复用方便，同时提供保留控制。
 
-The host schedules a snapshot after a successful cell with a 1,500-millisecond debounce, and also saves before an orderly restart or close when possible. A replacement kernel first rebuilds its runtime, tool proxies, and skills, then restores saved user state. The [session coordinator](../../dsh-python-repl/src/session.ts) and [snapshot reporting code](../../dsh-python-repl/src/snapshot.ts) distinguish restored names, restore failures, and names that could not be saved. An incomplete restore must not silently overwrite a fuller saved snapshot during close.
+## 重启恢复变量空间，不恢复整个世界
 
-The serializer can preserve ordinary data, functions, and classes, but this is not process checkpointing. Open connections, child processes, and running tasks do not return as functioning resources. A crash before the latest snapshot can lose recent changes. Conversation recovery, variable recovery, and task recovery must be assessed separately.
+成功单元结束后，DSH 用 1,500 毫秒防抖安排快照。有条件时，也在正常重启或关闭前保存。替换内核先重建运行环境、工具代理和技能，再恢复保存的用户状态。[会话协调器](../../dsh-python-repl/src/session.ts)与[快照报告代码](../../dsh-python-repl/src/snapshot.ts)区分已恢复、恢复失败和无法保存的名字。恢复不完整时，关闭过程不能悄悄覆盖更完整的旧快照。
 
-Importable modules and skill bindings are saved by name and resolved in the new environment. This avoids restoring old module globals over freshly imported code, and avoids recursively serializing locks or sessions held by skills. The tradeoff is explicit: attributes manually attached to a module are not retained, and restoring a reference does not freeze the module's implementation. See [snapshot reference handling](../../dsh-python-repl/python/snapshot_refs.py). The [real-kernel snapshot tests](../../dsh-python-repl/test/kernel-snapshot.test.ts) replace a session object, restore data and functions, and verify that restored functions read the live namespace. They model host replacement; they are not a live desktop restart acceptance test.
+序列化可以保留普通数据、函数和类，但这不是进程检查点。打开的连接、子进程和运行中任务不会恢复成可工作的资源。最新快照之前崩溃，可能丢失近期修改。对话恢复、变量恢复和任务恢复需要分别判断。
 
-## The permission boundary is not a Python sandbox
+可导入模块和技能绑定按名字保存，在新环境中重新查找。这避免把旧模块全局变量覆盖到新导入代码上，也避免递归保存技能持有的锁或会话。代价很明确：手工附到模块上的属性不会保留，恢复引用也不会冻结模块实现。参见[快照引用处理](../../dsh-python-repl/python/snapshot_refs.py)。[真实内核快照测试](../../dsh-python-repl/test/kernel-snapshot.test.ts)替换会话对象、恢复数据和函数，并验证恢复的函数读取当前变量空间。它们模拟 DSH 替换，不是真实桌面重启验收。
 
-The kernel is trusted Python with host filesystem, network, and process access. Importing a configured skill executes Python code. Restricting which DSH tools a cell can call does not restrict arbitrary Python capabilities. The [trust documentation](../../dsh-python-repl/README.md#trust-and-cancellation) states this explicitly.
+## 权限边界不等于 Python 沙箱
 
-Within the tool bridge, authority is narrower. A [per-cell lease](../../dsh-python-repl/src/lease.ts) binds the exact tool functions to a run identifier and kernel generation. When a cell settles, its lease is revoked. An ordinary leftover asynchronous task cannot borrow the next cell's permissions. Explicit background work uses a separate, tracked grant through [the background tool adapter](../../dsh-python-repl/src/background-tools.ts), with host policy checks and revocation when that work ends.
+内核运行受信任的 Python 代码，能直接访问所在机器的文件系统、网络和进程。导入配置中的技能会执行 Python 代码。限制单元能调用哪些 DSH 工具，不会限制任意 Python 能力。[信任说明](../../dsh-python-repl/README.md#信任和取消)明确写出了这一点。
 
-Failure is not rollback. An exception can leave earlier assignments and completed external effects intact. Cancellation reaches Python as `asyncio.CancelledError`, distinct from `ToolCallError`; catching a normal tool failure must not swallow cancellation and keep issuing actions. A tool reply timeout or delivery failure can leave the external outcome unknown. The bridge reports that uncertainty rather than replaying the call. Threads and detached processes may continue even when a cell is cancelled. The kernel's convenience must therefore be paired with explicit inspection of partial progress.
+工具桥接内部的权限更窄。[每单元授权凭证](../../dsh-python-repl/src/lease.ts)把确切的工具函数绑定到运行标识和内核代次。单元结束后，凭证被撤销。普通遗留异步任务不能借用下一单元的权限。明确启动的后台工作通过[后台工具适配器](../../dsh-python-repl/src/background-tools.ts)获得独立、可追踪的授权。调用仍需经过 DSH 策略检查。工作结束时，授权会被撤销。
 
-## Measuring locality without inventing savings
+失败不是回滚。异常可能留下之前的赋值和已经发生的外部效果。Python 通过 `asyncio.CancelledError` 接收取消，这与 `ToolCallError` 不同。捕获普通工具失败时，不能吞掉取消后继续操作。工具响应超时或投递失败，可能让外部结果未知。桥接会报告这种不确定性，不会重放调用。单元取消后，线程和脱离进程仍可能继续。因此便利的内核必须配合对部分进展的明确检查。
 
-The recorded [benchmark result](../../benchmarks/results.json) uses 10,000 generated JSONL records. Returning the complete fictional log exposes 1,976,098 UTF-16 code units; returning the computed counts and three identified samples exposes 345. Under the explicitly chosen `ceil(UTF-16 units / 4)` estimator, those payloads are 494,025 and 87 estimated tokens. Both paths start with the same complete dataset. The script checks record count, expected errors, aggregate totals, and sample lookup before measuring. It runs standard Python rather than the DSH bridge, and excludes prompts, code, tool schemas, transport, reasoning, and cache accounting. The result measures this query's returned-text volume, not end-to-end latency, correctness of a model answer, or general savings. The [benchmark README](../../benchmarks/README.md) gives one command and optional exports for the exact log and conclusion.
+## 测量本地保留数据，不编造节省
 
-A reproducible locality comparison should use the same generated dataset and the same computed answer. Record the full-display path and the retained-variable path separately, including displayed characters or bytes, the estimator used, tool-call count, and equality of the final aggregate. Include the configured output budget so a clipped transcript cannot masquerade as a complete dataset. Test reuse in a later cell, and test restart recovery separately with serializable and unsavable state. The existing 200,000-item fixture supplies a concrete reproduction shape; it does not predict latency, billing, or success on a remote service.
+已有[测量结果](../../benchmarks/results.json)使用 10,000 条生成的 JSONL 记录。返回整份虚构日志会展示 1,976,098 个 UTF-16 码元，返回计算出的计数和三条带标识的样本则展示 345 个。按明确选定的 `ceil(UTF-16 units / 4)` 方法，分别估算为 494,025 和 87 个 token。两种方式从同一份完整数据集开始。脚本在测量前检查记录数、预期错误数、聚合总数和样本查找。它运行标准 Python，不经过 DSH 桥接，也不计入提示词、代码、工具定义、传输、推理和缓存计费。结果测量的是这次查询的返回文本量，不是完整流程延迟、模型答案正确性或普遍节省。[测量说明](../../benchmarks/README.md)提供运行命令，以及完整日志和结论的可选导出。
 
-The tests cited here were inspected as source for this article, not rerun during drafting. Their value is that readers can reproduce specific contracts. The practical outcome to verify is modest and useful: a large value remains available to code, the conversation receives a smaller piece of evidence, and state loss or incomplete input is reported before the agent mistakes either for a complete answer.
+可重复的本地保留数据对比，应使用相同生成数据集和相同计算答案。分别记录完整展示方式和保留变量方式，包括展示字符或字节、估算方法、工具调用数和最终聚合是否相等。计入配置的输出预算，避免把被截短的会话记录冒充完整数据集。在后续单元测试复用，再用可序列化和不可保存状态单独测试重启恢复。现有 200,000 项样例提供具体复现形式，不预测延迟、账单或远程服务成功率。
+
+本文引用测试时只查看了源码，没有在写作时重跑。它们的价值是让读者能复现具体约定。实际要验证两件事。大值仍可由代码使用，对话只收到一小段证据。如果状态丢失或输入不完整，Agent 会先得到报告，不会误当成完整答案。

@@ -1,23 +1,25 @@
+中文 | [English](README.en.md)
+
 # dsh-history-cap
 
-[← oh-my-harness](../README.md#components) · [中文首页](../README.zh-CN.md#由哪几块组成)
+[← 返回首页](../README.md#由哪几块组成) · [教程](../docs/dsh-history-cap.md)
 
-**In short:** Loads a long session's history in pages when you open it. Affects only the app window, not what the model sees.
+**一句话：** 打开很长的会话时，界面分页加载历史，不一次拉完。只影响界面，不影响模型看到的内容。
 
-Limit the number of history records sent to the DSH interface in a single response, so a turn with many tool events does not produce one enormous initial page. This improves history delivery; it does not trim model context or reduce model token usage.
+限制 DSH 每次回复界面时发送的历史记录数，避免某一轮工具事件很多，就一次加载出巨大页面。它改善历史传送，不裁剪模型上下文，也不减少模型 token 用量。
 
-## Requirements and installation
+## 使用条件和安装
 
-Requires a compatible DeepSeek Harness (DSH) installation with the session controller history service, Node.js `^22.19.0 || >=24.0.0`, and pnpm. The package manifest records the tested host dependencies; the current tests use DSH 0.2.2-rc.1. Keep the shared `tooling/` directory alongside this plugin in the containing repository. This source directory is not a standalone build project.
+需要兼容的 DeepSeek Harness（DSH），提供会话控制器的历史服务。还需要 Node.js `^22.19.0 || >=24.0.0` 和 pnpm。包清单记录已测试的宿主依赖；当前测试使用 DSH 0.2.2-rc.1。保留所在仓库中与插件相邻的共用 `tooling/` 目录。不能只拿这个源码目录单独构建。
 
-From this plugin directory:
+在本插件目录执行：
 
 ```sh
 pnpm install --frozen-lockfile
 pnpm run check
 ```
 
-Merge a linked dependency and bundle into your DSH profile's package manifest:
+在 DSH profile 的包清单中合入链接依赖和组合包：
 
 ```json
 {
@@ -32,30 +34,30 @@ Merge a linked dependency and bundle into your DSH profile's package manifest:
 }
 ```
 
-Replace the example link with a path relative to your profile directory. Install the profile's dependencies using the pnpm version supported by DSH, validate the profile if a startup checker is available, and restart DSH. The bundle registers its entry; do not insert a duplicate entry.
+把示例链接改成相对于你的 profile 目录的路径。使用 DSH 支持的 pnpm 安装 profile 依赖。提供启动检查器时先校验 profile，再重启 DSH。组合包已经登记条目，不要重复插入。
 
-## Behavior and relationship to DSH
+## 行为和与 DSH 的分工
 
-DSH's history service can return a whole turn as one page. This plugin wraps the existing controller's `page`, `events`, and `follow` methods. If a response contains more than 1000 records, it returns the newest 1000 and sets `hasMore: true`. The interface's existing **Load earlier** action can retrieve earlier records. Only the first snapshot of a follow stream is capped; later live updates pass through unchanged.
+DSH 的历史服务可能把整轮当成一页返回。插件包住现有控制器的 `page`、`events` 和 `follow` 方法。一份回复超过 1000 条记录时，只返回最新 1000 条，并设 `hasMore: true`。界面现有的**加载更早**操作可以继续取前面的记录。持续跟随的流只限制第一帧快照，后续实时更新原样通过。
 
-The plugin does not modify session files, filter event types, or remove stored history. It does not change the agent's model request. Unloading restores inherited controller methods when this plugin still owns the wrapper.
+插件不修改会话文件，不按事件类型筛选，也不删除已存历史。它不改助手发给模型的请求。卸载时，如果包装方法仍归本插件所有，就恢复继承的控制器方法。
 
-The wrapper relies on host controller methods and their inherited implementation. A host update can change that contract; run the tests against the new host before deployment. Remove this plugin when DSH provides an equivalent raw-record page limit itself.
+这层包装依赖宿主控制器方法及其继承实现。宿主升级可能改变约定，部署前要对新宿主跑测试。DSH 自己提供等效的原始记录分页上限后，再移除本插件。
 
-## Configuration
+## 配置
 
-The bundle entry ID is `history-cap`. There are **no runtime configuration fields**. The limit is the source constant `DEFAULT_MAX_HISTORY_RECORDS = 1000`. Helper function parameters used by tests are not profile settings.
+组合包条目 ID 是 `history-cap`。**没有运行时配置项。** 上限来自源码常量 `DEFAULT_MAX_HISTORY_RECORDS = 1000`。测试中的辅助函数参数不是 profile 设置。
 
-Disable the entry in your profile patch:
+在 profile 补丁中禁用条目：
 
 ```yaml
 - id: history-cap
   disabled: true
 ```
 
-Code changes require rebuilding and restarting DSH. Reopening a page alone does not reload the host plugin.
+代码改动需要重新构建并重启 DSH。只重新打开网页不会重新加载宿主插件。
 
-## Development and verification
+## 开发和验证
 
 ```sh
 pnpm run typecheck
@@ -65,8 +67,8 @@ pnpm run test
 pnpm run check
 ```
 
-The synthetic large-history test creates 24000 records in one turn and checks opening the history, continuous backwards pagination without gaps, cancellation of the original stream, live update pass-through, and unload restoration. The tests resolve methods the same way as the host gateway. They do not constitute a GUI performance measurement; after deployment, verify switching between a normal and a large session and loading earlier history in the actual interface.
+大型历史测试在一轮中构造 24000 条虚构记录，检查打开历史、向前连续分页没有缺口、取消原始流、实时更新透传和卸载恢复。测试按宿主网关的同样方式查找方法。这不能代替界面性能测量；部署后还要在真实界面切换普通会话和大历史会话，核对加载更早记录的操作。
 
-## License
+## 许可
 
-MIT. See [LICENSE](LICENSE).
+MIT。见 [LICENSE](LICENSE)。

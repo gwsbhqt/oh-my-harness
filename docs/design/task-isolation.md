@@ -1,70 +1,72 @@
-# Task isolation is a set of boundaries, not a second desktop
+中文 | [English](task-isolation.en.md)
 
-A fictional worker is checking a page at `https://example.com` while another worker edits a different page in the same browser. Both need the existing login. Meanwhile, a person is using the computer. Giving each worker a different conversation is necessary, but insufficient: the conversations can still reach the same browser profile, native window, account, and remote files.
+# 任务隔离划分边界，不会再造一个桌面
 
-The design therefore separates several questions. Which machine receives the operation? Which task owns the browser binding? Which exact page or native window is addressed? What may be cleaned up afterward? None of these identifiers grants permission to publish, delete, or change an account. The implementation provides cooperation boundaries; authorization and verification remain separate responsibilities.
+一个示例长工在检查 `https://example.com` 页面，另一个长工在同一浏览器编辑别的页面。双方都需要已有登录状态，同时还有人在用电脑。给长工分配不同会话是必要的，但还不够：它们仍能接触同一浏览器配置、原生窗口、账号和远程文件。
 
-This article describes source-backed behavior, not a new live acceptance run. The [browser README](../../skills/browser-control/README.md), [desktop README](../../skills/computer-control/README.md), and [remote README](../../skills/remote-host/README.md) define the supported platforms and prerequisites.
+因此设计把几个问题分开：哪台机器接收操作，哪个任务拥有浏览器绑定，具体操作哪个页面或原生窗口，以及结束后能清理什么。任何标识都不授予发布、删除或修改账号的权限。实现提供协作边界，授权和验证仍是独立责任。
 
-## What the host provides, and what these skills add
+本文描述有源码依据的行为，不是新一轮真实环境验收。[浏览器说明](../../skills/browser-control/README.md)、[桌面说明](../../skills/computer-control/README.md)和[远程说明](../../skills/remote-host/README.md)规定支持的平台与前提条件。
 
-DSH provides conversations, execution tools, and a session identifier available to their environment. The browser and desktop skills use that identifier as a default task scope. They add resource selection, ownership records, stable handles, remote routing, and rules for uncertain outcomes. These are Python packages and a native desktop executor, not a plugin-created operating-system sandbox.
+## DSH 提供什么，技能补充什么
 
-The browser itself provides Chrome DevTools Protocol connections. macOS provides Accessibility, window information, input facilities, and permission enforcement. OpenSSH provides authentication and transport. The skills compose these existing facilities. A separate DSH conversation, a Git branch, or a worktree does not create a private browser account or desktop.
+DSH 提供对话、工具执行能力和环境中可用的会话标识。浏览器和桌面技能默认把它作为任务范围，再增加资源选择、归属记录、稳定引用、远程路由和结果不确定时的规则。它们是 Python 包和原生桌面执行程序，不是插件创建的操作系统沙箱。
 
-## Browser sessions separate responsibility
+浏览器本身提供 Chrome DevTools Protocol 连接。macOS 提供辅助功能、窗口信息、输入设施和权限执行。OpenSSH 提供认证和传输。技能组合这些已有能力。独立 DSH 会话、Git 分支或 worktree，不会创建私有浏览器账号或桌面。
 
-Browser task scope follows an explicit precedence: a supplied scope, then `BROWSER_CONTROL_CONTEXT_ID`, then `DSH_SESSION_ID`. An explicit browser session overrides automatic session selection. Without a task environment, the Python interface can use a process-specific default; ordinary CLI resource actions require a scope or session. This prevents unrelated command invocations from silently sharing a global task.
+## 浏览器会话明确各自的责任
 
-[contexts.py](../../skills/browser-control/src/browser_control/contexts.py) stores a stable automatic session for a scope. Selection changes do not inspect or release browser resources. [The context tests](../../skills/browser-control/tests/test_contexts.py) assert precedence, stable reuse, independent tasks, concurrent processes, and refusal of unsafe or corrupt metadata. The store uses locking and replacement checks rather than assuming that only one agent process exists.
+浏览器任务范围按明确顺序选择：调用时指定的 scope，其次 `BROWSER_CONTROL_CONTEXT_ID`，最后 `DSH_SESSION_ID`。明确指定浏览器 session 会覆盖自动选择。没有任务环境时，Python 接口可以使用进程专属默认值。普通命令行资源操作要求指定 scope 或 session，防止无关命令悄悄共用一个全局任务。
 
-For a conversation branch, the practical rule is to use a distinct task scope and retain its own returned objects. This follows from identity-based selection; there is no Git-branch detector. Explicitly reusing the same scope or session intentionally shares responsibility. Copying a conversation's prose does not establish a safe transfer of live browser objects. A branch should obtain its own binding or follow an explicit handoff, rather than paste a stale target identifier and assume ownership.
+[contexts.py](../../skills/browser-control/src/browser_control/contexts.py)为每个 scope 保存稳定的自动 session。修改选择不会检查或释放浏览器资源。[上下文测试](../../skills/browser-control/tests/test_contexts.py)检查优先级、稳定复用、独立任务、并发进程，以及对不安全或损坏信息的拒绝。存储使用锁和替换检查，不假设只有一个 Agent 进程。
 
-A Page fixes the machine, browser session, browser, and exact target identifier. Changing a remembered machine later does not redirect an existing Page. [Routing contract tests](../../skills/browser-control/tests/test_routing_contract.py) exercise this property and make an explicit remote failure raise without contacting the local socket. A title, URL fragment, list position, or currently active tab is not a substitute for an actual returned target identifier.
+对话分支应使用不同任务范围，保留自己返回的对象。任务范围取决于调用时选择的身份，不会自动检测 Git 分支。有意复用相同 scope 或 session，就表示共享责任。复制对话文字不能安全交接活的浏览器对象。分支应获取自己的绑定或完成明确交接，而不是粘贴过期目标标识就假设已经拥有它。
 
-## A private task window still shares account state
+Page 对象固定机器、浏览器会话、浏览器和确切目标标识。后来改选默认机器，不会重定向已有 Page。[路由约定测试](../../skills/browser-control/tests/test_routing_contract.py)验证这一点，并确认明确的远程失败会报错，而不连接本地 socket。标题、网址片段、列表位置或当前活动标签页，都不能替代实际返回的目标标识。
 
-The normal cooperative mode creates a task window in an authorized browser instance. Workers can operate different pages through background CDP input without moving the real pointer or switching the visible tab for each action. However, the window uses the same profile and login. Signing out or changing a site setting can affect other windows. Newly creating a window can itself bring that window forward; the [operating rules](../../skills/browser-control/references/common.md) explicitly record this limitation.
+## 任务专用窗口仍共享账号状态
 
-Chrome also supports an isolated profile and a cloned profile. A clone belongs to the task and does not write changes back into the source profile. Arc supports attachment rather than those launch modes. Choosing a separate profile trades convenient existing login state for stronger storage separation. Choosing a clone copies potentially sensitive authenticated state. These are available design choices, not comparative experiments demonstrating a universal best mode.
+普通协作模式在已授权浏览器实例中创建任务窗口。长工能通过后台 CDP 输入操作不同页面，无需每次移动真鼠标或切换可见标签页。但窗口仍使用同一份配置和登录状态。退出登录或修改网站设置可能影响其他窗口。新建窗口本身也可能让它出现在最前面。[操作规则](../../skills/browser-control/references/common.md)明确记录了这个限制。
 
-Cleanup distinguishes pages the task created from pages it borrowed. Release closes owned pages and removes bindings to borrowed ones; closing a borrowed page needs explicit authorization. The [resource ledger](../../skills/browser-control/src/browser_control/resources.py) records minimal ownership metadata scoped to the browser's actual instance UUID. It does not restore an action binding from a URL or treat a reused debugging port as the same browser. Disconnect and release have different meanings: stopping a connection does not necessarily surrender its resources.
+Chrome 还支持独立配置和克隆配置。克隆属于任务，改动不会写回源配置。Arc 支持连接已有浏览器，而不支持这些启动模式。使用独立配置时，要放弃复用已有登录状态的便利，换取更强的存储隔离。克隆则会复制可能敏感的已认证状态。这些是可选择的设计，不是证明某模式普遍最优的对比实验。
 
-## Native windows cannot become independent desktops
+清理时区分任务创建的页面和借用的页面。释放会关闭任务自己创建的页面。对借用页面，只移除绑定。关闭借用页面需要明确授权。[资源记录](../../skills/browser-control/src/browser_control/resources.py)按浏览器真实实例 UUID 保存最少归属信息。它不会根据网址恢复操作绑定，也不会把复用的调试端口当成同一浏览器。断连和释放含义不同：停止连接，不一定放弃资源。
 
-The desktop tool has a different problem. Some actions address Accessibility elements directly; others depend on event delivery and focus. There is still a single real foreground, and a person can change it between checks.
+## 原生窗口不能变成独立桌面
 
-A stable window reference includes its window identifier, process identifier, process start time, and application identity. The [Swift executor](../../skills/computer-control/bin/computer-control.swift) checks that the original process generation and exact window remain valid. It refuses to substitute a similar title or position. Element checks also verify membership in the bound window.
+桌面工具面对不同问题。有的操作直接作用于辅助功能元素，有的依赖事件投递与焦点。真实前台仍只有一个，人可以在两次检查之间改变它。
 
-For non-browser applications, the tool records task ownership and a changing lease. Handoff and release invalidate older credentials. Browser applications instead use task windows and short operation locks, allowing different windows to cooperate without claiming the whole shared browser. Keyboard, paste, menu, and event-based mouse operations use a shared desktop-input lock. Browser input also checks the foreground application, exact focus window, and focused element where relevant.
+稳定窗口引用包含窗口标识、进程标识、进程启动时间和应用身份。[Swift 执行程序](../../skills/computer-control/bin/computer-control.swift)检查原进程代次和确切窗口是否仍有效，拒绝用相似标题或位置替代。元素检查也会确认其属于绑定窗口。
 
-These measures reduce races between cooperating callers. They cannot stop a person or another same-account program from changing focus immediately after a check. Long input rechecks focus and stops when it changes. If input may already have been sent, the result is unknown. The [desktop rules](../../skills/computer-control/references/common.md) state this residual race explicitly; [handle contract tests](../../skills/computer-control/tests/test_contract.py) check rejection of another task, another window, and an outdated lease.
+对非浏览器应用，工具记录任务归属和会变化的授权凭证。交接和释放会使旧凭证失效。浏览器应用则使用任务窗口和短操作锁，允许不同窗口协作，而不占有整份共享浏览器。键盘、粘贴、菜单和基于事件的鼠标操作使用共享桌面输入锁。浏览器输入还检查前台应用、准确焦点窗口，以及相关场景中的焦点元素。
 
-Accessibility and Screen Recording permissions belong to the actual process on the destination. A successful version probe proves neither permission nor application control. Selected targeted input also uses private macOS interfaces, so operating-system changes can break it. Unsupported targeted actions fail instead of silently switching to global input. System identity confirmation and sensitive application restrictions are additional boundaries, not things a task name can bypass.
+这些措施减少协作调用方之间的争抢，但不能阻止人或同账号其他程序在检查后立刻切焦点。长输入会复查焦点，变化时停止。如果输入可能已经发出，结果就是未知。[桌面规则](../../skills/computer-control/references/common.md)明确说明仍然存在的争抢风险。[引用约定测试](../../skills/computer-control/tests/test_contract.py)检查是否拒绝其他任务、其他窗口和旧凭证。
 
-## Remote means a real destination
+辅助功能和屏幕录制权限属于目标上的实际进程。版本探测成功，既不证明权限，也不证明应用可控。部分定向输入还使用私有 macOS 接口，因此系统变化可能使其失效。不支持的定向操作会失败，不会悄悄改为全局输入。系统身份确认和敏感应用限制是额外边界，不能靠任务名绕过。
 
-The shared [target resolver](../../skills/_shared/agentkit/remote/target.py) and [SSH transport](../../skills/_shared/agentkit/remote/ssh.py) underpin remote selection. Each tool keeps its own remembered destination. An explicit destination wins for that call; bound objects retain the destination already selected. Unknown aliases, broken selection state, missing remote tools, and connection failures cause errors. `remote-host` rejects local execution rather than interpreting a missing destination as this computer.
+## 远程意味着真实目标
 
-Remote payloads use the system SSH client and its configured authentication. Browser calls send structured requests over SSH to the target's local browser service; they do not expose the debugging port to the caller. Capability checks precede supported remote actions, and requests explicitly select local execution on the destination to avoid recursive routing. Installation remains an explicit prerequisite. These constraints are documented in the [shared transport rules](../../skills/remote-host/references/transport.md).
+公共[目标解析](../../skills/_shared/agentkit/remote/target.py)和 [SSH 传输](../../skills/_shared/agentkit/remote/ssh.py)支撑远程选择。各工具分别记住自己的目标。明确指定的目标对本次调用优先，已绑定对象保留原先选择。未知别名、损坏的选择状态、缺远程工具和连接失败都会报错。`remote-host` 拒绝本机执行，不把缺少目标解释为这台电脑。
 
-SSH does not sandbox the payload. It runs with the authenticated account's real access. Two workers using that account can still edit the same file. The [copy and verification rules](../../skills/remote-host/references/copy-verify.md) describe staging before placement and content checks. Conditional file replacement can compare an expected SHA-256 to detect intervening edits. Transport success establishes delivery, while content and service checks establish the requested result.
+远程脚本使用系统 SSH 客户端和已配置认证。浏览器调用通过 SSH 把结构化请求发给目标上的本地浏览器服务，不向调用方暴露调试端口。受支持的远程操作先做能力检查，请求在目标上明确选择本地执行，避免递归路由。安装仍是明确前提。这些限制见[公共传输规则](../../skills/remote-host/references/transport.md)。
 
-## Observe after an uncertain action
+SSH 不会把脚本放进沙箱。它使用已认证账号的真实访问权。同账号的两个长工仍能修改同一文件。[复制和验证规则](../../skills/remote-host/references/copy-verify.md)说明放置前暂存和内容检查。条件替换可以比较预期 SHA-256，检测中途修改。传输成功只证明送达，内容和服务检查才证明目标结果。
 
-A timeout does not undo an operation. After an uncertain click, input, or remote mutation, the next step is observation on the original target. Repeating a submission can duplicate an external effect. Browser recovery likewise re-establishes an eligible original binding; it does not replay the interrupted click. Browser-instance changes, missing pages, or unsupported customized bindings can make recovery refuse.
+## 不确定操作之后，先观察
 
-A useful review asks whether the expected page changed, whether only the intended window disappeared, whether transferred bytes match, and whether the final service responds. A clean subprocess exit alone cannot answer those questions.
+超时不会撤销操作。点击、输入或远程写入结果不确定后，下一步应观察原目标。重复提交可能重复外部效果。浏览器恢复同样只是重建符合条件的原绑定，不会重放中断的点击。浏览器实例变化、页面缺失或不支持的自定义绑定，都可能让恢复被拒绝。
 
-## Evidence and measurement
+有效检查应问：预期页面是否变化，是否只有目标窗口消失，传输字节是否一致，以及最终服务能否响应。子进程正常退出本身回答不了这些问题。
 
-The checked-in tests provide reproducible contract evidence, with fixtures rather than a claim about a user's live desktop or SSH destination. From the public repository root, the targeted browser checks can be run with:
+## 证据与测量
+
+仓库中的测试提供可重复的接口约定证据，使用样例，不声称验证过用户真实桌面或 SSH 目标。从公开仓库根目录可以运行针对性的浏览器检查：
 
 ```sh
 uv run --project skills/browser-control --extra test python -m unittest discover -s skills/browser-control/tests -p 'test_contexts.py' -q
 uv run --project skills/browser-control --extra test python -m unittest discover -s skills/browser-control/tests -p 'test_routing_contract.py' -q
 ```
 
-For a controlled live evaluation, use a disposable example page and two fictional task scopes. Record wrong-target refusals, unexpected focus changes, operations with unknown outcomes, and resources remaining after release. Compare shared-window and separate-profile configurations under the same actions. Include browser and operating-system versions, permissions, and whether a human changed focus. A fixture refusal rate is not a live isolation guarantee.
+受控的真实环境评估，应使用可丢弃的示例页面和两个虚构任务范围。记录错误目标拒绝、意外焦点变化、结果未知的操作，以及释放后残留资源。用相同操作比较共享窗口和独立配置，记录浏览器、操作系统版本、权限和是否有人切换焦点。样例中的拒绝率不是真实环境隔离保证。
 
-The publication's reproducible measurements belong in [benchmark results](../../benchmarks/results.json). No timing, throughput, or savings figure is inferred here. The strongest supported conclusion is narrower: explicit identities and conservative failure rules make accidental cross-task actions easier to detect, while shared accounts, desktop focus, and real remote permissions remain shared state.
+可重复的发布测量应放在[测量结果](../../benchmarks/results.json)中。这里不推断任何耗时、吞吐或节省数字。目前有依据的结论是：明确身份和保守的失败规则，让任务之间的误操作更容易发现。账号、桌面焦点和真实远程权限仍然是共享的。

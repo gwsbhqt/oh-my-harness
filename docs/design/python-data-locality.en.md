@@ -1,0 +1,55 @@
+[中文](python-data-locality.md) | English
+
+# Keep the data in Python, put the evidence in the conversation
+
+A tool can return a large, useful dataset while the next decision needs only a count and a few exceptions. Sending the entire dataset through the conversation makes the model read material that a program could have filtered. Repeating the tool call later is worse when the source has changed or the operation had side effects. The design of `dsh-python-repl` gives a session a persistent Python process so that data can stay in variables and the conversation can carry the evidence needed for the next decision.
+
+This is an implementation-backed design, not a claim about personal productivity or provider bills. The relevant questions are narrower: does the value remain available, does a later cell use it without fetching it again, and what survives replacement of the Python process?
+
+## What the plugin adds to the host
+
+DSH supplies the `run_code` tool and the programmatic tool execution interface, which gives code access to tools under the calling agent's permissions. Its built-in code runtime is TypeScript. This plugin supplies a Python runtime with a process per session, using the upstream Prime Agent REPL (read-evaluate-print loop) core. It adds the DSH tool bridge, namespace inspection, snapshot coordination, trusted Python skill loading, and bounded cell output. It does not install a second agent runtime or substitute Prime's native tools for DSH tools. The [README](../../dsh-python-repl/README.en.md) and [runtime registration](../../dsh-python-repl/src/index.ts) describe this boundary; [vendor provenance](../../dsh-python-repl/vendor/PROVENANCE.md) records the upstream material.
+
+A cell is a persistent program fragment. Top-level `await` works, the last expression can be displayed, and definitions remain in the namespace. A later cell can operate on a previously assigned value. Ending a cell is therefore different from ending a process. This changes the natural workflow from “fetch, print, reason over the printout” to “fetch, retain, compute, display the relevant result.”
+
+## The value and its display are different things
+
+A tool proxy sends the tool name, arguments, cell identifier, and kernel generation to the host. The host resolves the call against that cell's bound tools and replies with a result envelope. The Python bridge unwraps the canonical JSON value and adds readable views for known result shapes. Those views remain dictionaries and lists: indexing and JSON serialization still work. The [bridge implementation](../../dsh-python-repl/python/dsh_kernel.py) separates this value from its representation.
+
+For example, a fictional worker can assign a search result to `matches`, inspect its completeness metadata, and display only the matching paths relevant to a decision. The next cell can group the same `matches` by directory. No second search is required merely because the first display was short. A short display, however, does not prove that the search itself was complete. Unreadable paths, clipped upstream text, and pagination remain properties of the source result.
+
+The distinction is executable in the repository. The [result-safety integration test](../../dsh-python-repl/test/result-safety.test.ts) supplies large mutation results, checks that the displayed view stays short, and then checks the full strings in another cell. The [output-budget test](../../dsh-python-repl/test/output-budget.test.ts) ends a real cell on a 200,000-item list, bounds the displayed text, and asks for `len(_)` in the next cell. Here `_` is the last non-`None` expression result. An assignment-only cell does not replace it, so meaningful data should have an explicit name rather than depend on that convenience binding.
+
+The Python process is not a copy of the conversation. The model only sees displayed output; a variable can contain more than that output shows. Conversely, remembering a variable's name in a conversation summary does not prove the value still exists. Namespace inspection through `repl.info`, `repl.list`, and `repl.describe` checks the running kernel instead of relying on conversational memory.
+
+## Variable lifetime is deliberately finite
+
+Persistence needs a retention policy. The [name lifecycle implementation](../../dsh-python-repl/python/lifecycle.py) counts unused user cells rather than elapsed wall time. Its configurable defaults archive unpinned names after 100 unused cells and delete them after 200. An idle session does not age simply because time passes. Names found in later source can be brought back from the archive before execution; `repl.unarchive` provides an explicit route, and `repl.keep` protects important names.
+
+Source analysis is bounded rather than omniscient. Dynamic lookup can hide a dependency from the automatic mechanism. Long-lived work should pin a costly intermediate value or explicitly restore it instead of assuming every indirect reference will be detected. The [lifecycle integration tests](../../dsh-python-repl/test/name-lifecycle.test.ts) use shorter configured thresholds to exercise archive, reuse, deletion, pinning, and continuity across a restart. These are behavior checks, not evidence that the defaults suit every workload.
+
+This policy trades unlimited retention for lower memory pressure and smaller snapshots. Keeping every object indefinitely and externalizing every intermediate result to a file are possible design choices. This article does not present them as alternatives measured in a controlled comparison. The implemented choice keeps interactive reuse convenient while exposing retention controls.
+
+## Restart restores a namespace, not the world
+
+The host schedules a snapshot after a successful cell with a 1,500-millisecond debounce, and also saves before an orderly restart or close when possible. A replacement kernel first rebuilds its runtime, tool proxies, and skills, then restores saved user state. The [session coordinator](../../dsh-python-repl/src/session.ts) and [snapshot reporting code](../../dsh-python-repl/src/snapshot.ts) distinguish restored names, restore failures, and names that could not be saved. An incomplete restore must not silently overwrite a fuller saved snapshot during close.
+
+The serializer can preserve ordinary data, functions, and classes, but this is not process checkpointing. Open connections, child processes, and running tasks do not return as functioning resources. A crash before the latest snapshot can lose recent changes. Conversation recovery, variable recovery, and task recovery must be assessed separately.
+
+Importable modules and skill bindings are saved by name and resolved in the new environment. This avoids restoring old module globals over freshly imported code, and avoids recursively serializing locks or sessions held by skills. The tradeoff is explicit: attributes manually attached to a module are not retained, and restoring a reference does not freeze the module's implementation. See [snapshot reference handling](../../dsh-python-repl/python/snapshot_refs.py). The [real-kernel snapshot tests](../../dsh-python-repl/test/kernel-snapshot.test.ts) replace a session object, restore data and functions, and verify that restored functions read the live namespace. They model host replacement; they are not a live desktop restart acceptance test.
+
+## The permission boundary is not a Python sandbox
+
+The kernel is trusted Python with host filesystem, network, and process access. Importing a configured skill executes Python code. Restricting which DSH tools a cell can call does not restrict arbitrary Python capabilities. The [trust documentation](../../dsh-python-repl/README.en.md#trust-and-cancellation) states this explicitly.
+
+Within the tool bridge, authority is narrower. A [per-cell lease](../../dsh-python-repl/src/lease.ts) binds the exact tool functions to a run identifier and kernel generation. When a cell settles, its lease is revoked. An ordinary leftover asynchronous task cannot borrow the next cell's permissions. Explicit background work uses a separate, tracked grant through [the background tool adapter](../../dsh-python-repl/src/background-tools.ts), with host policy checks and revocation when that work ends.
+
+Failure is not rollback. An exception can leave earlier assignments and completed external effects intact. Cancellation reaches Python as `asyncio.CancelledError`, distinct from `ToolCallError`; catching a normal tool failure must not swallow cancellation and keep issuing actions. A tool reply timeout or delivery failure can leave the external outcome unknown. The bridge reports that uncertainty rather than replaying the call. Threads and detached processes may continue even when a cell is cancelled. The kernel's convenience must therefore be paired with explicit inspection of partial progress.
+
+## Measuring locality without inventing savings
+
+The recorded [benchmark result](../../benchmarks/results.json) uses 10,000 generated JSONL records. Returning the complete fictional log exposes 1,976,098 UTF-16 code units; returning the computed counts and three identified samples exposes 345. Under the explicitly chosen `ceil(UTF-16 units / 4)` estimator, those payloads are 494,025 and 87 estimated tokens. Both paths start with the same complete dataset. The script checks record count, expected errors, aggregate totals, and sample lookup before measuring. It runs standard Python rather than the DSH bridge, and excludes prompts, code, tool schemas, transport, reasoning, and cache accounting. The result measures this query's returned-text volume, not end-to-end latency, correctness of a model answer, or general savings. The [benchmark README](../../benchmarks/README.en.md) gives one command and optional exports for the exact log and conclusion.
+
+A reproducible locality comparison should use the same generated dataset and the same computed answer. Record the full-display path and the retained-variable path separately, including displayed characters or bytes, the estimator used, tool-call count, and equality of the final aggregate. Include the configured output budget so a clipped transcript cannot masquerade as a complete dataset. Test reuse in a later cell, and test restart recovery separately with serializable and unsavable state. The existing 200,000-item fixture supplies a concrete reproduction shape; it does not predict latency, billing, or success on a remote service.
+
+The tests cited here were inspected as source for this article, not rerun during drafting. Their value is that readers can reproduce specific contracts. The practical outcome to verify is modest and useful: a large value remains available to code, the conversation receives a smaller piece of evidence, and state loss or incomplete input is reported before the agent mistakes either for a complete answer.

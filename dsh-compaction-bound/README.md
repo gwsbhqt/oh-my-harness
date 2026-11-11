@@ -1,23 +1,25 @@
+中文 | [English](README.en.md)
+
 # dsh-compaction-bound
 
-[← oh-my-harness](../README.md#components) · [中文首页](../README.zh-CN.md#由哪几块组成)
+[← 返回首页](../README.md#由哪几块组成) · [教程](../docs/dsh-compaction-bound.md)
 
-**In short:** When the chat history is compacted, your own messages are copied word for word instead of being paraphrased by the model, and the result has a fixed size limit.
+**一句话：** 聊天记录太长要压缩时，你说过的原话照抄保留，不让模型转述；压缩后的总长度有固定上限。
 
-Bound the amount of recent text and summary text retained by DSH's built-in context compaction. This plugin augments the official `@deepseek-ai/dsh-compaction-basic` engine; it does not replace its compaction trigger, model context window, or maximum reply size.
+给 DSH 自带的上下文压缩增加限制，控制压缩后保留的近期原文和摘要长度。它扩展官方 `@deepseek-ai/dsh-compaction-basic` 引擎，不改压缩触发点、模型上下文窗口或回复长度上限。
 
-## Requirements and installation
+## 使用条件和安装
 
-Requires a compatible DeepSeek Harness (DSH) installation with the preset registry, LLM runtime, session query service, and official basic compaction engine, Node.js `^22.19.0 || >=24.0.0`, and pnpm. The package manifest records the tested host dependencies; the current tests use DSH 0.2.2-rc.1. Keep the shared `tooling/` directory alongside this plugin in the containing repository. This source directory is not a standalone build project.
+需要兼容的 DeepSeek Harness（DSH），提供模式注册表、LLM 运行环境、会话查询服务和官方基础压缩引擎。还需要 Node.js `^22.19.0 || >=24.0.0` 和 pnpm。包清单记录已测试的宿主依赖；当前测试使用 DSH 0.2.2-rc.1。保留所在仓库中与插件相邻的共用 `tooling/` 目录。不能只拿这个源码目录单独构建。
 
-From this plugin directory:
+在本插件目录执行：
 
 ```sh
 pnpm install --frozen-lockfile
 pnpm run check
 ```
 
-Merge a linked dependency and bundle into your DSH profile's package manifest:
+在 DSH profile 的包清单中合入链接依赖和组合包：
 
 ```json
 {
@@ -32,23 +34,23 @@ Merge a linked dependency and bundle into your DSH profile's package manifest:
 }
 ```
 
-Replace the example link with a path relative to your profile directory. Install the profile's dependencies using the pnpm version supported by DSH, validate the profile if a startup checker is available, and restart DSH. The bundle registers its entry; do not insert a duplicate entry.
+把示例链接改成相对于你的 profile 目录的路径。使用 DSH 支持的 pnpm 安装 profile 依赖。提供启动检查器时先校验 profile，再重启 DSH。组合包已经登记条目，不要重复插入。
 
-## Behavior and limits
+## 行为和限制
 
-The plugin adds a fixed `retainTokens` value to basic compaction entries in registered presets only when neither `retainTokens` nor `retainRatio` is already explicit. It preserves other preset settings. Remounted presets affect new sessions and sessions restored after a DSH restart; already running sessions can remain bound to their previous preset generation.
+对于已登记模式中的基础压缩条目，只有没有明确配置 `retainTokens` 和 `retainRatio` 时，插件才补上固定的 `retainTokens`。其他模式设置原样保留。重新挂载的模式影响新会话和 DSH 重启后恢复的会话；已经运行的会话可能仍绑定旧版模式。
 
-For a recognized compaction request, the plugin replaces only the final compaction instruction with a bounded, sectioned summary instruction. After a successful summary, it attaches a separate appendix built directly from user-authored text and earlier recognized checkpoint appendices. It does not ask the model to paraphrase or select those quotes. Non-text attachments and text from notifications, tool results, or assistant replies are not treated as user-authored messages.
+识别出压缩请求后，只把最后一条压缩指令换成分栏限长的摘要指令。摘要成功生成后，单独附上一份从用户原文和此前已识别检查点附录直接整理的附录。不要求模型转述或挑选这些原话。非文本附件，以及通知、工具结果和助手回复里的文字，都不算用户亲手写的消息。
 
-The appendix has two independent budgets. It keeps the newest user text verbatim within `userMessageChars`, then records older items as an index containing the turn, time, character count, and a short prefix. If the index exceeds `userIndexChars`, its oldest entries merge into turn ranges. Session logs retain the original messages, but this plugin does not expose history-reading tools. Reading indexed text requires a reader supplied separately by the host. The default appendix states that limitation and does not claim an unavailable tool exists. If your host exposes a reader, configure `historyReaderHint` to name its actual tool and calling convention; setting a hint does not install or validate a reader.
+附录有两份独立额度。先在 `userMessageChars` 内逐字保留最新用户原文，再把更早的消息列成索引，记录轮次、时间、字符数和简短开头。索引超出 `userIndexChars` 时，把最早条目合成轮次范围。会话日志仍保留原文，但本插件不提供历史读取工具。索引对应的原文需要宿主另行提供的读取能力。默认附录会说明这个限制，不冒称某个不可用工具存在。如果宿主提供读取能力，可用 `historyReaderHint` 写明实际工具及调用方式；写提示不会安装或验证读取工具。
 
-`summaryChars` applies only to the model-written summary, not the appendix. If the summary is too long, the plugin makes at most one additional model request to shorten that summary alone. It accepts the result only if it fits, preserves all required section headings in order, and leaves **Active User Requirements** unchanged. If the attempt fails or fails validation, it keeps the original summary and records `over-kept`; this setting is not a hard output guarantee. An unfinished or failed initial summary follows the host's failure path without appending user text.
+`summaryChars` 只管模型写的摘要，不含附录。摘要过长时，插件最多再请求模型一次，只压短这份摘要。只有压短稿不超限、必需栏目的标题和顺序都保留、**Active User Requirements** 一字不变时才采用。尝试失败或核对不过时，保留原稿并记录 `over-kept`，所以这不是严格的输出长度保证。最初的摘要没完成或失败时，沿用宿主失败处理，不附用户原文。
 
-If the host registry structure or compaction instruction changes, the affected hook warns and leaves the host behavior intact. Tests check these host contracts. Retention uses the host's estimate of one token per four characters, not a model tokenizer; no fixed real token saving or cost reduction is promised.
+宿主注册表结构或压缩指令变了，对应接入处会警告，并保留宿主原行为。测试会核对这些宿主约定。保留量使用宿主每四字符估算一个 token 的口径，不是模型分词器的精确计数；不承诺固定的实际 token 节省或费用下降。
 
-## Configuration
+## 配置
 
-Override the existing bundle entry in your profile patch:
+在 profile 补丁中覆盖现有组合包条目：
 
 ```yaml
 - id: compaction-bound
@@ -61,20 +63,20 @@ Override the existing bundle entry in your profile patch:
     historyReaderHint: ''
 ```
 
-| Setting | Default | Meaning |
+| 设置 | 默认值 | 含义 |
 | --- | --- | --- |
-| `retainTokens` | `12000` | Estimated recent-text tokens retained by basic compaction; minimum 1000. Changing it remounts presets; restart DSH for restored sessions to use the new generation. |
-| `boundSummary` | `true` | Rewrite recognized compaction instructions and attach the user-text appendix. False uses the host's original summary flow. |
-| `summaryChars` | `12000` | Character target for the model summary; minimum 2000, excluding the appendix. Oversize handling is bounded to one shortening attempt. |
-| `userMessageChars` | `8000` | Serialized-line budget for verbatim user messages; minimum 1000. |
-| `userIndexChars` | `2000` | Serialized-line budget for older-message index entries; minimum 300. |
-| `historyReaderHint` | `''` | Optional replacement for the session-history reader sentence. Every `{sessionId}` is replaced literally with the current session ID; the turn-range sentence is still appended. Empty uses the generic host-reader wording. No sentence is emitted when the session ID is unknown. |
+| `retainTokens` | `12000` | 基础压缩保留的近期原文估算 token 数，最小 1000。修改会重新挂载模式；重启 DSH 后，恢复的会话才使用新一代模式。 |
+| `boundSummary` | `true` | 改写可识别的压缩指令，并附用户原文。设为 false 使用宿主原有摘要流程。 |
+| `summaryChars` | `12000` | 模型摘要的目标字符数，最小 2000，不含附录。超长时最多压短一次。 |
+| `userMessageChars` | `8000` | 逐字用户原文的额度，按写成序列化行后的长度计，最小 1000。 |
+| `userIndexChars` | `2000` | 更早消息的索引额度，按序列化行长度计，最小 300。 |
+| `historyReaderHint` | `''` | 可选的会话历史读取提示替换句。每个 `{sessionId}` 都按字面替换成当前会话 ID；仍追加轮次范围说明。空值使用通用宿主读取提示。不知道会话 ID 时不写这句话。 |
 
-All settings except `retainTokens` are volatile and read for new compaction requests. To disable the entire entry, set `disabled: true` on `id: compaction-bound`. Turning off `boundSummary` alone does not remove the retention adjustment.
+除 `retainTokens` 外，设置均即时生效，在新压缩请求中读取。禁用整个条目时，在 `id: compaction-bound` 上设 `disabled: true`。只关闭 `boundSummary` 不会撤掉保留量调整。
 
-The plugin writes `$DSH_HOME/plugins/compaction-bound/status.json` (using DSH's default home when the variable is absent). It records mounted retention settings and the most recent 20 summary reports, including appendix counts and `within`, `condensed`, `over-kept`, or `failed` outcomes. These are operational diagnostics, not a billing report.
+插件写入 `$DSH_HOME/plugins/compaction-bound/status.json`；未设置变量时使用 DSH 默认状态目录。文件记录已挂载的保留量和最近 20 次摘要报告，包括附录计数，以及 `within`、`condensed`、`over-kept` 或 `failed` 结果。这些用于排查运行情况，不是费用报告。
 
-## Development and verification
+## 开发和验证
 
 ```sh
 pnpm run typecheck
@@ -84,8 +86,8 @@ pnpm run test
 pnpm run check
 ```
 
-Tests cover preset retention, request rewriting, appendix bounds and source selection, existing checkpoint formats, shortening validation, cancellation, and persistent status. The host-chain test runs three compactions using real host session storage and the official engine with a synthetic model adapter. It verifies original messages remain retrievable from session events; it does not call a live model or prove provider-specific token savings.
+测试覆盖模式保留量、请求改写、附录长度和来源选择、既有检查点格式、压短核对、取消和状态持久保存。宿主链路测试使用真实的会话存储和官方引擎，配合虚构模型适配器连续压缩三次。它验证原消息仍能从会话事件中读回；不调用真实模型，也不证明某个服务商的 token 节省。
 
-## License
+## 许可
 
-MIT. See [LICENSE](LICENSE).
+MIT。见 [LICENSE](LICENSE)。

@@ -1,23 +1,25 @@
+中文 | [English](README.en.md)
+
 # dsh-message-tidy
 
-[← oh-my-harness](../README.md#components) · [中文首页](../README.zh-CN.md#由哪几块组成)
+[← 返回首页](../README.md#由哪几块组成) · [教程](../docs/dsh-message-tidy.md)
 
-**In short:** Cleans up notices DSH adds to the chat: marks them as system notices rather than your words, drops duplicates, gives background jobs readable names, and sends only the changed part of an updated instruction file.
+**一句话：** 整理 DSH 自动塞进对话的提示：标明哪些是系统提示、不是你说的话，去掉重复的通知，给后台任务起看得懂的名字，说明文件只改一点时只发改动的部分。
 
-Tidy messages that DSH adds to an agent's model context. Four independently switchable features identify plugin notices, remove identical notices within a step, give background jobs useful labels, and send small instruction-file updates as diffs.
+整理 DSH 加进助手上下文的消息。四项功能各有开关：给插件通知标来源、去掉同一步里完全相同的通知、给后台任务起好懂的名字，以及只发送指令文件的小幅改动。
 
-## Requirements and installation
+## 使用条件和安装
 
-Requires a compatible DeepSeek Harness (DSH) installation with the agent lifecycle, tool result, and session event hooks, Node.js `^22.19.0 || >=24.0.0`, and pnpm. The package manifest records the tested host dependencies; the current tests use DSH 0.2.2-rc.1. Keep the shared `tooling/` directory alongside this plugin in the containing repository. This source directory is not a standalone build project.
+需要兼容的 DeepSeek Harness（DSH），提供助手生命周期、工具结果和会话事件的接入点。还需要 Node.js `^22.19.0 || >=24.0.0` 和 pnpm。包清单记录已测试的宿主依赖；当前测试使用 DSH 0.2.2-rc.1。保留所在仓库中与插件相邻的共用 `tooling/` 目录。不能只拿这个源码目录单独构建。
 
-From this plugin directory:
+在本插件目录执行：
 
 ```sh
 pnpm install --frozen-lockfile
 pnpm run check
 ```
 
-Merge a linked dependency and bundle into your DSH profile's package manifest:
+在 DSH profile 的包清单中合入链接依赖和组合包：
 
 ```json
 {
@@ -32,22 +34,22 @@ Merge a linked dependency and bundle into your DSH profile's package manifest:
 }
 ```
 
-Replace the example link with a path relative to your profile directory. Install the profile's dependencies using the pnpm version supported by DSH, validate the profile if a startup checker is available, and restart DSH. The bundle registers its entry; do not insert a duplicate entry.
+把示例链接改成相对于你的 profile 目录的路径。使用 DSH 支持的 pnpm 安装 profile 依赖。提供启动检查器时先校验 profile，再重启 DSH。组合包已经登记条目，不要重复插入。
 
-## Behavior and relationship to DSH
+## 行为和与 DSH 的分工
 
-DSH supplies the messages and their source metadata. This plugin wraps the outer `agent/pre-step` hook so it can see messages added by inner hooks, and preserves their source objects for host bookkeeping.
+DSH 提供消息及其来源记录。插件包在最外层的 `agent/pre-step` 接入点，才能看到内层加入的消息。来源对象始终保留，供宿主记录状态。
 
-- **Notice labels:** wrap the first text block of selected plugin notices with a system-reminder marker identifying the source and stating that the user did not write it. Already wrapped text stays intact. This does not grant permissions or reinterpret the notice as a user request.
-- **Notice deduplication:** within one step, keep only the first notice whose role, full source, and full content exactly match. Repeated user or assistant messages remain. This is not semantic deduplication and does not undo a wake-up already scheduled by the host.
-- **Job labels:** remember a successful background or promoted Bash result's job ID and nonempty description, then use it in the completion notice and summary. Unknown jobs keep the original notice. Parentheses inside commands and appended output retain their boundaries.
-- **Instruction diffs:** compare an updated instruction file with the last version actually committed to that agent's session. Send a unified diff only when it is small enough and both versions are complete. Missing baselines, budget truncation, large diffs, or excessive comparison sizes use full text. Failed or cancelled uncommitted steps do not advance the baseline. State is per agent and is released with it.
+- **通知标记：** 把选中插件通知的第一个文本块包进系统提醒标记，说明来源以及这不是用户说的话。已有标记的文本保持不变。这不会授予权限，也不会把通知重新解释成用户要求。
+- **通知去重：** 同一步中，角色、完整来源和全部内容都完全相同的通知只留第一份。重复的用户消息和助手消息照常保留。不按语义猜重复，也不能撤回宿主已经安排的唤醒。
+- **任务名称：** 记住成功的后台 Bash 调用，或转入后台的 Bash 调用的任务 ID 和非空说明，在完成通知及摘要中使用。没记到的任务保留原通知。命令中的括号和后面附带的输出不会破坏边界。
+- **指令差异：** 把更新后的指令文件与真正写进该助手会话的上一版比较。只有两版都完整、差异也足够小时，才发送统一格式的差异。没有基准、预算截断、差异太大或比较规模过大时发送全文。失败或取消且未写入的步骤不会更新基准。各助手分开保存状态，随助手释放。
 
-The instruction parser depends on host message headings. Unrecognized messages pass through. Optional compatibility with pinned-instruction markers uses a shared marker and an in-process map; the pinning plugin is not required or imported. Host repeat-reminder exclusions remain host configuration, which this plugin does not change.
+指令解析依赖宿主消息的标题格式。认不出的消息原样通过。可选的固定指令标记兼容使用共用标记和进程内映射，不要求安装或导入该固定指令插件。宿主重复提醒的排除规则仍是宿主配置，本插件不改。
 
-## Configuration
+## 配置
 
-Override the existing entry in your profile patch, or use its settings card in the DSH Web UI:
+在 profile 补丁里覆盖现有条目，或使用 DSH 网页界面中的设置卡片：
 
 ```yaml
 - id: message-tidy
@@ -57,22 +59,22 @@ Override the existing entry in your profile patch, or use its settings card in t
     instructionsDiff: true
 ```
 
-All fields are volatile. The shipped bundle explicitly selects two notice sources even though the schema default is `['*']`. A profile override takes precedence.
+所有字段均即时生效。虽然 schema 默认值是 `['*']`，随包配置明确选择了两个通知来源。profile 中的覆盖值优先。
 
-| Setting | Schema default | Shipped bundle value | Meaning |
+| 设置 | schema 默认值 | 随包值 | 含义 |
 | --- | --- | --- | --- |
-| `noticeLabel` | `true` | `true` | Label selected plugin notices. |
-| `noticeSources` | `['*']` | `['repeat-tool-reminder', 'tool-jobs']` | Notice source kinds to label; `*` selects all plugin notices. |
-| `noticeDedupe` | `true` | `true` | Remove identical notices within one step. |
-| `jobLabel` | `true` | `true` | Use recorded descriptions in completion notices. |
-| `jobLabelMaxChars` | `120` | `120` | Maximum label length, minimum 8; long labels end with an ellipsis. |
-| `instructionsDiff` | `true` | `true` | Send small instruction changes as diffs; disabling clears the cache. |
-| `maxDiffRatio` | `0.5` | `0.5` | Maximum diff-to-full-text ratio, from 0 to 1. Larger diffs use full text. |
-| `contextLines` | `2` | `2` | Context lines around each changed region. |
+| `noticeLabel` | `true` | `true` | 给选中的插件通知加标记。 |
+| `noticeSources` | `['*']` | `['repeat-tool-reminder', 'tool-jobs']` | 要标记的通知来源类型；`*` 选择所有插件通知。 |
+| `noticeDedupe` | `true` | `true` | 去掉同一步内完全相同的通知。 |
+| `jobLabel` | `true` | `true` | 在完成通知中使用记录下来的任务说明。 |
+| `jobLabelMaxChars` | `120` | `120` | 名称最大长度，最小为 8；超长名称以省略号结尾。 |
+| `instructionsDiff` | `true` | `true` | 小幅指令改动只发差异；关闭时清空缓存。 |
+| `maxDiffRatio` | `0.5` | `0.5` | 差异占全文的最大比例，范围 0 到 1。超过就发全文。 |
+| `contextLines` | `2` | `2` | 每处改动前后保留的原文行数。 |
 
-To disable the entire entry, set `disabled: true` on `id: message-tidy`. Code changes require rebuilding and restarting DSH. Volatile settings apply to subsequent processing without remounting.
+禁用整个条目时，在 `id: message-tidy` 上设 `disabled: true`。代码改动需要重新构建并重启 DSH。即时设置作用于后续处理，无需重新挂载。
 
-## Development and verification
+## 开发和验证
 
 ```sh
 pnpm run typecheck
@@ -82,10 +84,10 @@ pnpm run test
 pnpm run check
 ```
 
-Synthetic fixtures cover source preservation, immutable objects, duplicate notices, job labels, instruction diffs, committed baselines, failed steps, budget omissions, and optional pinned-instruction interoperability. A host repeat-reminder contract test reads a desktop archive from `DSH_APP_ASAR` or the standard macOS installation path and skips if absent. It verifies host source exclusions with test callbacks; it does not configure running sessions or prove GUI delivery.
+虚构测试数据覆盖来源保留、不可变对象、重复通知、任务名称、指令差异、已写入的基准、失败步骤、预算省略和可选的固定指令互通。宿主重复提醒的约定测试从 `DSH_APP_ASAR` 或 macOS 标准安装路径读取桌面应用归档；不存在就跳过。它通过测试回调核对宿主来源排除，不会配置正在运行的会话，也不能证明界面投递成功。
 
-Remove each feature when the host supplies equivalent behavior. These tests do not establish a fixed token saving for a live provider.
+宿主提供等效能力后，移除对应功能。这些测试不能证明真实服务商会固定节省多少 token。
 
-## License
+## 许可
 
-MIT. See [LICENSE](LICENSE).
+MIT。见 [LICENSE](LICENSE)。

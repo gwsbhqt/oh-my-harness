@@ -1,13 +1,15 @@
-# Using dsh-compaction-bound
+中文 | [English](dsh-compaction-bound.en.md)
 
-Use this plugin when long sessions retain too much recent text after compaction, or when successive summaries keep growing. It augments DSH's basic compaction engine. The host still decides when to compact and retains control of the model context window and maximum reply size. Start with the installation and bundle registration steps in the [plugin README](../dsh-compaction-bound/README.md); this guide focuses on what to expect once the bundle is enabled.
+# 使用 dsh-compaction-bound
 
-The plugin has two separate controls. First, it supplies a fixed recent-text retention value to registered presets that do not already specify either `retainTokens` or `retainRatio`. Explicit preset choices win. Second, it rewrites recognized compaction instructions into a sectioned summary request, then attaches an appendix collected directly from user-authored text. The model does not choose or paraphrase those appendix quotes. Non-text attachments, tool results, assistant replies, and automatic notifications are excluded from that collection.
+长会话压缩后仍保留过多近期文字，或多轮摘要越变越长时，可以使用这个插件。它补充 DSH 的基本压缩引擎。何时压缩、模型上下文窗口和最大回复长度仍由 DSH 控制。安装和配置组合（bundle）注册步骤见[插件说明](../dsh-compaction-bound/README.md)，本教程重点说明启用后会发生什么。
 
-For example, imagine a fictional session that gradually refines a document's audience and formatting rules. After compaction, the model-written summary should carry the still-active requirements. The separate appendix keeps the newest user text verbatim within its budget. Older items become an index with turn information and short prefixes; the oldest index entries can merge into ranges. Original messages remain in the session log, but indexed text is no longer automatically visible to the model. Retrieving it requires a history reader supplied separately by the host. Set `historyReaderHint` only to describe a reader that actually exists; a hint neither installs nor validates one.
+插件分开控制两件事。首先，对没有指定 `retainTokens` 或 `retainRatio` 的已注册预设，提供固定的近期文本保留量。预设中的明确选择优先。其次，把能识别的压缩指令改成分节摘要要求，再附上直接从用户原话收集的附录。模型不选择也不改写这些附录引文。非文本附件、工具结果、助手回复和自动通知都不参与收集。
 
-Configure the summary and appendix budgets through the existing `compaction-bound` entry rather than adding another entry. The README contains the complete settings and override example. Changing retention remounts presets: new sessions and sessions restored after a restart use the new generation, while already-running sessions can retain the previous one. The other settings apply to new compaction requests. Turning off `boundSummary` restores the original summary flow but leaves the retention adjustment active.
+例如，一个虚构会话逐渐明确文档的读者和格式规则。压缩后，模型写的摘要应继续承载仍然有效的要求。独立附录在预算内逐字保留最新用户文字。较旧条目改为含轮次信息和短开头的索引，最旧索引还能合并成范围。原始消息仍在会话日志中，但只留下索引的文字不再自动对模型可见。取回原话需要 DSH 另行提供历史读取工具。`historyReaderHint` 只能说明确实存在的读取工具，填写提示不会安装或验证工具。
 
-To confirm behavior, inspect the status file identified in the README. Its mounted values show the retention settings actually applied, and its recent reports distinguish `within`, `condensed`, `over-kept`, and `failed` summaries. An oversized model summary receives at most one shortening attempt. A replacement must fit, preserve section order, and leave **Active User Requirements** unchanged. Otherwise the original summary is kept and reported as `over-kept`; the character target is not a hard guarantee. The appendix has independent budgets.
+通过已有 `compaction-bound` 条目设置摘要和附录预算，不要再加一个条目。完整设置和覆盖示例见插件说明。修改保留量会重新挂载预设：新会话和重启后恢复的会话使用新一代预设，已经运行的会话可能继续用旧一代。其他设置作用于新的压缩请求。关闭 `boundSummary` 会恢复原始摘要流程，但仍保留近期文本保留量的调整。
 
-Unrecognized host instructions or changed registry structures produce warnings and leave the affected host behavior intact. Retention uses the host's character-based estimate, so it cannot promise exact token or cost savings. The README describes synthetic and host-contract tests; those are not live-provider acceptance evidence. For the accompanying design discussion, see [three generations of compaction](design/three-generations-of-compaction.md).
+要确认行为，检查插件说明指定的状态文件。其中的挂载值显示实际生效的保留量，近期报告会区分 `within`、`condensed`、`over-kept` 和 `failed` 摘要。超长模型摘要最多尝试缩短一次。替换版本必须符合长度、保留章节顺序，并保持 **Active User Requirements** 不变。否则保留原摘要并标为 `over-kept`，所以字符目标不是硬保证。附录使用独立预算。
+
+无法识别 DSH 指令或注册表结构改变时，插件会发出警告，并保留受影响部分的 DSH 原有行为。保留量使用 DSH 按字符估算的结果，因此不能承诺精确的 token 或费用节省。插件说明中的虚构数据测试和 DSH 接口约定测试，不是真实服务商验收证据。设计讨论见[三代压缩方案](design/three-generations-of-compaction.md)。

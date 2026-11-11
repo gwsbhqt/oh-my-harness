@@ -1,59 +1,61 @@
-# Bound output without confusing a preview with a result
+中文 | [English](output-guard.en.md)
 
-“Output” crosses several boundaries in an agent system. A command produces bytes, a tool returns a structured result, a code cell displays a representation, and a model generates an answer or tool arguments. Each boundary can grow without bound, but cutting each one has different consequences. A shortened display may leave the original value intact. Stopping a model stream means the attempted reply failed. A bounded event history may mean old data is no longer available from the monitor at all.
+# 限制输出时，分清预览和完整结果
 
-This design uses separate mechanisms for those cases. `dsh-output-guard` protects model generation. `dsh-python-repl` controls cell displays and uses the host's spill storage. `dsh-monitor` delivers producer events. The monitor is independent of the output guard, not a required dependency. Treating all three as one truncation feature would conceal the most important question: where is the complete result now, if it exists?
+在 Agent 系统里，“输出”会经过多个阶段。命令产生字节。工具返回结构化结果。代码单元把结果展示成文本。模型生成答案或工具参数。每一处都可能无限增长，但截短它们的后果不同。缩短展示可能保留完整原始值。停止模型输出流意味着本次回复尝试失败。限制事件历史则可能让监控器再也拿不到旧数据。
 
-## Start with the host's existing capabilities
+本设计为这些情况使用独立机制。`dsh-output-guard` 保护模型生成，`dsh-python-repl` 控制代码单元展示并使用 DSH 的溢出存储，`dsh-monitor` 投递事件来源产生的事件。监控器独立于输出防护，不是必需依赖。把三者都当成截断功能，会掩盖最重要的问题：如果完整结果存在，它现在在哪里？
 
-DSH already provides tool result rendering, output truncation, background jobs, and spill storage. The Python plugin does not replace those general host services. It adds a cell-specific budget before a cell's output becomes the outer `run_code` result, and reuses the host's storage rather than introducing another file service. The [storage adapter](../../dsh-python-repl/src/index.ts) passes the session owner, tool call identity, complete displayed text, and a suggested filename to `spillStore.saveText`.
+## 从 DSH 已有能力开始
 
-The model stream guard operates elsewhere. It wraps agent requests at `llm/stream` and participates in the host's request-error handling. Its [dependencies and registration](../../dsh-output-guard/src/index.ts) are the LLM and agent services. It neither truncates tool result datasets nor stores their complete contents. Meanwhile, the monitor composes host jobs, subprocess execution, and session delivery. These boundaries allow each plugin to be used for its own purpose.
+DSH 已提供工具结果渲染、输出截断、后台任务和溢出存储。Python 插件不替代这些通用服务。它在代码单元输出成为外层 `run_code` 结果前，增加本单元的展示预算。完整文本复用 DSH 的存储，不另造文件服务。[存储适配器](../../dsh-python-repl/src/index.ts)把会话归属、工具调用身份、完整展示文本和建议文件名传给 `spillStore.saveText`。
 
-| Boundary | Extra behavior | Meaning of a shortened or stopped output |
+模型输出流防护位于别处。它在 `llm/stream` 包装 Agent 请求，参与 DSH 的请求错误处理。[依赖和注册](../../dsh-output-guard/src/index.ts)使用 LLM 和 Agent 服务。它既不截断工具结果数据集，也不保存其完整内容。监控器则使用 DSH 的任务、子进程执行和会话投递能力。边界分开后，各插件可以各司其职。
+
+| 边界 | 增加的行为 | 输出缩短或停止意味着什么 |
 | --- | --- | --- |
-| Python cell display | Estimated budget and retrievable spill text | The displayed text is shortened; a retained Python value can still be larger. |
-| Agent model stream | Runaway detection and bounded corrective retry | The attempt failed; its partial output is not a successful answer. |
-| Command event stream | Line decoding, batching, delivery, and bounded history | Notices and retained lines have limits; source replay requires producer support. |
+| Python 代码单元展示 | 估算预算和可取回的溢出文本 | 展示文本变短，保留的 Python 值仍可能更大。 |
+| Agent 模型输出流 | 检测失控并有限纠正重试 | 本次尝试失败，部分输出不是成功答案。 |
+| 命令事件流 | 行解码、批处理、投递和有限历史 | 通知和保留行有上限，重放来源需要事件产生方支持。 |
 
-## Cell clipping saves the text before hiding it
+## 代码单元先保存文字，再缩短展示
 
-The [cell budget implementation](../../dsh-python-repl/src/output-budget.ts) joins the cell's log entries and estimates their size. ASCII characters contribute a quarter token and other code points one token. This is a deterministic heuristic, not a provider tokenizer. The configurable default is 8,000 estimated tokens. When the text exceeds the budget, the implementation first saves the entire joined text. Only after a successful save does it return a prefix, a suffix, an omitted-character notice, and the retrieval location.
+[代码单元预算实现](../../dsh-python-repl/src/output-budget.ts)拼接单元日志并估算大小。ASCII 字符按四分之一个 token 计，其他码点按一个 token 计。这是固定估算，不是服务商分词器。可配置的默认值为 8,000 个估算 token。超过预算时，先保存完整拼接文本。只有保存成功，才返回开头、结尾、省略字符提示和取回位置。
 
-The retained text budget allocates two thirds to the beginning and one third to the end. This is a design choice that preserves setup and final diagnostics; the repository does not establish that this ratio is optimal for all tasks. The explanatory notice adds overhead beyond that allocation. If no storage service exists, or saving fails, the plugin leaves its output whole. The host may still apply its own downstream output policy. The plugin's guarantee is about its own decision: it does not intentionally hide text that it failed to save.
+保留的展示预算中，三分之二给开头，三分之一给结尾。这个选择用于保留开始步骤和最终诊断，仓库没有证明该比例对所有任务最优。说明提示还会在这份分配之外增加文字。没有存储服务或保存失败时，插件保留完整输出。下游 DSH 仍可能应用自己的输出策略。插件保证的是自己的决定：不会有意隐藏没能保存的文本。
 
-“Whole text” means the cell's complete display text at this boundary. It is not automatically the original dataset, a lossless serialization of an arbitrary Python object, or the missing portion of an upstream tool result. A retained variable, its printed representation, and a spill file are distinct artifacts. The [output-budget tests](../../dsh-python-repl/test/output-budget.test.ts) check that the save callback receives the complete joined text, both ends survive, Unicode code points are not split, and storage failure leaves the text unchanged. A real-cell case retains a 200,000-item list and checks its length in a later cell after the display was bounded.
+这里的“完整文本”指这个边界上代码单元完整的展示文本。它不自动等于原始数据集、任意 Python 对象的无损序列化，也不包括上游工具结果中已经缺失的部分。保留的变量、打印表示和溢出文件是不同产物。[输出预算测试](../../dsh-python-repl/test/output-budget.test.ts)检查保存回调收到完整拼接文本、两端保留、Unicode 码点不被拆开，以及存储失败时文本不变。真实代码单元样例保留 200,000 项列表，在展示受限后于后续单元检查长度。
 
-This makes recovery concrete: read the saved text, or reduce the retained value in Python. Re-executing an operation merely to recover hidden output can duplicate side effects or return different data. Neither the clipping function nor the completeness helpers automatically replay it.
+因此恢复办法很具体：读取保存文本，或在 Python 中缩减保留值。为了找回没显示的输出而重做操作，可能重复外部动作或得到不同数据。截断函数和完整性辅助函数都不会自动重放操作。
 
-## Completeness belongs to the source result
+## 是否完整，要看来源结果
 
-A short preview is harmless only when callers preserve the evidence needed to assess the source. The [Python bridge](../../dsh-python-repl/python/dsh_kernel.py) keeps structured fields such as exit status, truncation flags, and spill locations in its readable result views. It also exposes deliberately narrow helpers.
+调用方保留足够证据来判断来源时，短预览才无害。[Python 桥接](../../dsh-python-repl/python/dsh_kernel.py)在可读结果中保留退出状态、截断标记和溢出位置等结构化字段，也提供检查范围明确的辅助函数。
 
-`repl.require_complete` validates a foreground Bash stream. By default it requires successful exit, normal completion, and an explicit false truncation flag. Setting `check_exit=False` permits analysis of failed output, while still rejecting interruption and truncation. A job receipt is not a final result. A spill location is a retrieval hint, not a promise of a durable, complete-output API.
+`repl.require_complete` 校验前台 Bash 输出。默认要求退出成功、正常完成，并明确标为未截断。`check_exit=False` 允许分析失败输出，但仍拒绝中断和截断。任务回执不是最终结果。溢出位置是取回线索，不是持久、完整输出接口的保证。
 
-File reads have a different limit. `repl.read_window` checks contiguous line numbers and known truncation markers and supplies the next offset. It explicitly leaves byte completeness unknown. Reaching the last reported line does not certify that every byte of every line was delivered. The [result-safety tests](../../dsh-python-repl/test/result-safety.test.ts) and [Python safety tests](../../dsh-python-repl/test/python/test_result_safety.py) encode this refusal to overclaim. Similarly, paging and unreadable search paths must be resolved before counting matches as a complete population. A presentation limit cannot fix incomplete retrieval.
+文件读取有另一种限制。`repl.read_window` 检查连续行号和已知截断标记，给出下一偏移量，但明确不确定字节是否完整。到达报告的最后一行，不能证明每行每个字节都已送达。[结果安全测试](../../dsh-python-repl/test/result-safety.test.ts)和 [Python 安全测试](../../dsh-python-repl/test/python/test_result_safety.py)落实了这种不夸大保证的做法。同样，必须处理分页和无法读取的搜索路径，才能把匹配数当成完整总体。限制展示量无法补全缺失的检索结果。
 
-## Stop an invalid model attempt instead of clipping it into success
+## 把无效模型尝试判为失败，不截成成功
 
-A model can repeat text indefinitely, emit long blank runs, produce an oversized tool argument block, or finish without an answer. A host output cap alone does not distinguish those cases from useful work. The [stream guard](../../dsh-output-guard/src/guard.ts) checks chunks while generation proceeds and emits a failure when a configured boundary is crossed. Returning from the async iteration closes the upstream iterator; the triggering fragment is not forwarded as useful output. The [stream tests](../../dsh-output-guard/test/guard.test.ts) check upstream closure, fragmented input, normal pass-through, and the retry limit.
+模型可能无限重复文本、输出大段空白、生成超大工具参数，或不回答就结束。单靠 DSH 输出上限，无法区分这些情况和有效工作。[输出流防护](../../dsh-output-guard/src/guard.ts)在生成过程中检查分块，越过配置边界时报告失败。退出异步迭代会关闭上游迭代器，触发异常的片段不会当成有效输出继续传递。[流测试](../../dsh-output-guard/test/guard.test.ts)检查上游关闭、分片输入、正常通过和重试限制。
 
-The [detector](../../dsh-output-guard/src/detector.ts) normalizes whitespace and common Markdown emphasis characters for repetition comparison. Defaults examine a recent 1,000-character window, looking for cycles of 4–160 normalized characters, at least 8 repeats, and at least 64 characters covered by the repeated segment. Units without letters are excluded to avoid treating numeric or punctuation structures as language loops. These are code parameters, not measured detection rates.
+[检测器](../../dsh-output-guard/src/detector.ts)在比较重复前统一空白和常见 Markdown 强调符号。默认检查最近 1,000 字符。循环片段的长度须为 4–160 个规范化字符，并且至少重复 8 次。重复部分还须至少覆盖 64 字符。没有字母的片段被排除，避免把数字和标点结构当成语言循环。这些是代码参数，不是测得的检测率。
 
-Tool arguments are exempt from repetition detection because ordinary code can repeat legitimately. They still have blank-run protection and a per-call length limit. Defaults stop a blank run at 2,000 characters and stop tool arguments above 50,000 characters. The blank detector also handles JSON whitespace escapes across chunks. Counters belong to individual blocks or calls rather than an undifferentiated transcript.
+工具参数不做重复检测，因为普通代码也可能合理地重复。连续空白保护和单次调用长度上限仍然有效。默认在连续空白达到 2,000 字符时停止，在工具参数超过 50,000 字符时停止。空白检测也处理跨分块的 JSON 空白转义。计数属于各个块或调用，不是把整个会话混成一个计数。
 
-With automatic retry enabled, the [agent hook](../../dsh-output-guard/src/index.ts) adds a corrective notice and retries at most once for the same agent, turn, and step. It does not reinsert the runaway text, switch models, or modify permanent instructions. Another failure returns to host error handling. The [Session test](../../dsh-output-guard/test/session.test.ts) uses a real DSH Session to show that a failed attempt is absent from derived conversation history while the corrective notice reaches retry history. This is a conversation-state test, not a live-provider reliability result. Plausible but incorrect answers, semantic loops with changing wording, and repetitive legitimate prose remain limitations of this heuristic.
+启用自动重试时，[Agent 挂钩](../../dsh-output-guard/src/index.ts)添加纠正通知，对同一 Agent、轮次和步骤最多重试一次。它不重新加入失控文本，不切换模型，也不改永久指令。再次失败就交回 DSH 错误处理。[Session 测试](../../dsh-output-guard/test/session.test.ts)使用真实 DSH Session，确认失败尝试不进入派生会话历史，而纠正通知进入重试历史。这是会话状态测试，不是真实服务商可靠性结果。貌似可信但错误的回答、措辞不断变化的语义循环，以及合理的重复文字，仍是该方法的限制。
 
-## Producer events need their own contract
+## 事件来源需要自己的约定
 
-The [monitor implementation](../../dsh-monitor/src/index.ts) reads stdout and stderr separately. UTF-8 decoding preserves characters split across subprocess chunks. Stdout lines enter a delivery queue; stderr becomes diagnostic history and a separate log. This prevents a diagnostic line from being mistaken for a producer event.
+[监控实现](../../dsh-monitor/src/index.ts)分开读取标准输出和标准错误。UTF-8 解码保留被子进程分块拆开的字符。标准输出行进入投递队列，标准错误成为诊断历史和独立日志，避免诊断行被误认为业务事件。
 
-Defaults batch for 200 milliseconds, with 50 lines and a target 32,768-byte budget per notice. An overlong line keeps a prefix of at most 8,192 bytes plus an explicit truncation marker, and recent history retains 2,000 lines. Exact ignored stdout lines are excluded from automatic delivery but remain in bounded retained output. Crucially, line shortening happens before history and job output receive the line. Those stores cannot recover the original long line. The notice byte budget also permits the first line even if its size exceeds the target; it is not an absolute serialized-message ceiling.
+默认按 200 毫秒批处理，每条通知最多 50 行，目标预算为 32,768 字节。超长行最多保留开头 8,192 字节，并附明确截断标记。近期历史保留 2,000 行。完全匹配的忽略行不自动投递，但仍在有限保留输出中。关键是：行在进入历史和任务输出前就已缩短，这些存储无法恢复原始长行。通知字节预算也允许第一行超过目标，所以不是序列化消息的绝对上限。
 
-Persistent monitors can be relaunched through a cooperating restart controller, but output during the interruption is unavailable unless the producer supports replay. The [monitor README](../../dsh-monitor/README.md) explicitly disclaims a durable event queue. A resumed process and a new job identity prove that listening resumed, not that every event was received. Applications needing complete event history must retain it at the producer and expose a cursor or another retrieval method.
+持久监控器可以通过配合的重启控制器重新启动，但除非事件产生方支持重放，否则中断期间的输出不可得。[监控器说明](../../dsh-monitor/README.md)明确说明它不是持久事件队列。进程恢复和新任务身份只证明监听恢复，不证明每个事件都已收到。需要完整事件历史的应用，必须在事件产生方保留历史，并提供游标或其他取回方法。
 
-## Measure each boundary separately
+## 分开测量各个边界
 
-The shared [benchmark results](../../benchmarks/results.json) hold recorded measurements; this article does not invent compression ratios or billing savings. A reproducible display experiment should record input size, configured budget, full saved-text equality, retained-value equality, displayed bytes, and the estimator used. A stream-guard experiment should replay fixed chunks and record detection, upstream closure, retry count, and false positives on legitimate text. A monitor experiment should include split Unicode, overlong lines, history eviction, and restart gaps.
+公共[测量结果](../../benchmarks/results.json)保存已有测量，本文不编造压缩率或费用节省。可重复的展示实验应记录输入大小、配置预算、完整保存文本是否相等、保留值是否相等、展示字节数和估算方法。输出流防护实验应重放固定分块，记录检测结果、上游关闭、重试次数和合理文本误报。监控器实验应包含拆开的 Unicode、超长行、历史淘汰和重启缺口。
 
-The cited tests were inspected rather than rerun during drafting. They provide reproducible contracts, with synthetic streams and local integration fixtures clearly separated from real provider or durable-source guarantees. The useful result is a system that can say what was shortened, what was stopped, what remains recoverable, and what the available evidence cannot establish.
+写作时只查看了引用的测试，没有重跑。它们提供可重复的接口约定，并把虚构输出流、本地集成样例与真实服务商或持久事件源的保证分开。有效结果是系统能够说明：哪里变短、哪里停止、什么还可恢复，以及现有证据不能证明什么。

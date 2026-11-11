@@ -22,7 +22,7 @@ build-backend = "hatchling.build"
 packages = ["src/browser_control"]
 
 [tool.hatch.build.targets.sdist]
-only-include = ["src", "scripts", "tests", "references", "SKILL.md", "PYSKILL.md", "README.md", "LICENSE", "pyproject.toml", "hatch_build.py", "requirements.txt"]
+only-include = ["src", "scripts", "tests", "references", "SKILL.md", "PYSKILL.md", "README.md", "README.en.md", "LICENSE", "pyproject.toml", "hatch_build.py", "requirements.txt"]
 exclude = ["**/__pycache__/**", "**/*.pyc", "**/.pytest_cache/**"]
 
 [tool.hatch.build.hooks.custom]

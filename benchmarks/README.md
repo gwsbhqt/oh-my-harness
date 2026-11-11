@@ -1,63 +1,65 @@
-# Reproducible text-volume measurements
+中文 | [English](README.en.md)
 
-These measurements use only fictional data and local code. They make no model, API, browser, or network requests. They measure the amount of text returned to a conversation and the current compaction appendix implementation. They do not measure answer quality, latency, provider billing, cache hits, or a live DSH session.
+# 可重复运行的文本量测量
 
-## Run both measurements
+这些测量只使用虚构数据和本地代码。它们不调用模型或接口，也不操作浏览器或访问网络。它们测量返回给对话的文本量，以及当前压缩附录的实现。它们不测量回答质量、延迟、服务商账单、缓存命中，也不测量真实 DSH 会话。
 
-Requirements: Python 3.10 or newer, and Node.js 22.18 or newer with TypeScript stripping. No third-party packages, model keys, or plugin installation are needed. Run from the repository root:
+## 运行两项测量
+
+需要 Python 3.10 或更新版本，以及支持直接处理 TypeScript 类型标注的 Node.js 22.18 或更新版本。不需要第三方包、模型密钥或插件安装。在仓库根目录运行：
 
 ```sh
 python3 benchmarks/run.py --output benchmarks/results.json
 ```
 
-The root is inferred from the script location. For an unpublished staging copy, point `--source-root` at a source checkout containing `dsh-compaction-bound`. This is read-only; the report contains repository-relative source names and SHA-256 hashes, never the checkout location.
+脚本会根据自身位置找到根目录。对于尚未发布的临时副本，可以用 `--source-root` 指向含有 `dsh-compaction-bound` 的源码副本。这里只读取源码。报告只包含相对于仓库的源码名称和 SHA-256 哈希，不包含源码副本的实际位置。
 
-To verify an existing result without overwriting it:
+要校验已有结果而不覆盖它，运行：
 
 ```sh
 python3 benchmarks/run.py --check benchmarks/results.json
 ```
 
-A mismatch exits nonzero, including a source-hash mismatch. Review changes before regenerating the reference. The checked-in [results.json](results.json) is an actual output of this command family, not a hand-entered table. There are no timestamps or machine identifiers, so repeated runs over the same source and fixture produce identical results.
+任何不一致都会以非零状态退出，包括源码哈希不一致。重新生成基准前，先审查变化。仓库中的 [results.json](results.json) 是这些命令实际生成的输出，不是手工填写的表格。结果不含时间戳和机器身份信息，因此相同源码和样例会产生相同结果。
 
-## 1. Return the log, or keep it local and return the answer
+## 1. 返回整份日志，还是把日志留在本地只返回答案
 
-[run.py](run.py) deterministically generates 10,000 JSONL records by default. Each record has a sequence number, a fictional service, a status, a latency, and repeated example diagnostic text. There is no imported user log. To inspect the exact fixture and conclusion:
+[run.py](run.py) 默认以固定方式生成 10,000 条 JSONL 记录。每条记录包含序号、虚构服务、状态、延迟和重复的示例诊断文字。没有导入用户日志。要查看完整样例和结论，运行：
 
 ```sh
 python3 benchmarks/run.py --export-log example-log.jsonl --export-conclusion example-answer.json
 ```
 
-The generator is the fixture specification; large raw logs are deliberately not committed. The report includes the raw log hash. `--rows` accepts 1 through 100000 and changes only the locality workload.
+生成器就是样例的定义，大体积原始日志有意不提交。报告包含原始日志哈希。`--rows` 接受 1 到 100000，只改变本地保留数据这一测量的工作量。
 
-Both paths read the same complete log. The baseline returns the entire JSONL text. The local path parses it in a Python variable, counts errors per service and slow rows, finds the maximum latency, and returns that result with three example error records identified by sequence number. It checks record completeness, an independent expected error count, the service-count total, and a sample lookup into the original data before reporting any sizes.
+两种方式都读取同一份完整日志。对照方式返回全部 JSONL 文本。本地方式把日志解析到 Python 变量。随后统计各服务错误数和慢记录数，并找出最大延迟。最后返回结论和三条带序号的示例错误记录。报告大小前，它会检查记录是否完整、独立算出的预期错误数、各服务计数总和，以及从原始数据中查找样本的结果。
 
-The estimator is **ceil(UTF-16 code units / 4)**, applied separately to each returned text. UTF-8 byte counts are reported separately. This is a fixed character heuristic, not a tokenizer for any provider. It will be inaccurate for some languages, symbol-heavy data, and image inputs. The text reduction is a property of this selected query and synthetic verbose fixture, not a general percentage for the plugin. A task requiring every log line would need to return or inspect more data.
+估算方法是 **ceil(UTF-16 code units / 4)**，分别应用于每份返回文本。UTF-8 字节数另行报告。这是固定的字符估算方法，不是任何服务商的分词器。它对部分语言、大量符号和图片输入会不准确。文本减少来自这次查询和这个冗长的虚构样例，不是插件普遍能达到的比例。如果任务需要每一行日志，就必须返回或查看更多数据。
 
-The [results.json](results.json) fields `locality.raw` and `locality.filtered` are the two comparable payloads. `locality.result` is the exact answer behind the filtered size; the optional exported conclusion is its canonical JSON serialization. Prompt text, Python code, tool definitions, intermediate reasoning, provider wrappers, output tokens, and cache pricing are excluded from both sides. The script demonstrates the data-flow principle using standard Python; it does not claim to benchmark DSH transport or kernel recovery.
+[results.json](results.json) 中的 `locality.raw` 和 `locality.filtered` 是可比较的两份返回内容。`locality.result` 是筛选后大小所对应的确切答案。可选导出的结论是这个答案的规范 JSON 序列化形式。两边都不计入提示词、Python 代码、工具定义、中间推理、服务商封装、输出 token 和缓存计价。脚本用标准 Python 演示数据流原则，不声称测量 DSH 传输或内核恢复。
 
-## 2. Compaction retention and appendix budgets
+## 2. 压缩后的保留量与附录预算
 
-The Python entry reads numeric defaults from [the real plugin schema](../dsh-compaction-bound/src/index.ts), then invokes [compaction-budget.mjs](compaction-budget.mjs). That worker imports `boundItems`, `itemLine`, `attachmentText`, and `parseAttachment` directly from [the production implementation](../dsh-compaction-bound/src/summary.ts). It does not maintain a second implementation of the bounding algorithm. Failure to find the source, parse a default, import TypeScript, or satisfy an invariant exits nonzero.
+Python 入口从[真实插件配置定义](../dsh-compaction-bound/src/index.ts)读取数字默认值，再调用 [compaction-budget.mjs](compaction-budget.mjs)。后者直接从[生产实现](../dsh-compaction-bound/src/summary.ts)导入 `boundItems`、`itemLine`、`attachmentText` 和 `parseAttachment`，没有另写一份限额算法。找不到源码、无法解析默认值、无法导入 TypeScript，或任一必须成立的条件不满足，都会以非零状态退出。
 
-The fixtures cover short history, increasingly long history, a single message larger than the verbatim budget, and text with quotes, newlines, and supplementary Unicode characters. Every run verifies that serialized verbatim lines fit `userMessageChars`, serialized index and range lines fit `userIndexChars`, every original item remains represented by a full item, index item, or range count, and the appendix parses back to the bounded items. All fixture turns, timestamps, and session identifiers are fictional.
+样例覆盖短历史、逐渐变长的历史、单条超过原文预算的消息，以及包含引号、换行和补充平面 Unicode 字符的文字。每次运行都检查几项条件：序列化后的原文行不超过 `userMessageChars`。索引与范围行不超过 `userIndexChars`。每个原始条目仍由完整条目、索引条目或范围计数代表。附录还能解析回限额后的条目。所有样例轮次、时间戳和会话标识都是虚构的。
 
-`verbatim_line_utf16_units` and `index_line_utf16_units` include each JSON line and its newline. `framing_utf16_units` measures the remaining headings, tags, and history-reader notes. Those notes sit outside the two item budgets. `appendix_estimated_tokens` uses the same character estimator as the log measurement. `unbounded_appendix_utf16_units` is a control made with the same production renderer and all original fixture messages, without bounding.
+`verbatim_line_utf16_units` 和 `index_line_utf16_units` 包含每条 JSON 行及其换行。`framing_utf16_units` 计算剩余的标题、标签和历史读取说明。这些说明不在两类条目预算内。`appendix_estimated_tokens` 使用与日志测量相同的字符估算方法。`unbounded_appendix_utf16_units` 是对照值：使用同一生产渲染逻辑和全部原始样例消息，但不限制长度。
 
-The retention setting `retainTokens` is already expressed in the host's approximate text-token units. The script reports a conditional illustration:
+保留量设置 `retainTokens` 本身已经使用 DSH 近似的文本 token 单位。脚本给出一个有前提的示意计算：
 
 ```text
 ceil((retainTokens * 4 + summaryChars + measured_appendix_utf16_units) / 4)
 ```
 
-This is a **text target under stated assumptions**, not a strict maximum for the next request. It assumes the retained recent history matches the host estimate and the model summary fits its target. The host may retain an indivisible message across a boundary. The plugin keeps an oversized summary if its single shortening attempt fails validation. System instructions, tools, images, protocol encoding, and arbitrary-length custom `historyReaderHint` values are outside this illustration. The measured fixture uses the generic default reader note and a fixed-length fictional session ID.
+这是**在所述前提下的文本目标量**，不是下一次请求的严格最大值。它假设保留的近期历史符合 DSH 估算，且模型摘要没有超过目标。DSH 可能会保留一条跨越边界、不能拆分的消息。如果唯一一次缩短尝试未通过验证，插件会保留超长摘要。系统指令、工具、图片、协议编码，以及任意长度的自定义 `historyReaderHint` 都不在这个示意计算内。测量样例使用通用默认读取说明和固定长度的虚构会话 ID。
 
-For that reason the report never turns the combined target into a claim about actual model tokens, attention quality, throughput, or money. To measure those, collect complete final requests and provider usage under a separately specified protocol and model, with permission to handle the data. This offline benchmark does not do that.
+因此，报告不会把合计目标量说成真实模型 token、注意力质量、吞吐或费用。要测量这些，需要另行规定协议和模型，并在有权处理数据的前提下收集完整最终请求与服务商用量。这份离线测量不做这些事。
 
-## Reading the results with the design documents
+## 结合设计文档阅读结果
 
-- [Data locality](../docs/design/python-data-locality.md) explains why data can stay in a kernel variable.
-- [Three generations of compaction](../docs/design/three-generations-of-compaction.md) explains the current safety and observability choices.
-- [Output guard](../docs/design/output-guard.md) separates display budgets from protection against a runaway model stream.
+- [数据留在本地](../docs/design/python-data-locality.md)解释为什么可以把数据保留在内核变量中。
+- [三代压缩方案](../docs/design/three-generations-of-compaction.md)解释当前的安全与可观察性选择。
+- [输出防护](../docs/design/output-guard.md)区分对话展示预算与防止模型输出失控的措施。
 
-When quoting a number, link the relevant report field and keep its estimator, workload, and exclusions next to the claim. Re-run after changing the source defaults or appendix format.
+引用数字时，链接到相关报告字段，并紧邻说明估算方法、工作量和未计入项。源码默认值或附录格式变更后，重新运行。

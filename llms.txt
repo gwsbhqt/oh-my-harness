@@ -2,43 +2,43 @@
 
 > Independent plugins and trusted Python skills for DeepSeek Harness: persistent Python, running-instance control, task-oriented browser/macOS/SSH operations, events, and context helpers. Not affiliated with DeepSeek. Trusted execution is not a sandbox.
 
-The English README is authoritative. Exact settings and platform constraints live in component READMEs. Complete values can remain in a session kernel while only evidence is displayed. Do not assume a short display proves a complete source or that an accepted request completed an external action.
+The Chinese README is the primary, default documentation; the paired English documents cover the same behavior. Exact settings and platform constraints live in component READMEs. Complete values can remain in a session kernel while only evidence is displayed. Do not assume a short display proves a complete source or that an accepted request completed an external action.
 
 ## Start
 
-- [Overview and installation](README.md): Host/extension boundary, quick start, comparisons, security, and documentation map.
-- [中文说明](README.zh-CN.md): Chinese introduction; the English version takes precedence.
-- [Security](SECURITY.md): Trust boundaries and GitHub private vulnerability reporting.
-- [Contributing](CONTRIBUTING.md): Scope, component environments, evidence, and review.
+- [Overview and installation](README.en.md): Host/extension boundary, quick start, comparisons, security, and documentation map.
+- [中文说明](README.md): Primary Chinese introduction.
+- [Security](SECURITY.en.md): Trust boundaries and GitHub private vulnerability reporting.
+- [Contributing](CONTRIBUTING.en.md): Scope, component environments, evidence, and review.
 - [Agent guidance](AGENTS.md): Instructions for authorized changes in this repository.
 
 ## Capability guides
 
-- [Python kernel](docs/dsh-python-repl.md): Persistent cells, complete values, snapshots, and limits.
-- [Control and supervision](docs/dsh-control.md): Existing-instance access, receipts, settled state, and controller/worker workflow.
-- [Monitor](docs/dsh-monitor.md): Producer events, delivery modes, lifecycle, and gaps.
-- [Output guard](docs/dsh-output-guard.md): Model-stream detection and bounded retry.
-- [Compaction](docs/dsh-compaction-bound.md): Retention, exact-user-text indexing, and history-reader guidance.
-- [Message tidy](docs/dsh-message-tidy.md): Instruction diffs and provenance-aware notices.
-- [Image cap](docs/dsh-image-cap.md): Request image limits and resizing constraints.
-- [History cap](docs/dsh-history-cap.md): UI history pagination, not model token limits.
-- [Browser control](docs/browser-control.md): Explicit CDP pages and cooperative task ownership.
-- [Computer control](docs/computer-control.md): Native macOS targets, input, and result inspection.
-- [Remote host](docs/remote-host.md): Real SSH destinations and content verification.
+- [Python kernel](docs/dsh-python-repl.en.md): Persistent cells, complete values, snapshots, and limits.
+- [Control and supervision](docs/dsh-control.en.md): Existing-instance access, receipts, settled state, and controller/worker workflow.
+- [Monitor](docs/dsh-monitor.en.md): Producer events, delivery modes, lifecycle, and gaps.
+- [Output guard](docs/dsh-output-guard.en.md): Model-stream detection and bounded retry.
+- [Compaction](docs/dsh-compaction-bound.en.md): Retention, exact-user-text indexing, and history-reader guidance.
+- [Message tidy](docs/dsh-message-tidy.en.md): Instruction diffs and provenance-aware notices.
+- [Image cap](docs/dsh-image-cap.en.md): Request image limits and resizing constraints.
+- [History cap](docs/dsh-history-cap.en.md): UI history pagination, not model token limits.
+- [Browser control](docs/browser-control.en.md): Explicit CDP pages and cooperative task ownership.
+- [Computer control](docs/computer-control.en.md): Native macOS targets, input, and result inspection.
+- [Remote host](docs/remote-host.en.md): Real SSH destinations and content verification.
 
 ## Design and evidence
 
-- [Data locality](docs/design/python-data-locality.md): Values, displays, persistence, and recovery.
-- [Three generations of compaction](docs/design/three-generations-of-compaction.md): Historical choices and the current bounded host extension.
-- [Controller and worker](docs/design/controller-worker.md): Receipts, observation, and independent acceptance.
-- [Task isolation](docs/design/task-isolation.md): Shared accounts/desktops and target ownership.
-- [Output boundaries](docs/design/output-guard.md): Display budgets, stream guards, and producer history.
-- [Reproducible measurements](benchmarks/README.md): Fictional workloads, explicit estimates, and offline commands.
+- [Data locality](docs/design/python-data-locality.en.md): Values, displays, persistence, and recovery.
+- [Three generations of compaction](docs/design/three-generations-of-compaction.en.md): Historical choices and the current bounded host extension.
+- [Controller and worker](docs/design/controller-worker.en.md): Receipts, observation, and independent acceptance.
+- [Task isolation](docs/design/task-isolation.en.md): Shared accounts/desktops and target ownership.
+- [Output boundaries](docs/design/output-guard.en.md): Display budgets, stream guards, and producer history.
+- [Reproducible measurements](benchmarks/README.en.md): Fictional workloads, explicit estimates, and offline commands.
 - [Measured output](benchmarks/results.json): Actual deterministic results with production source hashes.
-- [Recording checklist](docs/assets/README.md): Planned real media; a placeholder is not a completed demonstration.
+- [Recording checklist](docs/assets/README.en.md): Real-media recording and verification requirements; a placeholder is not a completed demonstration.
 
 ## Project policies
 
 - [MIT license](LICENSE): Project license; vendored notices remain applicable.
-- [Code of Conduct](CODE_OF_CONDUCT.md): Contributor Covenant.
-- [Changelog](CHANGELOG.md): Release scope; a prepared entry does not prove a tag exists.
+- [Code of Conduct](CODE_OF_CONDUCT.en.md): Contributor Covenant.
+- [Changelog](CHANGELOG.en.md): Release scope; a prepared entry does not prove a tag exists.

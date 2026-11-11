@@ -1,71 +1,73 @@
-# Three generations of context compaction: make the boundary inspectable
+中文 | [English](three-generations-of-compaction.en.md)
 
-Long conversations create two different problems. The next request may contain more history than the model should read, and the history that replaces it may change what the user actually asked. A smaller request that silently loses a correction is not a successful optimization. Neither is a carefully written summary that leaves almost all of the old conversation beside it.
+# 三代上下文压缩：让边界可以检查
 
-The compaction work behind this project went through three implementations: policy tuning around the host engine, a separate protocol-level compression layer, and the current bounded extension to the host engine. The first two are retired and their code is deliberately not distributed here. This article describes their mechanisms as historical design work, not as supported installation options or current performance claims. The current implementation and the measurements linked below are available in this repository.
+长对话有两个不同问题：下一次请求可能带上过多历史，替代历史的内容也可能改变用户真正提出的要求。请求更小却悄悄丢掉用户的纠正，不是成功优化。摘要写得再好，如果旁边仍保留几乎全部旧对话，也没有解决问题。
 
-## Separate the quantities before changing them
+本项目的压缩工作经历三代实现：围绕 DSH 引擎调策略、单独的协议层压缩，以及当前对 DSH 引擎的有限扩展。前两代已经退役，有意不在这里分发代码。本文把它们作为历史设计工作介绍，不是当前可安装选项，也不声称当前性能如何。当前实现和下文链接的测量都在本仓库中。
 
-A conversation has an event log, a projected message list, a request assembled for a provider, and a provider's own token accounting. These are related views, not interchangeable totals. A successful compression tool receipt may say that a range was covered while a later request still contains equivalent text elsewhere. A request object inspected before SDK serialization may differ from the actual outgoing body. A character heuristic may disagree with reported input usage, especially for images or non-English text.
+## 修改前，先分清量的口径
 
-The resulting discipline is to name the measured boundary. Use complete outgoing bodies to establish what was sent, structured events to establish who authored a message, and reported usage only when its fields are present and understood. A missing number is unknown rather than zero. A content estimate is not a bill, and a smaller serialized request does not by itself prove that a prefix cache was preserved.
+一个会话有事件日志、从中生成的消息列表、组装给服务商的请求，以及服务商自己的 token 计量。这些视图有关联，但总量不能互换。压缩工具的成功回执可能说覆盖了一段范围，后续请求却仍在别处带着等价文本。在 SDK 序列化前查看的请求对象，也可能不同于实际发出的请求体。按字符估算还可能不符合报告的输入用量，尤其是图片或非英语文字。
 
-## Generation one: tune the existing machinery
+因此，要说清测量在哪个边界进行。用完整发出请求体证明发送了什么，用结构化事件证明谁写了消息，只在字段存在且含义明确时引用用量。没有数字就表示未知，不是零。内容估算不是账单，序列化请求更小也不能单独证明前缀缓存被保留。
 
-The first implementation kept the host's basic compaction model but changed policy around it. Model-specific policies adjusted when compaction began. A separate summary-model selection path could choose another available model to write the checkpoint. A relevance filter could remove or shorten less useful material before that summary request.
+## 第一代：调整已有机制
 
-The filter had to preserve roles and tool-call/result pairing. Earlier experiments representing mixed history as a single user-authored transcript exposed the danger of changing provenance: an assistant response inside a user message is no longer the same input. The later filtering path therefore supplied fewer original structured messages to the summary model, rather than installing a synthetic transcript as conversation history.
+第一代保留 DSH 的基本压缩模型，改变周围策略。针对不同模型的策略调整何时触发压缩。独立的摘要模型选择流程可以选另一个可用模型写检查点。相关性筛选器则能在摘要请求前删除或缩短用途较小的内容。
 
-This generation also exposed an important economic tradeoff without establishing a universal winner. A smaller or differently priced summary model still has to read the conversation. Changing models or rewriting a prefix can lose reusable cache state. If selection or filtering fails, returning to the host path is safer than producing a malformed checkpoint. Cancellation must propagate instead of initiating another model attempt.
+筛选器必须保留消息角色，以及工具调用与结果的配对。早期把混合历史表示为一条用户消息的实验，暴露了改变来源的危险：放进用户消息里的助手回复，已经不再是同一个输入。因此后来的筛选路径把数量更少的原始结构化消息交给摘要模型，而不是把合成会话文本装成对话历史。
 
-These are reasons to inspect the complete path, not evidence of a particular saving. The public release includes no private relevance-calibration data, historical provider bill, or reproduction environment for these retired policies. They are not used as numerical baselines in the benchmarks.
+这一代还揭示了重要的费用取舍，但没有普遍赢家。更小或定价不同的摘要模型，仍要阅读对话。切换模型或改写前缀可能丢失可复用缓存。选择或筛选失败时，退回 DSH 路径比生成格式错误的检查点更安全。取消必须继续传递，不能转成再发一次模型请求。
 
-## Generation two: own the transformation and its evidence
+这些理由说明为什么要检查完整路径，不证明具体节省。公开发布不包含这些退役策略的私有相关性校准数据、历史服务商账单或复现环境。测量中也没有把它们当成数字对照。
 
-The next design moved closer to provider request bodies. It could record requests without changing them, run a shadow conversion to check round-trip behavior, or apply compression. Keeping those modes separate made it possible to inspect a transformation before granting it the ability to alter a conversation.
+## 第二代：接管转换，也接管证据
 
-The compression layer maintained numbered ranges, summaries, retrieval, and search. User-authored content and other protected material had to remain outside replaceable ranges. If a range crossed a protected user message, rejecting it was safer than moving its summary ahead of that message and changing the apparent order of question and answer. Old tool output could be represented by a retrieval pointer, but that made subsequent access an explicit operation.
+下一代更接近服务商请求体。它可以只记录请求而不修改，也可以先模拟转换并检查往返后的内容，或实际启用压缩。分开这些模式，让人先检查转换，再授予它修改对话的能力。
 
-Protocol conversion became part of the correctness surface. The implementation distinguished the host's original request, the transformed request, and the SDK-serialized transport body when capture was supported. Recording a transformed intermediate object could not certify the final bytes. Unsupported capture paths had to say which earlier boundary they actually observed.
+压缩层维护带编号的范围、摘要、检索和搜索。用户内容与其他受保护材料必须留在可替换范围之外。如果范围跨过受保护的用户消息，拒绝它比把摘要挪到消息前更安全，后者会改变问题与回答的表面顺序。旧工具输出可以改成取回指针，但后续访问就变成一次明确操作。
 
-A shadow round trip also showed why semantic equality is insufficient for cache-sensitive transformations. Rebuilding every unchanged message can alter field order or representation. The design restored original objects for unchanged material and rewrote only affected text where possible. This reduced unnecessary transformation; it did not prove that any particular provider would grant a cache hit.
+协议转换也成为正确性的一部分。支持捕获时，实现会区分 DSH 原始请求、转换后请求，以及 SDK 序列化后的传输请求体。记录转换后的中间对象，不能证明最终字节。捕获路径不支持时，必须说明实际只观察到哪个更早的边界。
 
-Owning more of the request path required more lifecycle machinery. The custom layer and host compactor could not both rewrite the same conversation independently. A startup gate had to establish ownership before disabling the host path. Failure after that handoff required an explicit fallback state, with no claim that a merely restarted component had already restored safe compaction. Observation panels also needed to distinguish a confirmed replacement from an attempted compression or insufficient evidence.
+影子往返转换还说明：对缓存敏感的转换，仅有语义相同不够。重建每条未修改消息，也可能改变字段顺序或表示方式。因此设计尽量为未变内容恢复原始对象，只改受影响文字。这减少了不必要转换，但不能证明某个服务商一定给缓存命中。
 
-The retained lesson is the measurement method: compare the actual downstream representation and disclose gaps. The cost is a broad maintenance surface across protocol mappings, adapters, state, retrieval, and UI. The present release chooses a narrower boundary. That is a scope decision; this article does not claim an accuracy or latency victory over the retired design.
+接管更多请求路径，需要更多生命周期管理。自定义压缩层和 DSH 压缩器不能各自独立改同一会话。启动时必须先确定归属，再禁用 DSH 路径。交接后失败，需要明确的退回状态，不能说部件重启就已恢复安全压缩。观察面板也要区分已确认替换、压缩尝试和证据不足。
 
-## Generation three: extend host compaction in two places
+保留下来的经验是测量方法：比较实际交给下游的内容，并公开证据中的缺口。代价是协议映射、适配器、状态、检索和界面都要维护。当前发布选择较窄边界，这是范围决定，本文不声称在准确率或延迟上胜过退役设计。
 
-DSH already supplies triggering, checkpoint storage, message replay, and its basic compaction engine. The current [plugin](../../dsh-compaction-bound/README.md) leaves those responsibilities with the host. It changes the recent-history retention setting and the recognized summary request. It does not change the model window, the trigger point, or the normal reply limit.
+## 第三代：只在两处扩展 DSH 压缩
 
-The [retention integration](../../dsh-compaction-bound/src/retain.ts) injects a default only where a compaction-engine row has not explicitly selected `retainTokens` or `retainRatio`. It preserves other row fields and follows the host registry's generation lifecycle. Removing the plugin removes only its own injection. Existing sessions can still refer to their old preset generation; changing a registry definition is not proof that a running session adopted it.
+DSH 已提供触发、检查点存储、消息回放和基本压缩引擎。当前[插件](../../dsh-compaction-bound/README.md)把这些职责留给 DSH，只改近期历史保留设置和已识别的摘要请求。它不改模型窗口、触发点或普通回复上限。
 
-The summary integration uses `llm/stream` and checks both the compaction purpose and the stock instruction prefix. It replaces the recognized final instruction rather than rebuilding the conversation prefix. If the host contract is not recognized or the request cannot be modified, it warns and leaves the host request alone. The appendix is coupled to successful rewriting so the plugin does not partially adopt a different checkpoint contract.
+[保留量集成](../../dsh-compaction-bound/src/retain.ts)只在压缩引擎条目没有明确选择 `retainTokens` 或 `retainRatio` 时注入默认值。其他字段保留，并跟随 DSH 注册表的代次生命周期。移除插件只移除它自己的注入。已有会话仍可能引用旧预设代次，修改注册表定义不证明运行中会话已经采用。
 
-The current instruction asks the model to maintain a bounded, structured summary. User messages follow a different path: they are collected from host provenance, not chosen or paraphrased by the model. Only the host's user source and the plugin's validated appendix in a host checkpoint contribute to that collection. A reminder, tool result, or assistant reply containing the same apparent markup is not proof of user authorship.
+摘要集成使用 `llm/stream`，同时检查请求用途是压缩，以及原有指令前缀符合预期。它替换已识别的最后指令，不重建会话前缀。如果 DSH 约定无法识别或请求不能修改，就警告并保持原请求不动。附录只在成功改写时接入，避免插件只采纳新检查点约定的一部分。
 
-## Preserve exact words without an ever-growing appendix
+当前指令要求模型维护有预算的结构化摘要。用户消息走另一条路径：按 DSH 来源信息收集，不让模型选择或改写。只有 DSH 用户来源，以及 DSH 检查点中经过插件验证的附录，才参与收集。提醒、工具结果或助手回复即使包含看起来相同的标记，也不能证明内容来自用户。
 
-Keeping every user message verbatim forever would eventually recreate the original size problem. The [bounding implementation](../../dsh-compaction-bound/src/summary.ts) keeps a contiguous newest suffix verbatim under a serialized-line budget. Older messages become index items with turn, time, length, and a short prefix. If those index lines exceed their separate budget, the oldest items merge into a turn range and count.
+## 保留原话，但不让附录无限增长
 
-A single message too large for the verbatim allowance becomes an index item rather than a clipped quotation. JSON lines preserve text blocks, whitespace, quotation marks, and embedded end-tag strings without inventing delimiters inside user text. The cost is explicit: an indexed older message is no longer automatically visible to the model. Its full text remains in the session event log and requires a host history reader to inspect.
+永远逐字保留所有用户消息，最终会重新造成体积问题。[限额实现](../../dsh-compaction-bound/src/summary.ts)在序列化行预算内，连续保留最新一段原文。较旧消息变成带轮次、时间、长度和短开头的索引。索引行超过独立预算时，最旧条目合并成轮次范围和计数。
 
-The optional `historyReaderHint` names that reader for a particular host. Its default uses generic wording because this plugin installs no reader. A configured sentence substitutes literal `{sessionId}` placeholders and retains the existing turn-range note. A hint is guidance, not validation that a named tool exists. An unavailable reader must be reported before exact wording is relied on.
+单条消息超过原文预算时，会变成索引，而不是截短引文。JSON 行保留文本块、空白、引号和嵌入的结束标签字符串，不在用户文字里编造分隔符。代价很明确：只留索引的旧消息，不再自动对模型可见。完整文本仍在会话事件日志中，需要 DSH 历史读取工具查看。
 
-## A target is not a hard maximum
+可选的 `historyReaderHint` 可以按当前 DSH 环境说明如何读取历史。默认使用通用措辞，因为插件不安装读取工具。配置句子会替换字面的 `{sessionId}` 占位符，并保留已有轮次范围说明。提示是指引，不验证工具真的存在。读取工具不可用时，必须先报告，不能直接依赖精确原话。
 
-The model-written summary and the deterministic appendix have separate limits. If a summary exceeds its target, the plugin requests one shortening attempt using the summary alone, without tools or conversation replay. It accepts that attempt only if it fits, retains required headings in order, and leaves the active-user-requirements section exactly unchanged. If validation fails, it keeps the original and records `over-kept`. Cutting the last characters would make the size smaller while potentially deleting the unresolved requirement.
+## 目标量不是硬上限
 
-The failed-summary path remains the host's path: cancellation, model failure, or exhausting the reply limit does not become a successful checkpoint merely because the plugin can attach text. The status records distinguish within-target, condensed, over-kept, and failed output. These records describe the hook's actual observation, not a guarantee of answer quality.
+模型生成的摘要和程序生成的附录使用不同限制。摘要超过目标时，插件只用摘要本身请求缩短一次，不带工具，也不重放对话。只有结果符合长度、按顺序保留必需标题，并让当前用户要求章节完全不变，才接受替换。验证失败就保留原文，记录为 `over-kept`。直接截掉末尾虽然更短，却可能删掉未解决要求。
 
-## Reproduce the numbers at the right boundary
+摘要失败仍走 DSH 失败路径。取消、模型失败或耗尽回复上限，不会因为插件能附上文字就变成成功检查点。状态记录区分目标内、已缩短、超长保留和失败输出。这些记录说明挂钩实际观察到什么，不保证回答质量。
 
-Run the command in [benchmarks/README.md](../../benchmarks/README.md). [results.json](../../benchmarks/results.json) records defaults read from the current schema and measurements made by importing the production bounding and rendering functions. No model is called. The fixtures include increasing history sizes, one oversized message, and escaped Unicode text. Each verifies both item budgets, representation of every original message, and parsing back to the bounded items.
+## 在正确边界复现数字
 
-The default recent-text retention estimate is 12,000 tokens under the host's four-character convention. The model-summary target is 12,000 UTF-16 code units; verbatim lines have 8,000 and index lines 2,000. Read these defaults from `compaction.defaults` rather than treating them as universal model parameters. The measured extended fixture has 10,000 messages but its rendered appendix is only 10,645 UTF-16 code units, including the generic reader notes and tags. The report separately counts full items, index items, and messages represented by ranges.
+运行[测量说明](../../benchmarks/README.md)中的命令。[results.json](../../benchmarks/results.json)记录从当前配置定义读取的默认值，以及直接导入生产限额和渲染函数得到的测量，不调用模型。样例包括逐渐增长的历史、一条超长消息和转义 Unicode 文本。每项都校验两类条目预算、每条原始消息是否仍有表示，以及能否解析回限额后的条目。
 
-The combined illustrative text target adds the retained-tail estimate, summary target, and measured appendix, then divides by four. It is conditional: an oversized retained message, failed summary shortening, long custom reader hint, system instructions, tools, images, or provider encoding can exceed it. The benchmark is therefore a reproducible text-budget calculation, not a ceiling on real model tokens or a replay of historical provider savings.
+按 DSH 每四字符估算的约定，默认近期文本保留量为 12,000 个 token。模型摘要目标是 12,000 个 UTF-16 码元，原文行预算为 8,000，索引行预算为 2,000。应从 `compaction.defaults` 读取这些默认值，不要当成通用模型参数。测量中的扩展样例有 10,000 条消息，但渲染附录只有 10,645 个 UTF-16 码元，包含通用读取说明和标签。报告另行统计完整条目、索引条目，以及由范围代表的消息数。
 
-The [real-host chain tests](../../dsh-compaction-bound/test/host-chain.test.ts) cover repeated compaction and reading original indexed turns from the log using host storage and runtime components with a synthetic model adapter. The [format and failure tests](../../dsh-compaction-bound/test/compaction-bound.test.ts) cover provenance, escaping, malformed output, retention ownership, and the reader hint. They establish specific contracts; they do not test a real provider's summarization quality.
+示意文本目标的计算方式是：先把近期保留量估算、摘要目标和测得附录相加，再除以四。它有前提：超长保留消息、缩短摘要失败、过长自定义读取提示、系统指令、工具、图片或服务商编码都可能让实际超出。因此这份测量是可重复的文本预算计算，不是真实模型 token 上限，也不是历史服务商费用节省的重放。
 
-Across the three generations, the lasting design choice is to keep transformation, provenance, and evidence separately inspectable. The current implementation is smaller in responsibility because it reuses host compaction, while retaining a deterministic route back to exact user wording. That route has to be available and actually read when needed; a pointer in a checkpoint is only the beginning of that verification.
+[真实 DSH 链路测试](../../dsh-compaction-bound/test/host-chain.test.ts)使用 DSH 存储、运行组件和虚构模型适配器，覆盖重复压缩及从日志读取原始索引轮次。[格式与失败测试](../../dsh-compaction-bound/test/compaction-bound.test.ts)覆盖来源、转义、错误输出、保留量归属和读取提示。它们证明具体接口约定，不测试真实服务商的摘要质量。
+
+三代设计始终坚持把转换、来源和证据分开检查。当前实现复用 DSH 压缩，承担的职责更少，同时保留可确定地找回用户原话的路径。这条路径必须可用，并在需要时真正读取。检查点里的指针只是验证的开始。

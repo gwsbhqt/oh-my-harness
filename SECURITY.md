@@ -1,30 +1,32 @@
-# Security policy
+中文 | [English](SECURITY.en.md)
 
-## Report a vulnerability privately
+# 安全说明
 
-Use [GitHub private vulnerability reporting](https://github.com/gwsbhqt/oh-my-harness/security/advisories/new). Describe the affected component and source revision, prerequisites, a minimal fictional reproduction, expected and observed behavior, and the security impact. Include only the evidence necessary to reproduce the issue; remove credentials, account data, authenticated screenshots, session logs, and private endpoints.
+## 私下报告漏洞
 
-If private reporting is unavailable, do not publish exploit details or sensitive data in an issue. A neutral issue can ask maintainers to enable the private channel without describing the vulnerability. Availability depends on the repository settings. There is no promised response or fix deadline.
+请使用 [GitHub 私密漏洞报告](https://github.com/gwsbhqt/oh-my-harness/security/advisories/new)。说明受影响的部件与源码版本、前提条件、最小虚构复现样例、预期与实际行为，以及安全影响。只附复现所需的证据，去掉凭据、账号数据、已登录界面的截图、会话日志和私有服务地址。
 
-For ordinary defects, use the [bug form](.github/ISSUE_TEMPLATE/bug.yml). Community conduct is covered by the [Code of Conduct](CODE_OF_CONDUCT.md); a vulnerability report is not a general private-messaging channel.
+如果无法私密报告，不要把利用细节或敏感数据发到 issue 中。可以只开一个不涉及漏洞内容的普通 issue，请维护者启用私密报告。能否使用该入口取决于仓库设置。项目不承诺响应或修复期限。
 
-## Trust boundaries
+普通缺陷使用[缺陷表单](.github/ISSUE_TEMPLATE/bug.yml)。社区行为由[行为准则](CODE_OF_CONDUCT.md)约束。漏洞报告不是通用的私信渠道。
 
-- **Host and model:** DeepSeek Harness supplies model execution, sessions, tool policy, and jobs. These extensions do not make arbitrary model output trustworthy. Check each plugin's actual compatibility before loading it.
-- **Python:** the kernel executes trusted code with its operating-system account's access to files, networks, threads, and processes. It is not a sandbox. Harness tool approvals govern bridged tool calls; they do not contain direct Python operations. Skill discovery can execute package code during import.
-- **Browser:** attaching to a browser may expose authenticated account state. Cooperative task windows and ownership metadata do not isolate cookies or authorize account actions. Keep debugging access local or behind an explicitly secured transport.
-- **Desktop:** macOS Accessibility and input permissions affect real applications. Exact handles and targeted input reduce mistakes but cannot remove shared-focus races or protect every unrelated window.
-- **Remote host:** SSH uses the destination account and configured keys. Commands, file changes, and services are real. An explicit remote failure must not silently become a local operation. A timeout or dropped connection does not prove an action was rolled back.
-- **Control interface:** the local endpoint is intended for the same system account. Do not expose or proxy it to an untrusted network. Read-only mode and namespace restrictions limit that interface, not the entire host or Python process. An accepted request is not proof of its eventual result.
-- **Stored state and output:** snapshots, saved full output, command diagnostics, and host session records may contain data that was not displayed. Review access, retention, and any exported artifact. A small conversation display does not mean the underlying value is small or non-sensitive.
-- **Context and stream helpers:** compaction can index old wording rather than show it. A host reader must actually recover that wording when needed. Output guards detect selected invalid patterns; they cannot prove semantic correctness or defeat all malicious inputs. A monitor is not a durable event queue.
+## 哪些权限边界需要注意
 
-## Supported scope
+- **DSH 与模型**：DeepSeek Harness 提供模型执行、会话、工具策略和后台任务。这些扩展不能让任意模型输出都变得可信。加载前先检查各插件实际兼容的版本和行为。
+- **Python**：Python 内核以操作系统账号的权限执行受信任代码。它可以访问文件、网络、线程和进程。它不是沙箱。DSH 的工具审批约束的是通过工具桥接发起的调用。直接执行的 Python 操作不受这项审批约束。发现技能时，导入过程可能执行包中的代码。
+- **浏览器**：连接浏览器可能接触已登录账号的状态。协作任务窗口和归属信息不会隔离 Cookie，也不代表有权操作账号。调试入口应只对本机开放，或放在明确加固的传输通道后面。
+- **桌面**：macOS 辅助功能和输入权限作用于真实应用。准确的引用和定向输入能减少失误，但无法消除共享焦点的争抢，也不能保护每一个无关窗口。
+- **远程机器**：SSH 使用目标账号和已配置的密钥。命令、文件变更和服务都是真实的。远程操作明确失败后，不能悄悄改成本机执行。超时或断连不代表操作已回滚。
+- **控制接口**：本地入口供同一系统账号使用。不要把它暴露或代理给不可信网络。只读模式和命名空间限制约束这个接口，不会限制整个 DSH 或 Python 进程。请求被接受，不代表最后结果已经成立。
+- **存储状态与输出**：快照、保存的完整输出、命令诊断和 DSH 会话记录，可能含有对话中没显示的数据。检查访问权限、保留时间和导出内容。对话里只显示一小段，不代表原始值小或不敏感。
+- **上下文与输出流辅助功能**：压缩可能只留下旧措辞的索引。需要原话时，DSH 提供的历史读取工具必须真的能取回它。输出防护只检测选定的异常模式，不能证明语义正确，也不能阻止所有恶意输入。监控器不是持久事件队列。
 
-Please reproduce against the current source and state the exact component. Platform support and dependencies are component-specific; desktop integration is currently validated on macOS. Pure contract tests or successful CI do not validate an authenticated website, a remote service, or a live desktop.
+## 支持范围
 
-No dependency, credential, permission, or network-boundary change should be presented as harmless merely because it fixes an installation problem. Review the complete path to the final consumer, verify the intended result, and keep failures observable.
+请在当前源码上复现，并说明具体部件。支持的平台和依赖由各部件分别规定；目前桌面集成是在 macOS 上验证的。纯接口约定测试或 CI 通过，不能验证已登录网站、远程服务或真实桌面。
 
-## Safe testing
+不能只因为解决了安装问题，就把依赖、凭据、权限或网络边界的变化说成没有风险。要检查直到最终使用方的完整路径，确认预期结果，并让失败保持可见。
 
-Use dedicated fictional data, local examples, and destinations you are authorized to access. Do not probe someone else's account, infrastructure, or credentials to demonstrate a report. Avoid production state and automatic retries of operations with unknown outcomes. Maintain enough evidence to distinguish "accepted", "running", "failed", and "verified".
+## 如何安全测试
+
+使用专门的虚构数据、本地样例，以及你有权访问的目标。不要为了演示报告而探测他人的账号、基础设施或凭据。避免影响生产状态，也不要对结果未知的操作自动重试。保留足够证据，分清“已接受”“执行中”“失败”和“已验证”。

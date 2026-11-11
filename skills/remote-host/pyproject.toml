@@ -18,7 +18,7 @@ build-backend = "hatchling.build"
 packages = ["src/remote_host"]
 
 [tool.hatch.build.targets.sdist]
-only-include = ["src", "scripts", "tests", "references", "SKILL.md", "PYSKILL.md", "README.md", "LICENSE", "pyproject.toml", "hatch_build.py"]
+only-include = ["src", "scripts", "tests", "references", "SKILL.md", "PYSKILL.md", "README.md", "README.en.md", "LICENSE", "pyproject.toml", "hatch_build.py"]
 exclude = ["**/__pycache__/**", "**/*.pyc", "**/.pytest_cache/**"]
 
 [tool.hatch.build.hooks.custom]

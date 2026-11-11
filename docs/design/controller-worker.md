@@ -1,79 +1,81 @@
-# A controller and a worker need receipts, state, and an acceptance boundary
+中文 | [English](controller-worker.en.md)
 
-A long task can benefit from two different kinds of attention. A controller investigates the problem, chooses a direction, and checks the result. A fictional worker follows an explicit checklist through implementation and verification. Both remain ordinary, visible DSH conversations. The useful distinction is responsibility, not a promise that one model is always wiser or another is always cheaper.
+# 主控与长工需要回执、实际状态和独立验收
 
-The [dsh-supervise skill](../../dsh-control/skills/dsh-supervise/SKILL.md) describes this arrangement. Its model-selection policy and review cadence are instructions for agents. They are not a new multi-agent execution engine added by the plugin. DSH already supplies sessions, model execution, persistent goals, queued messages, questions, and background-job state. The [dsh-control plugin](../../dsh-control/README.md) adds access to the running instance, receipt-preserving dispatch, completion observation, and notices. The distinction matters when something stalls: a skill can tell an agent how to recover, but it cannot invent a host capability that is absent.
+长任务可以由两种关注点不同的角色合作完成。主控研究问题、选方向并检查结果。示例中的长工沿明确清单完成实现与验证。双方仍是普通、可见的 DSH 会话。区别在于职责，不是承诺某个模型总是更聪明、另一个总是更便宜。
 
-This article explains implemented mechanisms and testable design choices. It does not report a fresh production experiment or personal usage savings.
+[dsh-supervise 技能](../../dsh-control/skills/dsh-supervise/SKILL.md)描述这种分工。模型选择和审查节奏是给 Agent 的指令，不是插件新增的多 Agent 执行引擎。DSH 已提供会话、模型执行、持久目标、排队消息、提问和后台任务状态。[dsh-control 插件](../../dsh-control/README.md)补充对运行中实例的访问、保留回执的派发、完成状态观察和通知。卡住时，这个区别很关键：技能可以指导恢复，但不能凭空补出 DSH 没有的能力。
 
-## Make the task transferable before dispatch
+本文解释已实现的机制和可测试的设计选择，不报告新的生产实验或个人用量节省。
 
-The controller first resolves enough uncertainty to write a useful brief. The [brief template](../../dsh-control/skills/dsh-supervise/references/brief-template.md) asks for the requested end state, a checklist, verification methods, exclusions, decisions requiring the user, and selected milestones for controller review. The worker cannot infer the controller's earlier conversation. A self-contained brief is therefore part of correctness, not administrative overhead.
+## 派发前，先让任务能交给别人
 
-The workflow prefers a short, dedicated controller conversation. Repeatedly waking a conversation requires the model to process its available context again; unnecessary history and repeated inspection add work. This is a reason for the policy, not evidence of a particular saving. The controller normally assigns routine execution to a fast tier, but an explicit model and reasoning setting are also supported. Actual availability depends on the configured model catalog. The strategy belongs to the skill; the plugin supplies model-selection commands.
+主控先消除足够的不确定性，写出有用的任务书。[任务书模板](../../dsh-control/skills/dsh-supervise/references/brief-template.md)要求写明终态、清单、验证方法、排除项、需用户决定的事，以及需要主控检查的里程碑。长工无法猜出主控先前的对话。因此任务书自成一体，是正确执行的一部分，不是行政负担。
 
-A separate worktree can isolate file edits. It does not isolate credentials, browser accounts, or the desktop. The brief must still constrain which resources the worker may change and what it must leave alone.
+流程倾向于短小、专用的主控会话。每次唤醒都要让模型重新处理可用上下文，无关历史和重复检查会增加工作量。这解释了规则的理由，不能证明具体节省。主控通常把日常执行交给快档，也支持明确指定模型和推理设置。实际可用性取决于配置的模型目录。策略属于技能，插件提供选模型的命令。
 
-## Give each conversation its own finish line
+独立 worktree 可以隔离文件修改，但不能隔离凭据、浏览器账号或桌面。任务书仍要限制长工能改哪些资源、哪些不能碰。
 
-The controller's persistent goal describes the overall deliverable and acceptance criteria. The worker's goal covers only its assigned portion. The bundled skill defaults to segments of 10 worker goal rounds. That number is a review parameter in the instructions, not a measured optimum or a guarantee of progress.
+## 每个会话都有自己能达到的终点
 
-The worker completes its goal after its own checks. The controller completes the overall goal after independently checking the required evidence. If the result needs another person's decision, the controllable finish line should describe the prepared handoff rather than claim that the other person has acted.
+主控的持久目标描述整体交付和验收标准，长工的目标只覆盖分配给自己的部分。附带技能默认以 10 轮目标执行为一段。这个数字是指令中的审查参数，不是测得的最优值，也不保证进展。
 
-Waiting is a distinct state. The controller pauses its own goal while waiting for the worker, and the worker pauses when only an external answer remains. Keeping an automatically continuing goal active merely to say “still waiting” would spend rounds without advancing the task. Paused goals retain the objective without requesting another model turn simply to restate the same condition.
+长工完成自己的检查后，结束自己的目标。主控独立检查所需证据后，结束整体目标。如果结果需要别人决定，可控制的终点应写成已准备好交接，不能声称别人已经行动。
 
-The plugin accesses existing host services for these operations. [gateway.ts](../../dsh-control/src/gateway.ts) describes the adapter to the same typed invocation machinery used by the interface. [service.ts](../../dsh-control/src/service.ts) reads goal state and dispatches session operations; it does not replace the host's goal scheduler.
+等待是独立状态。主控等长工时暂停自己的目标，长工只剩外部答复时也暂停。为了反复说“还在等”而保持自动继续，只会消耗轮次，不会推进任务。暂停会保留目标，不会为了复述同一状况再请求模型执行。
 
-## A receipt says what happened to the message
+插件调用 DSH 已有的服务完成这些操作。[gateway.ts](../../dsh-control/src/gateway.ts)说明如何接到界面也使用的同一套有类型的调用机制。[service.ts](../../dsh-control/src/service.ts)读取目标状态并派发会话操作，不替代 DSH 的目标调度器。
 
-A successful send returns a request identifier, session identifier, and starting transcript sequence, `since`. These describe the accepted dispatch and establish a boundary for later observation. They do not establish that the model responded or that the assigned work passed review.
+## 回执说明消息实际走到了哪一步
 
-Preserving that boundary prevents a common mistake: a send succeeds, the subsequent wait fails, and the caller resends the task as though nothing had happened. The correct recovery is to query the original session and continue waiting from the saved sequence. An unconfirmed send must likewise be investigated before replay.
+成功发送会返回请求标识、会话标识和记录起始序号 `since`。它们说明派发已被接受，并确定后续观察从哪里开始。它们不能证明模型已经回复，也不能证明任务通过审查。
 
-The [Python API](../../dsh-control/skills/dsh-control/src/dsh_control/__init__.py) is a thin asynchronous wrapper around the CLI. It retains raw JSON, exit code, stdout, and stderr. Nonzero results remain visible. Cancelling the local wrapper does not automatically cancel the DSH conversation or replay the message. This separation preserves the uncertainty that an outer timeout cannot resolve.
+保留这个起点可以避免常见错误：发送成功，后续等待失败，调用方却当作什么都没发生，又发一遍任务。正确做法是查询原会话，从保存的序号继续等。发送是否成功未确认时，同样要先调查，再决定是否重放。
 
-Completion notification registration is another operation. The receipt needs a notification watch identifier to confirm registration. If registration fails after sending, the receipt retains the send and includes the notification error. The caller should use `wait --settled`, not send the task again.
+[Python 接口](../../dsh-control/skills/dsh-control/src/dsh_control/__init__.py)只是命令行的轻量异步包装。它保留原始 JSON、退出码、标准输出和标准错误。非零结果不会被隐藏。取消本地包装不会自动取消 DSH 会话。它也不会重放消息。这保留了外层超时无法消除的不确定性。
 
-## Ending a turn is not completing the assignment
+登记完成通知是另一项操作。回执中需要有通知观察标识，才能确认登记成功。如果发送后登记失败，回执仍保留发送结果和通知错误。调用方应使用 `wait --settled`，不要再次派发任务。
 
-Ordinary waiting requires a newly ended turn after the saved sequence and a session without running or queued work. Questions have their own waiting-input result. A failed or aborted final turn is not reported as successful work.
+## 一轮结束，不等于任务完成
 
-`wait --settled` goes further. The [completion checks](../../dsh-control/src/service.ts) inspect background jobs, running or queued descendants, pending restarts, and whether a goal is both active and armed to continue. An active but disarmed goal does not itself imply another automatic round. Missing access to the required host state produces an unsupported error rather than a guessed completion.
+普通等待要求保存序号之后有新结束的轮次，并且会话没有正在运行或排队的工作。提问有单独的等输入结果。最后一轮失败或中止，不会被报告为工作成功。
 
-After blockers clear, the implementation requires 3 seconds of stable clearance by default. This covers a possible gap between a background job ending and the host queuing its completion event. It is an explicit debounce parameter, not proof that every possible future event has been excluded.
+`wait --settled` 检查得更深入。[完成检查](../../dsh-control/src/service.ts)查看后台任务、运行或排队的下级 Agent、待重启状态，以及目标是否同时处于活跃和允许自动继续的状态。目标活跃但未允许自动继续，本身不意味着还有下一轮。无法读取必需的 DSH 状态时，会报告不支持。它不会猜测任务已经完成。
 
-Even a settled session can have reached a segment limit or paused for a decision. A turn ending with `completed` describes the execution of that turn. It does not distinguish a finished objective from a worker stopping at its allowed round count. The controller therefore reads goal phase, activation, and stop reason before deciding whether to accept, extend, answer, or correct the work.
+阻碍清除后，默认还要求稳定保持 3 秒。这覆盖后台任务结束到 DSH 排入完成事件之间可能出现的间隙。它是明确的防抖参数，不能证明任何未来事件都不可能发生。
 
-## Wait with events; check exceptions without a model loop
+即使会话已稳定停下，也可能是达到分段轮数上限，或暂停等决定。以 `completed` 结束的一轮描述的是该轮执行结果，不能区分目标已经完成还是长工到达允许轮数后停下。因此主控要读取目标阶段、激活状态和停止原因，再决定验收、延长、回答或纠正。
 
-The workflow has three notification routes: the registered completion watch, selected worker milestone or exception notices, and a separate watchdog for stalled or unavailable state. Routine progress can be injected quietly into the controller's context without waking it.
+## 让事件负责等待，不让模型反复查询
 
-[done-watch.ts](../../dsh-control/src/done-watch.ts) reuses the settled predicate. Status events trigger checks, and a 5-second timer supplies a fallback. Repeated registration for the same worker and notification recipient reuses a pending watch. Concurrent registrations are coordinated, and duplicate persisted watches are merged on startup. Question reminders are keyed so the same observed question is not announced every check.
+流程有三条通知路径：已登记的完成观察、长工选定的里程碑或异常通知，以及独立检查停滞和不可用状态的看守程序。日常进展可以安静地放进主控上下文，不唤醒它。
 
-The watch persists its state. On startup, a pending watch resumes. A record left in `delivering` is marked failed rather than blindly delivered again: the process cannot know whether the recipient already received it. Reported delivery failures have bounded retries. This is a deliberate tradeoff between duplicate wakeups and uncertain delivery, not an exactly-once messaging guarantee. [Watcher tests](../../dsh-control/test/done-watch.test.ts) cover restart recovery, deduplication, question reminders, and failed delivery.
+[done-watch.ts](../../dsh-control/src/done-watch.ts)复用稳定完成的判定。状态事件触发检查，并由 5 秒定时器补查。同一长工和接收者重复登记时，复用已有待完成观察。并发登记会协调，启动时会合并重复持久记录。问题提醒有去重键，避免每次检查都重复播报同一个问题。
 
-Event-driven supervision does not mean that no code polls. The distinction is that small background checks run without repeatedly invoking the controller model. The controller resumes when it has a decision or verification to perform.
+观察状态会保存。启动时，待完成的观察继续执行。停在 `delivering` 的记录会被标为失败。进程无法确定对方是否已经收到，因此不会盲目再投递。明确报告的投递失败会有限重试。这是在重复唤醒和不确定投递之间的取舍，不是“恰好一次”消息保证。[观察程序测试](../../dsh-control/test/done-watch.test.ts)覆盖重启恢复、去重、问题提醒和投递失败。
 
-## Detect silence without inventing failure
+事件驱动监督不代表代码完全不轮询。区别是小型后台检查不会反复调用主控模型。需要做决定或验证时，主控才恢复运行。
 
-The bundled [watchdog](../../dsh-control/skills/dsh-supervise/scripts/watchdog.py) uses structured status, goal, job ownership, and transcript sequence fields. It does not scan a worker's prose for “done.” Its defaults are a 120-second check interval, a 30-minute stall threshold, and a 15-minute outage reminder threshold. Long legitimate builds may need a larger stall threshold.
+## 发现没动静，但不凭空判失败
 
-A stall means that recorded sequence progress has stopped while some busy condition remains. It is a prompt to inspect the last turn and background task, not a verdict that the worker failed. Conversely, an increasing sequence can conceal unproductive repetition; semantic progress still requires comparing the checklist and actual changes.
+附带的[看守程序](../../dsh-control/skills/dsh-supervise/scripts/watchdog.py)使用结构化状态、目标、任务归属和记录序号，不从长工的文字中找“做完了”。默认检查间隔为 120 秒，停滞阈值为 30 分钟，断连提醒阈值为 15 分钟。正常长构建可能需要更大的停滞阈值。
 
-During an outage, the checker reports unknown state, suppresses repeated alerts, and sends a recovery notice. It adjusts progress timing for the unobserved interval so a network gap does not immediately become a false stall. Broken JSON or invalid command arguments are checker failures, separate from task failures. [Watchdog tests](../../dsh-control/skills/dsh-supervise/scripts/test_watchdog.py) exercise these distinctions with controlled state and time.
+停滞指记录序号不再前进，但仍有忙碌条件存在。这是检查最近轮次和后台任务的提醒，不是判定长工失败。反过来，序号增长也可能掩盖无效重复。是否真的有进展，仍要比较清单和实际改动。
 
-On wakeup, the controller checks the goal, running state, questions, checklist changes, and relevant artifacts. A productive segment can receive another bounded segment. Repetition calls for a narrower task or corrected direction. A missing goal should be repaired in the existing conversation when supported, rather than discarding the conversation and redispatching its side effects. After acceptance, the controller stops the watchdog and closes its own goal.
+断连时，检查器报告状态未知、抑制重复告警，并在恢复时通知。它会调整进展计时，不把未观察到的网络中断立刻算成假停滞。损坏的 JSON 或无效命令参数属于检查器失败，与任务失败分开。[看守程序测试](../../dsh-control/skills/dsh-supervise/scripts/test_watchdog.py)使用受控状态和时间验证这些区别。
 
-## Measure orchestration separately from output quality
+被唤醒后，主控检查目标、运行状态、问题、清单变化和相关产物。一段工作确实有成果时，主控可以再分配下一段，并继续限制轮数。长工反复做同样的事时，主控应缩小任务或纠正方向。如果支持在原会话修复缺失目标，就优先这样做。不要丢掉会话，再次派发可能已经产生外部效果的任务。验收后，主控停止看守程序，结束自己的目标。
 
-The watchdog suite is reproducible without a live worker:
+## 分开测量调度过程与输出质量
+
+看守程序测试无需真实长工即可重现：
 
 ```sh
 python3 -I dsh-control/skills/dsh-supervise/scripts/test_watchdog.py
 ```
 
-These fixture tests establish decision rules, not real network reliability or model quality. Plugin verification instructions are in the [development README](../../dsh-control/README.md); this document does not claim they were rerun for this essay.
+这些样例测试证明判断规则，不证明真实网络可靠性或模型质量。插件验证方法见[开发说明](../../dsh-control/README.md)，本文不声称为写文章重跑过它们。
 
-For a workload comparison, keep the brief, acceptance checks, model routes, and initial repository state fixed. Record dispatch acceptance, watch registration, wakeup count, state-check failures, accepted deliverables, corrections, elapsed time, and model usage when the provider actually reports it. Separate timer checks from controller model calls. Include unsuccessful work and uncertain delivery rather than counting only accepted runs.
+比较工作量时，保持任务书、验收检查、模型线路和初始仓库状态一致。记录派发接受、观察登记、唤醒次数、状态检查失败、已验收交付、纠正、耗时，以及服务商实际报告的模型用量。区分定时检查和主控模型调用。把失败工作和不确定投递也计入，不只统计验收成功的执行。
 
-Publish actual measurements in [benchmark results](../../benchmarks/results.json), with the commands and input needed to reproduce them. No savings percentage follows merely from using two conversations. The design's defensible benefit is a clearer control loop: receipts identify accepted messages, state identifies why execution stopped, and independent evidence determines whether the requested result is ready.
+真实测量应发布到[测量结果](../../benchmarks/results.json)，并提供复现命令和输入。使用两个会话本身推不出节省比例。这个设计能成立的价值，是让控制过程更清楚：回执说明哪些消息被接受，状态说明执行为什么停下，独立证据决定结果是否已准备好。

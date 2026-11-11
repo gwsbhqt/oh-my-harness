@@ -1,148 +1,154 @@
-[English](README.md) | [简体中文](README.zh-CN.md)
+中文 | [English](README.en.md)
 
 # oh-my-harness
 
-**Add-ons for the AI assistant in DeepSeek Harness: let it write programs to get work done, split work with other assistants, operate the browser and the Mac, and keep working for hours without drowning in its own chat history.**
+**给 DeepSeek Harness 里的 AI 助手装上的一组扩展：让它能写程序连续做事、带着别的助手分工、动手操作浏览器和电脑，并且长时间工作也不被聊天记录撑爆。**
 
 [![CI](https://github.com/gwsbhqt/oh-my-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/gwsbhqt/oh-my-harness/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-## What this is
+## 先说清楚：这是什么
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) is an AI assistant app that runs on your Mac: you open a session, say what you need, and it calls tools to do the work.
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（下文简称 DSH）是一个在 Mac 上运行的 AI 助手应用：你开一个会话，跟它说要做什么，它调用各种工具去做。
 
-This repository is **not a standalone app**. It is 11 components that add abilities to DSH; install only the ones you need. There are two kinds:
+本仓库**不是一个独立软件**，而是给 DSH 加能力的一组部件，可以只装需要的那几个。本项目由社区独立维护，**并非 DeepSeek 官方产品，也不隶属或获得 DeepSeek 背书**。
 
-- **Plugins** load into DSH itself and change how it behaves. The 8 root folders that start with `dsh-` are plugins.
-- **Tools** are separate programs the assistant can call. The 3 tools live under `skills/` and also work on their own from a terminal.
+## 由哪几块组成
 
-An independent community project, **not affiliated with or endorsed by DeepSeek**.
-
-## Components
-
-Click a name to open that component's own README with setup, configuration, and limits. "Guide" links to a task-oriented walkthrough.
-
-**Let the assistant write programs**
-
-| Component | What it does | Use it when |
+| 类别 | 部件 | 一句话 |
 | --- | --- | --- |
-| [dsh-python-repl](dsh-python-repl/README.md) | Lets the assistant do its work in Python. One step can call many tools; large data stays in the program and only the checked conclusion goes into the chat. | You process big logs or tables, or one job needs many tool calls in a row. [Guide](docs/dsh-python-repl.md) |
+| **核心** | [dsh-python-repl](dsh-python-repl/README.md) | 让助手写 Python 来做事，大块数据留在程序里，只把结论放进对话。[详见下文](#核心一dsh-python-repl让助手写程序做事) |
+| **核心** | [dsh-control](dsh-control/README.md) | 从外面遥控正在运行的 DSH，让一个助手当主控，带着几个助手分头干活。[详见下文](#核心二dsh-control让一个助手带着几个助手干活) |
+| 操作电脑 | [browser-control](skills/browser-control/README.md) · [computer-control](skills/computer-control/README.md) · [remote-host](skills/remote-host/README.md) | 操作网页、Mac 桌面应用、另一台机器。 |
+| 配套插件 | [dsh-monitor](dsh-monitor/README.md) · [dsh-output-guard](dsh-output-guard/README.md) · [dsh-compaction-bound](dsh-compaction-bound/README.md) · [dsh-message-tidy](dsh-message-tidy/README.md) · [dsh-image-cap](dsh-image-cap/README.md) · [dsh-history-cap](dsh-history-cap/README.md) | 后台事件叫醒、拦住失控输出、让长对话不被撑爆。[详见下文](#其他部件) |
 
-**Manage and coordinate**
+部件分两种：**插件**装进 DSH 本身，仓库根目录下 `dsh-` 开头的 8 个文件夹都是；**工具**是助手可以调用的独立程序，放在 `skills/` 下，也能在终端里单独用。每个部件的说明里都放了它的真实演示，点部件名就能看到。
 
-| Component | What it does | Use it when |
+## 核心一：dsh-python-repl，让助手写程序做事
+
+**没有它时。** 助手每做一步都要调一次工具，工具返回什么，就整段塞进对话。比如让它查一份 1 万条的日志里哪些服务报错：它会把整份日志读进对话，再自己一行行看。又贵又慢，还容易看漏。
+
+**有了它。** 助手改成写一小段 Python：
+
+1. 在程序里调用读文件的工具，日志拿到手后留在程序里，不进对话；
+2. 在程序里筛出报错、按服务计数、挑几条样本；
+3. 只把「哪几个服务报错、各多少条、样本在第几行」这几行结论放进对话。
+
+下一步还要用这份数据，直接用程序里的变量，不用再读一遍。
+
+**省了多少。** 同一份 1 万条虚构日志、同一个问题，两种回法的对比：
+
+两条路径都读取同一份 **10,000 条虚构 JSONL 记录**，统计服务错误并找到样本。
+
+| 返回内容 | UTF-16 代码单元 | 估算 token |
+| --- | ---: | ---: |
+| 完整日志 | 1,976,098 | 494,025 |
+| Python 本地聚合及可定位样本 | 345 | 87 |
+
+估算口径是对返回文本计算 **ceil(UTF-16 代码单元 / 4)**，不是模型分词器的精确计数。完整的[方法、排除项和压缩测量](benchmarks/README.md)以及[实测输出](benchmarks/results.json)可直接复核。
+
+**它还做了这些：**
+
+- **一段程序可以连着调很多工具**，包括 DSH 自带的读写文件、执行命令，以及下面三个操作电脑的工具。
+- **数据跨步骤保留，重启后能接回。** 上一步算出的变量，下一步直接用；DSH 重启后，能保存的数据自动恢复，没恢复的会明确告诉助手。[内核生命周期源码](dsh-python-repl/src/session.ts)
+- **工具说明按需展开。** 常用的工具给完整说明，其余只给一句摘要，用到时再查，省下每一轮都要重复发送的说明文字。[提示组装源码](dsh-python-repl/src/index.ts)
+- **长输出只显示首尾。** 一次打印几千行时，对话里只显示开头和结尾，完整内容仍留在程序里，随时可以再算。
+
+[部件说明和演示](dsh-python-repl/README.md) · [教程](docs/dsh-python-repl.md) · [设计文章：数据留在程序里](docs/design/python-data-locality.md)
+
+## 核心二：dsh-control，让一个助手带着几个助手干活
+
+**没有它时。** DSH 里的会话只能在窗口里一个个手动开、手动发消息。外面的脚本和别的 AI 助手接不上正在运行的这个 DSH。长任务只能让一个贵的模型从头盯到尾。
+
+**有了它。** 举个例子，按顺序走一遍：
+
+1. 一个用贵模型的会话当**主控**。它把任务写成一份任务书，另开一个用便宜模型的会话当**长工**，把任务书发过去；
+2. 发完主控就停下，不反复去问「好了没」；
+3. 长工干活。等它真的做完，dsh-control 才给主控送一条通知把它叫醒。「真的做完」看的是实际状态：没有在跑的回合、没有排队的消息、没有后台任务，并且稳定一小段时间，而不是看长工回复里写没写「已完成」（[完成判据源码](dsh-control/src/service.ts)）；
+4. 主控醒来，自己核对结果，通过就派下一批，不通过就写清哪里不对再发回去；
+5. 中途 DSH 重启了，被打断的会话会自动接着做，排队中被吞掉的消息也会放回去（[重启恢复源码](dsh-control/src/cli/core.ts)）。
+
+**它还做了这些：**
+
+- **三种接法遥控同一个 DSH：** 命令行、Python 和 MCP（一种通用的工具接入协议）。只在本机开放，同一个系统账户才能连。
+- **发出的每条消息都有回执。** 等待超时只代表「还没等到」，不会让人误以为没发出去而重发一遍。
+- **按额度挑模型。** 分「主力」「轻量」两档，额度快用光的模型自动往后排，不会悄悄换档。
+- **跨机器也能用。** 通过 SSH 遥控另一台 Mac 上的 DSH，不另开网络端口。
+
+[部件说明和演示](dsh-control/README.md) · [教程](docs/dsh-control.md) · [设计文章：主控与长工](docs/design/controller-worker.md)
+
+## 其他部件
+
+点部件名进入它自己的说明，里面有安装方法、配置、限制和演示；「教程」是按使用场景写的上手步骤。
+
+**配合两个核心一起用**
+
+| 部件 | 它做什么 | 什么时候用 |
 | --- | --- | --- |
-| [dsh-control](dsh-control/README.md) | Remote-controls a running DSH: open sessions, hand out tasks, wait until they are really done, send notifications, restart. | One assistant acts as a lead and other sessions do the work. [Guide](docs/dsh-control.md) |
-| [dsh-monitor](dsh-monitor/README.md) | Watches a long-running command and wakes the assistant with each new line it prints. | You wait on a build, a log, or a file, and don't want the assistant to keep checking. [Guide](docs/dsh-monitor.md) |
-| [dsh-output-guard](dsh-output-guard/README.md) | Stops the model when it starts repeating itself, printing blank lines, or ending without an answer; can retry once automatically. | Long runs sometimes produce runaway output. [Guide](docs/dsh-output-guard.md) |
+| [dsh-monitor](dsh-monitor/README.md) | 盯着一个一直在跑的程序，它每打出一行，就送进会话叫醒助手。 | 等构建、盯日志、等某个文件出现，不想让助手一遍遍去查。[教程](docs/dsh-monitor.md) |
+| [dsh-output-guard](dsh-output-guard/README.md) | 发现模型开始复读、刷空行、什么都没答就结束时，及时拦下，可以自动重试一次。 | 长任务跑着跑着输出失控。[教程](docs/dsh-output-guard.md) |
 
-**Operate the computer**
+**动手操作电脑**
 
-| Component | What it does | Use it when |
+| 部件 | 它做什么 | 什么时候用 |
 | --- | --- | --- |
-| [browser-control](skills/browser-control/README.md) | Operates chosen pages in Chrome or Arc: read, click, type, screenshot. Each task gets its own window and re-reads the page after acting. | The assistant should do something on a website for you. [Guide](docs/browser-control.md) |
-| [computer-control](skills/computer-control/README.md) | Operates ordinary Mac app windows: read the interface, click, type, screenshot. Keystrokes go only to the chosen window. | The target is a desktop app, not a web page. [Guide](docs/computer-control.md) |
-| [remote-host](skills/remote-host/README.md) | Runs commands, copies files, and manages background jobs on another machine over SSH. If the other side lacks a tool, it fails instead of quietly running locally. | The work happens on another computer or server. [Guide](docs/remote-host.md) |
+| [browser-control](skills/browser-control/README.md) | 操作 Chrome 或 Arc 里指定的网页：看、点、填、截图。每个任务用自己的窗口，做完重读页面核对。 | 要助手替你在网页上操作。[教程](docs/browser-control.md) |
+| [computer-control](skills/computer-control/README.md) | 操作 Mac 上的普通应用窗口：读界面、点按钮、打字、截图，输入只发给指定的那个窗口。 | 要操作的不是网页，而是桌面应用。[教程](docs/computer-control.md) |
+| [remote-host](skills/remote-host/README.md) | 通过 SSH 在另一台机器上执行命令、传文件、跑后台任务。对面缺工具就直接报错，不会悄悄改在本机执行。 | 要助手去另一台电脑或服务器上干活。[教程](docs/remote-host.md) |
 
-The three tools share a small library, [`skills/_shared`](skills/_shared/README.md), that handles connections and target machines. It is not used on its own.
+上面三个工具共用一个底层库 [`skills/_shared`](skills/_shared/README.md)，负责连接和目标机器的判断，它本身不单独使用。
 
-**Keep long sessions manageable**
+**让长对话不被撑爆**
 
-| Component | What it does | Use it when |
+| 部件 | 它做什么 | 什么时候用 |
 | --- | --- | --- |
-| [dsh-compaction-bound](dsh-compaction-bound/README.md) | When the chat history is compacted, your own messages are copied word for word instead of being paraphrased by the model, and the result has a fixed size limit. | A session needs to keep going for hours. [Guide](docs/dsh-compaction-bound.md) |
-| [dsh-message-tidy](dsh-message-tidy/README.md) | Cleans up notices DSH adds to the chat: marks them as system notices rather than your words, drops duplicates, gives background jobs readable names, and sends only the changed part of an updated instruction file. | System notices pile up and clutter the chat. [Guide](docs/dsh-message-tidy.md) |
-| [dsh-image-cap](dsh-image-cap/README.md) | Limits the size and number of images sent to the model. | Screenshot-heavy tasks spend too much context on images. [Guide](docs/dsh-image-cap.md) |
-| [dsh-history-cap](dsh-history-cap/README.md) | Loads a long session's history in pages when you open it. Affects only the app window, not what the model sees. | Long sessions open slowly in the app. [Guide](docs/dsh-history-cap.md) |
+| [dsh-compaction-bound](dsh-compaction-bound/README.md) | 聊天记录太长要压缩时，你说过的原话照抄保留，不让模型转述；压缩后的总长度有固定上限。 | 一个会话要连续干几个小时。[教程](docs/dsh-compaction-bound.md) |
+| [dsh-message-tidy](dsh-message-tidy/README.md) | 整理 DSH 自动塞进对话的提示：标明哪些是系统提示、不是你说的话，去掉重复的通知，给后台任务起看得懂的名字，说明文件只改一点时只发改动的部分。 | 对话里系统提示越来越多、越来越乱。[教程](docs/dsh-message-tidy.md) |
+| [dsh-image-cap](dsh-image-cap/README.md) | 限制发给模型的图片尺寸和张数。 | 截图多的任务，图片占掉太多上下文。[教程](docs/dsh-image-cap.md) |
+| [dsh-history-cap](dsh-history-cap/README.md) | 打开很长的会话时，界面分页加载历史，不一次拉完。只影响界面，不影响模型看到的内容。 | 长会话在界面上打开很慢。[教程](docs/dsh-history-cap.md) |
 
-**Also in the repository:** [design articles](docs/design/python-data-locality.md) explain why each part works the way it does; [benchmarks](benchmarks/README.md) reproduce the numbers on this page; `tooling/` holds the shared plugin build tools; [llms.txt](llms.txt) is an entry point for AI assistants.
+**仓库里的其他东西**：[设计长文](docs/design/python-data-locality.md)讲每块为什么这样做；[测量脚本](benchmarks/README.md)可以复跑首页的数字；`tooling/` 是插件共用的构建工具；[llms.txt](llms.txt) 是给 AI 助手看的入口。
 
-## How they work together
+
+## 它们怎么配合
 
 ```text
-You ──task──▶ the assistant in DSH
-                  │
-                  ├─ writes Python to do the work (dsh-python-repl)
-                  │     ├─ calls DSH's built-in tools
-                  │     ├─ operates web pages, desktop apps, remote machines (3 tools)
-                  │     └─ keeps large data in the program, returns only conclusions
-                  │
-                  ├─ hands tasks to other sessions and waits for them (dsh-control)
-                  ├─ wakes up when a background event arrives (dsh-monitor)
-                  └─ stays within limits however long the chat gets (4 context plugins + dsh-output-guard)
+你  ──说任务──▶  DSH 里的 AI 助手
+                    │
+                    ├─ 写 Python 做事（dsh-python-repl）
+                    │     ├─ 调用 DSH 自带的工具
+                    │     ├─ 操作网页、桌面应用、远程机器（3 个工具）
+                    │     └─ 大块数据留在程序里，只把结论放回对话
+                    │
+                    ├─ 派活给别的会话、等它们做完（dsh-control）
+                    ├─ 后台有新消息时被叫醒（dsh-monitor）
+                    └─ 对话再长也有上限（4 个上下文插件 + dsh-output-guard）
 ```
 
-## See it work
+## 为什么要做这套扩展
 
-These are real recordings using fictional data and local example pages. No accounts are signed in.
-
-**One log, two ways to answer.** Left: all 10,000 log records go to the model. Right: Python computes first and returns only the conclusion.
-
-![Terminal recording of the full fictional log compared with filtering inside the DSH kernel](docs/assets/python-data-locality.gif)
-
-**A lead hands out work; a worker does it.** The lead dispatches and stops; when the worker finishes, the lead wakes up, recomputes the result, and accepts it.
-
-![Real session excerpt: lead dispatches, worker executes, lead verifies](docs/assets/controller-worker.gif)
-
-**Operate a browser.** Fill in and tick a local example page, re-reading the page after each step.
-
-![Browser control filling a fictional checklist and verifying the final page state](docs/assets/browser-control.gif)
-
-**Operate a Mac desktop app.** Write a fictional checklist in the built-in TextEdit, change two items, and read the window's text back after every step. Frames are step-by-step captures of a real window.
-
-![computer-control writing and editing a fictional checklist in a real TextEdit window, reading it back at each step](docs/assets/computer-control.gif)
-
-**A background event wakes a session.** When a file is written, the idle session wakes, checks the content, and stops listening.
-
-![A real event wakes an idle session, which checks the example data](docs/assets/monitor.gif)
-
-**Long output shows only the head and tail**, while the full text stays in Python. **Remote receipt:** a read-only SSH command whose result was checked independently.
-
-<p>
-<img src="docs/assets/bounded-display.png" alt="The chat shows head and tail; the Python value and saved full text remain checkable" width="49%">
-<img src="docs/assets/remote-host.png" alt="Receipt of a read-only SSH operation with an independently checked digest" width="49%">
-</p>
-
-Recording inputs and acceptance checks are in the [asset list](docs/assets/README.md).
-
-## Why this exists
-
-| Without it | With it |
+| 没有它时 | 有了它 |
 | --- | --- |
-| A tool returns a huge log and all of it lands in the chat: expensive and easy to misread. | The data stays in Python; only the computed conclusion comes back. |
-| An expensive model watches every step of a long job. | The expensive model leads and reviews; a cheaper model does the work. |
-| Outside scripts cannot reach a running DSH. | A command line, Python, and MCP (a common protocol for connecting tools) all control the same DSH. |
-| Compaction lets the model paraphrase, or change, what you said. | Your words are copied as written, plus an index with a size limit. |
-| Several assistants fight over one browser tab or desktop window. | Each task sticks to its own window and never clicks into another's. |
-| A command may quietly run locally when the remote machine lacks a tool. | The remote side is checked first; a missing tool is an error. |
+| 工具返回一大段日志，整段塞进对话，又贵又容易看漏。 | 数据留在 Python 里，算好后只回结论。 |
+| 长任务每一步都要贵的模型盯着。 | 贵的模型当主控只管派活和验收，便宜的模型当长工干活。 |
+| 外面的脚本没法接上正在运行的 DSH。 | 命令行、Python 和 MCP（一种通用的工具接入协议）都能遥控同一个 DSH。 |
+| 压缩聊天记录时，模型会转述甚至改掉你说过的话。 | 你的原话照抄保留，另附有长度上限的清单。 |
+| 几个助手抢同一个网页标签或桌面窗口。 | 每个任务认准自己的窗口，不会点到别人的。 |
+| 远程机器缺工具时，命令可能被悄悄改在本机执行。 | 执行前先核对对面有没有这个工具，缺了就报错。 |
 
-## Engineering highlights
+## 其他工程亮点
 
-- **Tool instructions on demand.** Frequently used tools get full instructions; the rest get a one-line summary until needed, so each turn sends less boilerplate. [Prompt assembly](dsh-python-repl/src/index.ts).
-- **Data survives between steps and restarts.** A variable computed in one step is used directly in the next. After DSH restarts, savable data comes back and anything lost is reported to the assistant. [Session lifecycle](dsh-python-repl/src/session.ts).
-- **"Done" means really done.** Instead of trusting a reply that says "finished", it checks that the session has truly stopped: no running turn, no queued message, no background job, stable for a while. Interrupted sessions resume after a restart. [Completion](dsh-control/src/service.ts) · [Recovery](dsh-control/src/cli/core.ts).
-- **Your words skip the model.** Compaction copies your messages into an appendix by source. When space runs out, older ones become a "which turn said what" index, and the oldest ranges merge first. [Appendix implementation](dsh-compaction-bound/src/summary.ts).
-- **Every action has a definite target.** Browser tasks get their own windows. Desktop actions remember the exact app and window, and keystrokes go only there. [Browser targets](skills/browser-control/src/browser_control/engine.py) · [Desktop routing](skills/computer-control/bin/computer-control.swift).
-- **Uncertain results are reported as uncertain.** A remote machine missing a tool is rejected before running. A browser action whose reply is lost is reported as "outcome unknown" and is not clicked again. [Remote preflight](skills/_shared/agentkit/remote/target.py) · [Browser RPC](skills/browser-control/src/browser_control/client.py).
+- **你的原话不经模型转述。** 压缩聊天记录时，按来源把你发的消息原文收进附录；长度放不下时，先缩成「第几轮说了什么」的清单，再合并最早的部分。[附录实现](dsh-compaction-bound/src/summary.ts)。
+- **每个操作认准具体目标。** 浏览器任务各开各的窗口；桌面操作记住具体是哪个应用的哪个窗口，键盘输入只发给它，不会打进别的窗口。[浏览器目标](skills/browser-control/src/browser_control/engine.py) · [桌面投递](skills/computer-control/bin/computer-control.swift)。
+- **结果不确定就直说。** 远程机器缺工具时，执行前就拒绝；浏览器动作发出去却没收到回应，就报「结果未知」，不擅自再点一次。[远端预检](skills/_shared/agentkit/remote/target.py) · [浏览器调用](skills/browser-control/src/browser_control/client.py)。
 
-## A measured example
+## 从一个插件开始
 
-Both paths read the same **10,000 fictional JSONL records** to count errors by service and identify samples.
+先准备 macOS 上的 DSH 和支持工具调用的模型。Node.js、pnpm、uv、Python 的要求见[内核说明](dsh-python-repl/README.md)。
 
-| Returned payload | UTF-16 code units | Estimated tokens |
-| --- | ---: | ---: |
-| Entire log | 1,976,098 | 494,025 |
-| Local Python aggregation and identified samples | 345 | 87 |
+### 1. 从源码构建
 
-Estimates use **ceil(UTF-16 code units / 4)** on returned payload text, not a model tokenizer. See the [method, exclusions, and compaction results](benchmarks/README.md) and [recorded output](benchmarks/results.json).
-
-## Start with one plugin
-
-Use DeepSeek Harness on macOS with a tool-capable model. Follow the [kernel README](dsh-python-repl/README.md) for Node.js, pnpm, uv, and Python requirements.
-
-### 1. Build from source
-
-Plugin builds use adjacent `tooling/`; keep the checkout intact.
+保留相邻的 `tooling/`，插件构建会使用它。
 
 ```sh
 git clone https://github.com/gwsbhqt/oh-my-harness.git
@@ -151,9 +157,9 @@ pnpm --dir dsh-python-repl install --frozen-lockfile
 pnpm --dir dsh-python-repl run check
 ```
 
-### 2. Link the bundle into your DSH profile
+### 2. 链接到 DSH 配置（profile）
 
-Merge these entries into the profile manifest. Set the checkout link **relative to that profile**.
+把下面的条目合进现有清单。链接路径按**该配置目录到源码的相对位置**填写。
 
 ```json
 {
@@ -166,98 +172,97 @@ Merge these entries into the profile manifest. Set the checkout link **relative 
 }
 ```
 
-Install in that profile with DSH's pnpm, run startup checks, then restart DSH. Follow the [bundle setup and removal guide](dsh-python-repl/README.md).
+在该配置目录用 DSH 的 pnpm 安装依赖，做启动检查，再重启。详见[组合包安装和移除](dsh-python-repl/README.md)。
 
-### 3. Verify a useful result
+### 3. 核对一个有用的结果
 
-From the checkout, create the exact fictional fixture and reference answer:
+在仓库根目录生成同一份虚构日志和参考答案：
 
 ```sh
 python3 benchmarks/run.py --export-log example-log.jsonl --export-conclusion example-answer.json
 ```
 
-Open a DSH session in the checkout and ask:
+在该目录打开 DSH 会话，提出任务：
 
-> Read the generated example log into a Python variable. Keep the complete data in the kernel. Compute the same counts and identified samples as the benchmark, and compare the result with the exported reference answer. Return the comparison and necessary evidence, not the entire log. In the next cell, reuse the retained data without reading it again.
+> 把生成的示例日志读进 Python 变量，完整数据留在内核里。统计与测量脚本相同的计数和可定位样本，跟导出的参考答案核对。对话只返回核对结果和必要证据。下一格直接复用刚才的数据，不重新读文件。
 
-Check the comparison and reuse the same variable in the next cell.
+检查核对结果，再确认下一格复用了同一个变量。
 
-## Add the control surfaces you need
+## 按需要加控制能力
 
-The 3 computer-operating tools live under `skills/`. Install dsh-python-repl first, then register that folder as a trusted skill directory in its configuration so the assistant can call them. Each tool's README has the steps; see [Components](#components).
-
-## What DSH provides and what this adds
+操作电脑的 3 个工具放在 `skills/` 下。先装好 dsh-python-repl，再在它的配置里把这个目录登记为可信的技能目录，助手就能直接调用；每个工具的说明里有具体步骤，见[由哪几块组成](#由哪几块组成)。
+## DSH 自带什么，本仓库加了什么
 
 ```mermaid
 flowchart TD
-    H["DeepSeek Harness: sessions, models, tools, policies"] --> P["Python runtime plugin"]
-    H --> C["Control, context and stream plugins"]
-    P --> K["Per-session Python kernel"]
-    K --> T["Harness tool bridge"]
-    K --> S["Trusted Python skills"]
-    S --> B["Browser: CDP"]
-    S --> D["macOS: Accessibility and input"]
-    S --> R["Remote host: OpenSSH"]
-    T --> V["Complete result values"]
+    H["DeepSeek Harness：会话、模型、工具和策略"] --> P["Python 运行时插件"]
+    H --> C["控制、上下文与模型流插件"]
+    P --> K["每个会话的 Python 内核"]
+    K --> T["宿主工具桥接"]
+    K --> S["可信 Python 技能"]
+    S --> B["浏览器：CDP"]
+    S --> D["macOS：辅助功能和输入"]
+    S --> R["远端主机：OpenSSH"]
+    T --> V["完整结果值"]
     V --> K
-    K --> E["Selected evidence in the conversation"]
+    K --> E["展示到对话的必要证据"]
     C --> H
 ```
 
-| Responsibility | Host supplies | This repository adds |
+| 职责 | DSH 自带 | 本仓库增加 |
 | --- | --- | --- |
-| Agent execution | Sessions, models, tools, jobs, policies | Extensions, not a new model service. |
-| Code | TypeScript programmatic tool calling | Python backend, bridge, skill loading, snapshots. |
-| Compaction | Triggers, basic engine, checkpoints | Retention defaults, bounded instructions, exact-user-text appendix. |
-| Control | Internal typed services | Local endpoint, CLI/Python/MCP, receipts, settled observation. |
-| Devices | Execution and tool-policy context | Skills using CDP, Accessibility, and SSH permissions. |
-| Output/events | Jobs, rendering, spill storage, delivery | Display budgets, stream checks, producer delivery. |
+| agent 执行 | 会话、模型、工具、任务和策略 | 扩展能力，不另建模型服务。 |
+| 程序执行 | TypeScript 程序化工具调用 | Python 后端、桥接、技能加载和快照。 |
+| 压缩 | 触发、基础引擎和检查点 | 保留量默认值、有界指令、逐字用户附录。 |
+| 控制 | 内部类型化服务 | 本机入口、CLI/Python/MCP、回执和稳定停止观察。 |
+| 设备 | 执行及工具策略环境 | 使用真实 CDP、辅助功能和 SSH 权限的技能。 |
+| 输出与事件 | 后台任务、显示、完整输出存储和投递 | 显示预算、流检查和生产者事件投递。 |
 
-## Compare by the problem you have
+## 按问题选择其他方案
 
-Choose by the workflow you need. Scope below comes from each project's documentation.
+下面按各项目自己的说明比较适用范围。
 
-| Option and source | Published scope | When it may be a better fit |
+| 方案与出处 | 主要范围 | 适合的需求 |
 | --- | --- | --- |
-| [browser-use][browser-use] | Browser agent with model-written Python, a persistent REPL, and CDP. | Browser-focused agent/library or hosted browsers without DSH. |
-| [browser-harness][browser-harness] | Real-browser CDP access for existing agents, through CLI/skill or MCP. | Add browser access to your current coding agent. |
-| [cua][cua] | Desktop CLI, MCP, SDKs, and virtual-desktop offerings. | Its desktop/VM ecosystem or platform matrix fits your target. |
-| [OmO][omo] | Coding-agent system with multi-model orchestration and memory workflow. | Adopt its integrated workflow for your coding agent. |
-| Direct MCP tools: [integration examples][browser-harness] · [protocol architecture][mcp] | Client/server interface for tools and other capabilities. | Existing clients and servers supply your required tools, state, and permissions. |
+| [browser-use][browser-use] | 模型写 Python、持久内核、CDP，以及托管浏览器服务。 | 需要以浏览器为中心的 agent 或库，不必采用 DSH。 |
+| [browser-harness][browser-harness] | 给现有编程 agent 接真实浏览器，提供命令行、技能和 MCP 路径。 | 保留现有 agent，只补浏览器能力。 |
+| [cua][cua] | 桌面命令行、MCP、SDK 和虚拟桌面。 | 它的桌面、虚拟机生态及平台范围符合目标。 |
+| [OmO][omo] | 多模型编程 agent 编排和记忆工作流。 | 希望采用它提供的一整套编程协作方式。 |
+| 直接调用 MCP：[集成示例][browser-harness] · [协议架构][mcp] | 连接客户端和服务端，提供工具及其他能力。 | 现有客户端和服务端已能提供需要的工具、状态及权限。 |
 
-Python plus CDP is shared ground. This collection adds DSH runtime control and context helpers. `dsh-control` also exposes MCP; each client decides how results enter its transcript.
+Python 加 CDP 是共同基础。这套扩展另外提供 DSH 实例控制和上下文处理；`dsh-control` 也支持 MCP。结果如何进入对话，取决于具体客户端。
 
-## Design choices worth inspecting
+## 值得看的设计取舍
 
-- [Python data locality](docs/design/python-data-locality.md).
-- [Compaction generations](docs/design/three-generations-of-compaction.md).
-- [Controller and worker](docs/design/controller-worker.md).
-- [Task boundaries](docs/design/task-isolation.md).
-- [Output boundaries](docs/design/output-guard.md).
+- [数据留在内核](docs/design/python-data-locality.md)：完整值、展示和恢复。
+- [三代压缩方案](docs/design/three-generations-of-compaction.md)：原话、清单和长度预算。
+- [主控与执行端](docs/design/controller-worker.md)：回执、状态和验收。
+- [任务边界](docs/design/task-isolation.md)：窗口、目标和归属。
+- [输出边界](docs/design/output-guard.md)：展示、模型流和事件历史。
 
-## Security and limits
+## 安全和使用限制
 
-**The Python kernel is trusted code, not a sandbox.** It can access files, networks, and processes independently of the Harness tool bridge. Configured skills execute Python during import. Host tool approval does not revoke Python's operating-system access.
+**Python 内核运行可信代码，不是沙箱（sandbox）。** 它能直接访问文件、网络和进程。配置的技能会在导入时执行 Python；宿主工具审批不会撤销 Python 本身的系统权限。
 
-Browser attachment may use an authenticated profile. Task windows share that profile's account state; debugging access must not be exposed to an untrusted network. Desktop control requires macOS permissions and can affect real windows. Targeted input reduces interference but cannot eliminate focus races. SSH uses the destination account's real permissions, not a simulated remote environment. A timeout does not undo an external action.
+浏览器可能使用已登录的资料，任务窗口仍共享账号状态。调试入口不能向不可信网络开放。桌面控制需要 macOS 权限，会操作真实窗口；定向输入减少互相干扰，但不能消除所有焦点竞争。SSH 使用目标账号的真实权限。超时不会撤销已经发生的外部动作。
 
-The control endpoint is local to the system account; do not proxy it publicly. Its read-only mode and namespace restrictions cover that interface, not arbitrary Python.
+本机控制入口只面向同一系统账号，不应公开转发。只读模式和禁止访问的接口分组只约束这个入口，不约束任意 Python。
 
-The Python bundle replaces TypeScript PTC and disables dependent workflow entries. Startup may download dependencies. Snapshots restore supported values, not live connections or processes. A short display does not prove source completeness. Contract tests check interfaces; live sites and desktops need separate verification.
+Python 组合包会替换原有的 TypeScript 程序化工具调用（PTC）后端，并关闭依赖它的工作流条目。内核启动可能下载依赖。快照能恢复支持保存的值，不能恢复活连接或进程。展示很短也可能只是截断；下结论前仍须核对完整性。接口测试通过，不能代替真实网站和桌面验收。历史分页只减少界面传输，不减少模型上下文。
 
-Read [SECURITY.md](SECURITY.md) for private vulnerability reporting and [CONTRIBUTING.md](CONTRIBUTING.md) for verification. Keep credentials, authenticated screenshots, and real session logs out of issues.
+漏洞走[私密报告](SECURITY.md)，验证方式见[贡献指引](CONTRIBUTING.md)。公开问题中不要放凭据、登录截图或真实会话日志。
 
-## When something goes wrong
+## 出错时先看哪里
 
-First find which step actually failed: was the plugin built, did the assistant find the tool, is the target page or window still there, was the message really delivered? Confirm you have complete data before counting anything. Each component's README explains recovery.
+先找出到底哪一步坏了：插件有没有构建出来、助手有没有找到工具、要操作的网页或窗口还在不在、消息有没有真的送到。统计数字前，先确认拿到的是完整数据。各部件的说明里有恢复步骤。
 
-Use the [bug form](.github/ISSUE_TEMPLATE/bug.yml) with fictional inputs and actual check results; report private findings through [security reporting](SECURITY.md).
+用[缺陷表单](.github/ISSUE_TEMPLATE/bug.yml)提供虚构复现和实际检查结果；私密发现走[安全报告](SECURITY.md)。
 
-## Contributing, license, and attribution
+## 贡献、许可与致谢
 
-For small, evidenced changes, start with [CONTRIBUTING.md](CONTRIBUTING.md), the [Code of Conduct](CODE_OF_CONDUCT.md), and [agent guidance](AGENTS.md). Contributors own their generated changes and actions.
+从[贡献指引](CONTRIBUTING.md)、[行为准则](CODE_OF_CONDUCT.md)和[agent 协作指引](AGENTS.md)开始。提交者对生成内容及外部动作负责。
 
-Code is [MIT licensed](LICENSE); third-party notices remain, including the [Prime REPL license](dsh-python-repl/vendor/prime/LICENSE) and [provenance](dsh-python-repl/vendor/PROVENANCE.md). Thanks to DeepSeek Harness and upstream authors for the host engine and Python orchestration foundations.
+代码使用 [MIT 许可](LICENSE)。保留第三方声明，包括 [Prime 内核许可](dsh-python-repl/vendor/prime/LICENSE)和[来源记录](dsh-python-repl/vendor/PROVENANCE.md)。感谢 DeepSeek Harness 及上游作者提供宿主引擎和 Python 编排基础。
 
 [browser-use]: https://github.com/browser-use/browser-use
 [browser-harness]: https://github.com/browser-use/browser-harness

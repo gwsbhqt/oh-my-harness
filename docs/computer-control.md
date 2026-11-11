@@ -1,34 +1,36 @@
-# Using computer-control
+中文 | [English](computer-control.en.md)
 
-Use computer-control for native macOS applications, browser chrome, and dialogs outside a web page. Typical tasks include inspecting an application’s controls, changing a setting through its interface, or checking a native dialog after a browser action. For content inside a web page, start with browser-control.
+# 使用 computer-control
 
-## Prepare the destination
+操作原生 macOS 应用、浏览器外壳，以及网页之外的对话框时，使用 computer-control。常见任务包括查看应用控件、通过界面修改设置，或在浏览器操作后检查原生对话框。网页内部的内容优先使用 browser-control。
 
-The tool combines an asynchronous Python interface with a locally compiled Swift executor. It supports macOS and requires Python 3.12 or newer plus Xcode Command Line Tools with a working Swift compiler. Compile on the destination rather than copying a cached executable from another architecture.
+## 准备目标机器
 
-Check permissions before attempting control:
+工具将异步 Python 接口与本地编译的 Swift 执行程序组合使用。它支持 macOS，需要 Python 3.12 或更新版本，以及带有可用 Swift 编译器的 Xcode Command Line Tools。应在目标机器上编译，不要复制其他架构的缓存可执行文件。
+
+尝试控制前，先检查权限：
 
 ```python
 permissions = await skills.computer_control.perms(host="local")
 windows = await skills.computer_control.windows("Calculator", host="local")
 ```
 
-This fictional walkthrough uses Calculator as an inspection target. Read the returned permission and window information before continuing. Accessibility permission enables native inspection and actions; Screen Recording permission enables screenshots. Grants apply to the actual host process, so a working version command does not establish either permission. Requesting or granting permissions requires an explicit user decision.
+这个虚构演练把计算器作为检查目标。继续之前，先读返回的权限和窗口信息。辅助功能权限用于原生界面检查与操作，屏幕录制权限用于截图。权限授予的是实际执行操作的进程。版本命令可用，并不代表这两项权限已经具备。请求或授予权限需要用户明确决定。
 
-## Bind, inspect, act, inspect again
+## 绑定、检查、操作，再检查
 
-Select the application and stable window returned by inspection, and keep that selection for the task. A window title alone is insufficient, especially for browsers with multiple windows. The Python application handle can retain the chosen host, task scope, and window reference. Use the documented interface to create that handle and inspect its controls before issuing input.
+选择检查结果中的应用和稳定窗口引用，并在整个任务中保留这个选择。只看窗口标题不够，尤其是浏览器有多个窗口时。Python 应用引用可以保留目标机器、任务范围和窗口引用。按文档接口创建引用，并在输入前检查控件。
 
-For a fictional settings task, first read the current value, change the intended control, and then inspect the same window again. Confirm the new value and any visible save confirmation. If the task produces a document, check the resulting document as well. A successful input response proves only that step; it does not establish the final application result.
+以虚构的设置任务为例，先读当前值，再修改目标控件，然后重新检查同一窗口。确认新值及任何可见的保存提示。如果任务生成了文档，也要检查最终文档。输入成功的响应只能证明这一步，不能证明应用中的最终结果。
 
-Snapshots provide element information, and optional screenshots show visual state. When an element reference is stale, inspect again and locate the control from the new state. Do not reuse an old number after the interface changes. Keep screenshots and structured inspection complementary: one shows appearance, while the other can expose control names and values.
+快照提供元素信息，可选截图展示视觉状态。元素引用失效时，重新检查，并从新状态定位控件。界面变化后不要复用旧编号。截图和结构化检查相互补充：前者展示外观，后者能提供控件名称和值。
 
-## Failure boundaries
+## 失败时的边界
 
-Targeted input does not silently switch to global foreground input. Explicit global input can affect the foreground application, so use it only when the authorized task requires it. Selected targeted mouse and synthetic-focus operations use private SkyLight interfaces and may stop working after a macOS update. Unsupported operations fail rather than switching to a different mouse path.
+定向输入不会悄悄改为全局前台输入。明确启用的全局输入会影响前台应用，只能在已授权任务需要时使用。部分定向鼠标和模拟焦点操作使用私有 SkyLight 接口，可能在 macOS 更新后失效。不支持的操作会报错，不会切换另一种鼠标操作方式。
 
-Inspection can launch an application automatically when it is not running. The documented no-autolaunch setting is available when that behavior is unwanted. Remote operations require an existing SSH alias, the remote command, shared routing support, and permissions on that destination. Missing tools or permissions cause errors; the request neither installs software nor falls back to this computer.
+检查操作可能在应用未运行时自动启动它。不希望自动启动时，可以使用文档中的禁止自动启动设置。远程操作需要已有 SSH 别名、远端命令、公共路由支持，以及目标机器上的权限。缺工具或权限会报错，不会自动安装软件，也不会退回这台电脑执行。
 
-The tool and its Python environment are not sandboxes. In Harness, trusted Python can access host resources independently, while Harness tool calls retain their approval and policy checks. Application ownership checks help keep actions on the selected target; they do not replace task authorization.
+工具及其 Python 环境都不是沙箱。在 DSH 中，受信任的 Python 代码可以直接访问运行它的机器上的资源。通过 DSH 工具发起的调用仍需经过审批和策略检查。应用归属检查有助于把操作留在选中目标上，但不能替代任务授权。
 
-Use the [tool README](../skills/computer-control/README.md) and its linked references for complete parameters, ownership behavior, runtime settings, and maintenance. Consult the [Python runtime README](../dsh-python-repl/README.md) for trusted skill discovery and the [Python data locality design](design/python-data-locality.md) for background. This guide does not claim live application acceptance.
+完整参数、归属行为、运行设置和维护方式见[工具说明](../skills/computer-control/README.md)及其参考文档。受信任技能的发现方式见 [Python 运行环境说明](../dsh-python-repl/README.md)，背景见 [Python 数据留在本地的设计](design/python-data-locality.md)。这份教程不声称已完成真实应用验收。

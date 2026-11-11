@@ -1,31 +1,33 @@
-# Recover from runaway model output
+中文 | [English](dsh-output-guard.en.md)
 
-`dsh-output-guard` watches agent output while it streams. It can stop repeated text, excessive blank runs, oversized tool arguments, and replies that finish without an answer or usable tool call. Use it to keep a malformed response from consuming the rest of a step and being mistaken for useful progress. It covers the main agent and subagents; non-agent model requests pass through unchanged.
+# 从失控的模型输出中恢复
 
-## What happens during a guarded step
+`dsh-output-guard` 在 Agent 输出流式到达时检查它。它可以停止重复文本、连续大量空白、过大的工具参数，以及没有答案也没有可用工具调用就结束的回复。适合阻止格式异常的响应耗尽一步的剩余资源，并被误认为有效进展。它覆盖主 Agent 和子 Agent，非 Agent 模型请求原样通过。
 
-The plugin runs automatically once installed and enabled. There is no separate command to wrap around each request. For example, imagine an agent repeats the same explanatory sentence instead of moving on to its next action. When the repetition meets the configured limits, the guard closes the upstream stream and reports a failed attempt.
+## 受保护的一步会发生什么
 
-With automatic retry enabled, it writes a corrective notice identified as `output-guard` and retries that agent's step once. The runaway content is not fed back as a prompt. If the next attempt also fails, normal host error handling takes over. The plugin does not switch models or change the permanent system prompt.
+安装并启用后，插件自动运行，不需要给每次请求另包一条命令。例如，Agent 一直重复同一句解释，没有推进下一步动作。重复达到配置限制时，防护会关闭上游输出流，并报告这次尝试失败。
 
-This retry is bounded per agent, turn, and step. It is not a general retry mechanism for failed tools, services, or business operations. After a guarded failure, inspect any actions already completed before deciding whether more work should run.
+启用自动重试时，它会写入来源标为 `output-guard` 的纠正通知，再重试该 Agent 的这一步一次。失控内容不会作为提示词重新喂回。如果下一次尝试仍失败，就交给 DSH 的正常错误处理。插件不会切模型，也不修改永久系统提示词。
 
-## Know which patterns are checked
+重试按 Agent、轮次和步骤分别限制。它不是工具、服务或业务操作失败后的通用重试机制。防护触发失败后，要先检查已经完成的动作，再决定是否继续执行。
 
-Repetition detection applies to reasoning and answer text. It normalizes whitespace and common Markdown emphasis characters before comparison. Numeric and punctuation-only structures are excluded, and tool arguments are exempt from repetition detection because ordinary code can contain repeated lines.
+## 了解检查哪些模式
 
-Other checks still apply to tool arguments. Long consecutive whitespace runs include JSON whitespace escapes, and each tool call has its own total argument-length counter. If an intended write is too large, divide the work into smaller calls instead of treating a stopped attempt as a completed write.
+重复检测作用于推理和回答文字。比较前会统一空白和常见 Markdown 强调符号。纯数字或纯标点结构不参与检测。工具参数不做重复检测，因为普通代码也可能包含重复行。
 
-The finish check rejects a normal or token-limited ending that contains no answer text and no usable tool call. A tool call discarded at the token limit does not establish a usable result. The guard can detect this shape of empty completion; it cannot determine whether a fluent answer actually meets the user's request.
+其他检查仍作用于工具参数。连续大量空白的检查包括 JSON 中转义的空白，每次工具调用也有独立的参数总长计数。计划写入的内容过大时，把工作拆成更小调用，不要把被停止的尝试当成已经写完。
 
-## Confirm recovery, then check the task
+结束检查会拒绝正常结束或达到 token 上限结束、但既无答案文字又无可用工具调用的响应。因 token 上限被丢弃的工具调用不构成可用结果。防护能识别这种空完成形式，但不能判断流畅的回答是否真正满足用户要求。
 
-When investigating a stopped step, look for the guard failure and corrective notice, then inspect the retry's outcome. Confirm the requested artifact or behavior separately. A concise answer after retry is evidence that output recovered, not evidence that the underlying task succeeded.
+## 先确认输出恢复，再检查任务
 
-The repository tests exercise synthetic text and tool payloads, stream fragmentation, cancellation, thresholds, and the one-retry limit. A real DSH Session test checks conversation-history handling. Those tests do not call a model or establish live provider behavior, and this guide does not claim live acceptance testing.
+排查被停止的步骤时，先找防护失败记录和纠正通知，再检查重试结果。实际产物或行为要另外确认。重试后的简洁回答只能证明输出恢复，不能证明任务已经成功。
 
-## Adjust deliberately
+仓库测试使用虚构文本和工具参数，覆盖流分片、取消、阈值及只重试一次的限制。另有真实 DSH Session 测试检查会话历史处理。这些测试不会调用模型，也不能证明真实服务商行为，本教程也不声称做过真实环境验收。
 
-Legitimate repetitive output or large tool payloads can meet a heuristic limit. If this happens, compare the intended output with the active thresholds before changing them. Settings are read for new requests; configuration changes do not retroactively repair a failed step. Disabling checks removes this protection rather than proving the original output was valid.
+## 有依据地调整
 
-See the [plugin README](../dsh-output-guard/README.md) for installation, the existing `output-guard` entry, every setting and default, and disabling options. [Output guard design](design/output-guard.md) explains the recovery boundary. This is a stream heuristic, so it does not guarantee correct answers or detection of every loop.
+合理的重复输出或大工具参数也可能达到启发式限制。遇到这种情况，调整前先比较预期输出和实际阈值。设置在新请求时读取，修改配置不会追溯修复已失败的步骤。禁用检查只是移除保护，不能证明原输出正确。
+
+安装、现有 `output-guard` 条目、全部设置与默认值，以及禁用选项见[插件说明](../dsh-output-guard/README.md)。[输出防护设计](design/output-guard.md)解释恢复的边界。这是根据输出特征判断的防护，不保证答案正确，也不能检测所有循环。

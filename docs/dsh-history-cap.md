@@ -1,13 +1,15 @@
-# Using dsh-history-cap
+中文 | [English](dsh-history-cap.en.md)
 
-Use this plugin when opening a session with a very large turn causes the interface to receive an enormous initial history response. A turn containing many tool events can be large even when the conversation has few turns. The plugin caps the number of raw history records delivered in one response, allowing earlier records to be requested separately. It changes history delivery to the interface; it does not trim the model's context or reduce model token usage. Installation and bundle registration are covered in the [plugin README](../dsh-history-cap/README.md).
+# 使用 dsh-history-cap
 
-Once enabled, the plugin wraps the host history controller's page, event, and follow operations. A response containing more than 1000 records retains the newest 1000 and reports that more history is available. The interface's existing **Load earlier** action retrieves the preceding records. The initial snapshot of a follow stream is capped, while subsequent live updates pass through unchanged. This preserves ongoing updates rather than treating a live session as a sequence of capped historical pages.
+打开含有超大轮次的会话时，界面可能一次收到巨大的历史响应。即使会话轮数不多，单轮也可能含有很多工具事件。这个插件限制每次响应传给界面的原始历史记录数，让较早记录可以另外请求。它改变的是界面的历史投递，不会裁剪模型上下文，也不会减少模型 token 用量。安装和配置组合（bundle）注册见[插件说明](../dsh-history-cap/README.md)。
 
-Imagine a fictional session with one turn containing thousands of tool records. Opening it should show the newest portion first. Use **Load earlier** repeatedly to work backward until the earlier portion is available. Records are counted individually, so a page does not necessarily correspond to a complete turn or a fixed number of visible chat bubbles. A normal session with fewer records can look much the same as before; the useful difference appears when a response would exceed the limit.
+启用后，插件包装 DSH 历史控制器的分页、事件和跟随操作。响应超过 1000 条记录时，只保留最新 1000 条，并报告还有更多历史。界面已有的 **Load earlier** 操作会取回更早记录。跟随流的初始快照受限制，之后的实时更新原样通过。因此实时会话的持续更新不会被当成一页页受限的历史。
 
-To confirm the result after deployment, switch between a normal session and a deliberately large session in the actual interface. Check that the large session opens, that earlier records load in order without gaps, and that new live updates continue to appear. If inspecting responses, distinguish the bounded initial snapshot from later updates. Merely seeing **Load earlier** is insufficient evidence, because ordinary history pagination may already display that action. A successful opening also does not by itself prove every earlier record is retrievable; exercise backward pagination.
+假设一个虚构会话的单轮包含数千条工具记录。打开它时，应先显示最新部分。反复使用 **Load earlier** 向前读取，直到取回较早部分。记录逐条计数，所以一页不一定对应完整一轮，也不对应固定数量的可见聊天气泡。记录较少的正常会话看起来可能和以前相同，只有响应原本会超过限制时，差异才明显。
 
-There are no runtime configuration fields. The 1000-record limit is a source constant, not a profile setting. Helper arguments used in tests do not expose a supported configuration option. The README gives the existing `history-cap` entry's disable example. Code changes require rebuilding and restarting the host; reopening the interface alone does not reload the plugin. Keep the shared tooling directory beside the plugin when following its documented build workflow.
+部署后，在真实界面中切换普通会话和刻意准备的大会话来确认结果。检查大会话能打开、旧记录按顺序加载且没有缺口、新的实时更新持续出现。查看响应时，要区分受限的初始快照和后续更新。只看到 **Load earlier** 不足以证明插件生效，因为普通历史分页也可能已经提供它。成功打开也不能单独证明所有旧记录都能取回，要实际向前翻页。
 
-The plugin leaves session storage intact and does not filter event types. Its scope is the host controller methods it wraps, so compatibility depends on those methods retaining their expected implementation shape. Run the documented checks against an upgraded host before deployment. The README describes a synthetic large-history test that checks pagination, stream cancellation, live updates, and unload restoration. That coverage is useful implementation evidence, but it is not a GUI performance measurement or a guarantee about a particular session's loading time. If the host supplies an equivalent raw-record page limit, reconsider whether this additional wrapper is still needed.
+没有运行时配置字段。1000 条限制写在源码中，不能通过 profile 配置修改。测试中使用的辅助参数不是受支持的配置选项。插件说明提供了禁用已有 `history-cap` 条目的示例。代码变化需要重新构建并重启 DSH，只重新打开界面不会重新加载插件。按文档构建时，把公共 tooling 目录保留在插件旁边。
+
+插件不改动会话存储，也不筛选事件类型。范围只包括它包装的 DSH 控制器方法，因此兼容性取决于这些方法是否保持预期实现形式。升级 DSH 后，部署前先运行文档中的检查。插件说明介绍了虚构的大历史测试，覆盖分页、流取消、实时更新和卸载恢复。这些测试能证明部分实现行为，但不是界面性能测量，也不保证某个会话的加载时间。如果 DSH 提供等效的原始记录分页限制，应重新考虑是否还需要这层包装。

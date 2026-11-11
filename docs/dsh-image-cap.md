@@ -1,13 +1,15 @@
-# Using dsh-image-cap
+中文 | [English](dsh-image-cap.en.md)
 
-Use this plugin for sessions that accumulate screenshots, reference images, or other visual attachments and need predictable request budgets. It adds a long-edge policy and an image-count policy to DSH's existing attachment handling. DSH continues to resize, encode, cache, and enforce its own byte and area policies. The plugin does not process pixels itself. Start with the [plugin README](../dsh-image-cap/README.md) for installation, the complete settings reference, and bundle registration.
+# 使用 dsh-image-cap
 
-Choose a long-edge limit according to the detail the task requires. When the host's request target exceeds that limit, the plugin asks the host to calculate a smaller target. Existing smaller targets and byte budgets remain intact. In a fictional example, a 4800-by-800 image with a 2000-pixel limit produces a 2000-by-333 target. That describes dimension selection, not a measured upload size. Small labels or fine visual details may become harder to read, so verify that the resulting image remains useful for the task.
+会话不断累积截图、参考图片或其他视觉附件，并且需要可预期的请求预算时，可以使用这个插件。它在 DSH 现有附件处理上增加长边限制和图片数量限制。缩放、编码、缓存及原有的字节与面积限制仍由 DSH 执行。插件本身不处理像素。安装、完整设置和配置组合（bundle）注册见[插件说明](../dsh-image-cap/README.md)。
 
-The count policy applies to agent-loop requests before the model adapter runs. When retained image blocks exceed the budget, the oldest images are replaced in that request with the host's text placeholders and attachment information. Original session messages and attachments remain unchanged. If an older image becomes relevant again, the agent needs the host's attachment-reading tools to view it. The placeholder is a reference to omitted visual context, not evidence that the model still sees those pixels.
+按任务需要的细节选择长边上限。DSH 的请求目标尺寸超过限制时，插件会请 DSH 计算更小的目标。原本更小的目标和字节预算不变。以虚构例子说明：4800×800 图片在 2000 像素长边限制下，会得到 2000×333 的目标尺寸。这说的是尺寸选择，不是测得的上传大小。小标签或精细细节可能更难辨认，所以要确认结果对任务仍然有用。
 
-Offloading happens in batches. For an illustrative budget of 30 and a batch size of 8, a request with 31 images omits the oldest 8 and keeps 23. Requests with 38 images omit the same 8; at 39, the omitted prefix grows to 16. Larger batches keep the history prefix stable for longer but can remove more images than immediately necessary. A batch size of 1 minimizes that extra omission. The shipped bundle uses a lower count budget than the schema default, so consult the README rather than assuming its illustrative budget is your active setting. Provider-specific overrides use actual provider IDs.
+数量限制在模型适配器运行前，作用于 Agent 循环请求。保留的图片块超过预算时，该次请求中的最旧图片会被替换为 DSH 的文字占位和附件信息。原始会话消息与附件不变。需要旧图片时，Agent 得通过 DSH 的附件读取工具再看它。占位文字只是被省略视觉内容的引用，不代表模型仍能看到像素。
 
-To confirm the result, inspect request targets and adapter-bound agent requests in a controlled check. Confirm that oversized targets shrink, recent images remain, older ones become placeholders, and the original session attachments remain available. Both ordinary and prepared streaming calls are covered for agent-loop requests. These are verification steps to perform in your environment, not a claim that a live provider or interface has been checked here.
+图片按批次移出请求。假设预算为 30、批量为 8，31 张图片的请求会移出最旧 8 张，留下 23 张。38 张时仍移出同样 8 张。到 39 张时，移出的旧图片增加到 16 张。批量越大，保留的历史开头越久不变，但也可能比当前必要数量多移出图片。批量设为 1，可以尽量减少额外移出。随包 bundle 使用的数量预算低于配置定义的默认值，因此不要把这里的示意预算当作正在生效的设置，应查插件说明。针对服务商的覆盖使用真实 provider ID。
 
-All four settings can be changed through the settings card or the existing `image-cap` profile entry and apply to subsequent calls. External tools that make their own network requests are outside this plugin's coverage, and non-agent requests do not receive its count limit. This policy does not grant file access or change tool permissions. Resolution or projection errors pass the original request onward with a warning; changed host internals can disable a hook. Consult the README's contract-test guidance after upgrades. No setting guarantees provider acceptance, a particular transfer saving, or preserved image detail.
+确认结果时，在受控检查中查看请求目标尺寸和交给适配器的 Agent 请求。确认过大目标变小、近期图片保留、旧图片变成占位、原始会话附件仍可用。数量限制覆盖 Agent 循环中的普通调用和预先准备的流式调用。这些是需要在你的环境中执行的验证步骤，不声称这里已经检查过真实服务商或界面。
+
+四个设置都能在设置卡片中修改，也能通过 profile 中已有的 `image-cap` 条目修改。新设置对后续调用生效。自己发网络请求的外部工具不在覆盖范围内，非 Agent 请求也不受数量限制。此策略不会授予文件访问权或改变工具权限。解析配置或生成请求内容出错时，会发出警告，并继续传递原请求。DSH 内部变化可能让插件无法继续限制图片。升级后参照插件说明中的接口约定测试指引。任何设置都不保证服务商一定接受、不保证传输节省比例，也不保证图片细节完好。
