@@ -2,6 +2,8 @@
 
 [← oh-my-harness](../README.md#components) · [中文首页](../README.zh-CN.md#由哪几块组成)
 
+**In short:** Cleans up notices DSH adds to the chat: marks them as system notices rather than your words, drops duplicates, gives background jobs readable names, and sends only the changed part of an updated instruction file.
+
 Tidy messages that DSH adds to an agent's model context. Four independently switchable features identify plugin notices, remove identical notices within a step, give background jobs useful labels, and send small instruction-file updates as diffs.
 
 ## Requirements and installation

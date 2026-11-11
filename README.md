@@ -88,7 +88,9 @@ These are real recordings using fictional data and local example pages. No accou
 
 ![Browser control filling a fictional checklist and verifying the final page state](docs/assets/browser-control.gif)
 
-**Operate a Mac desktop app.** This recording is being redone and will appear here.
+**Operate a Mac desktop app.** Write a fictional checklist in the built-in TextEdit, change two items, and read the window's text back after every step. Frames are step-by-step captures of a real window.
+
+![computer-control writing and editing a fictional checklist in a real TextEdit window, reading it back at each step](docs/assets/computer-control.gif)
 
 **A background event wakes a session.** When a file is written, the idle session wakes, checks the content, and stops listening.
 

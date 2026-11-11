@@ -2,6 +2,8 @@
 
 [← oh-my-harness](../../README.md#components) · [中文首页](../../README.zh-CN.md#由哪几块组成)
 
+**In short:** Operates ordinary Mac app windows: read the interface, click, type, screenshot. Keystrokes go only to the chosen window.
+
 Read and control explicitly selected native macOS applications through Accessibility, screenshots and targeted input. A Swift executor supplies the native operations; Python provides asynchronous application/window handles, ownership checks and the command line interface. Web-page content should normally use the browser tool.
 
 ## Requirements and installation

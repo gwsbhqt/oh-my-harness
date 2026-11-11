@@ -2,6 +2,8 @@
 
 [← oh-my-harness](../../README.md#components) · [中文首页](../../README.zh-CN.md#由哪几块组成)
 
+**In short:** Shared library behind browser-control, computer-control, and remote-host: connections and target-machine handling. Not used on its own.
+
 Internal Python support for the sibling browser, native-desktop and SSH tools. This directory is a library, not an agent skill: do not expose it as a callable skill or install a global compatibility alias.
 
 ## Layout and dependencies

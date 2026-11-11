@@ -2,6 +2,8 @@
 
 [← oh-my-harness](../README.md#components) · [中文首页](../README.zh-CN.md#由哪几块组成)
 
+**In short:** Lets the assistant do its work in Python. One step can call many tools; large data stays in the program and only the checked conclusion goes into the chat.
+
 Persistent Python cells for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). The plugin replaces the built-in TypeScript PTC runtime behind `run_code` with a Python process for each session.
 
 ## What it provides
