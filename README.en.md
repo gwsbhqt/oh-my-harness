@@ -54,6 +54,8 @@ Estimates use **ceil(UTF-16 code units / 4)** on returned payload text, not a mo
 - **Shows tool instructions on demand.** Frequently used tools get full instructions; the rest get a one-line summary until needed, so each turn sends less boilerplate. [Prompt assembly source](dsh-python-repl/src/index.ts)
 - **Shows only the start and end of long output.** When a step prints thousands of lines, the chat shows the beginning and end; the full content stays in the program for later work.
 
+**How is this different from DSH's built-in code mode and Prime Agent?** DSH's built-in code mode has the model write TypeScript, and by default everything is cleared after each run. Prime Agent is a standalone AI assistant built around an always-open Python environment, but it cannot be installed into DSH. dsh-python-repl brings Prime's Python kernel into DSH: variables survive between steps and across restarts, and DSH still owns the conversation and permissions. [Full comparison](dsh-python-repl/README.en.md#how-this-differs-from-dshs-built-in-code-mode-and-prime-agent)
+
 [README and demo](dsh-python-repl/README.en.md) · [Guide](docs/dsh-python-repl.en.md) · [Design article: keep data in the program](docs/design/python-data-locality.en.md)
 
 ## Core 2: dsh-control, one assistant leads several others

@@ -29,7 +29,27 @@ These are real recordings using fictional data and local example pages. No accou
 - Python functions supplied by trusted skills, discovered before startup and imported before the first user cell. One failing skill does not prevent the others from loading.
 - A kernel tab for inspecting names and explicitly controlling the session kernel, bounded output with retrievable full text, and background Python work through `repl.background`.
 
-The built-in code mode runs TypeScript. This plugin runs Python and keeps a session's interpreter alive between calls. It uses the upstream Prime Agent REPL core with a Harness tool bridge; it does not install Prime's agent runtime or its native tool entry points. The bundle disables the TypeScript PTC backend and the workflow engine that requires it, including those workflow entries inside standard and creation presets. Python can still orchestrate subagents through `repl.agent`.
+## How this differs from DSH's built-in code mode and Prime Agent
+
+All three do the same kind of thing: the model writes a piece of code and calls tools from it. They differ in the language, in whether anything survives after the code runs, and in who is in charge.
+
+- **DSH's built-in code mode** is officially called PTC (programmatic tool calling). The model writes TypeScript and calls tools from it. By default every call starts a new Node process and closes it afterwards, so whatever one call computed is gone for the next. DSH can also keep memory between calls, but that is lost when DSH restarts.
+- **[Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent)** is a standalone open-source AI assistant from Prime Intellect. Its core idea is to give the model a Python environment that stays open, with variables saved as snapshots and restored after a restart. Reading files, running commands and starting subagents are all done by writing code in that Python environment, and it can connect to MCP servers. But it is a complete assistant with its own conversation loop, so it cannot be dropped into DSH.
+- **dsh-python-repl** takes Prime's Python kernel, puts it inside DSH, and replaces the built-in TypeScript code mode. DSH still runs the conversation, decides which tool calls need approval, and starts subagents. Prime contributes only the always-open Python environment.
+
+| | DSH built-in code mode | Prime Agent | dsh-python-repl |
+| --- | --- | --- | --- |
+| What it is | Built into DSH | A standalone AI assistant | A DSH plugin |
+| What the model writes | TypeScript | Python | Python |
+| Is the previous step's variable still there? | Not by default. With memory kept on, it still does not survive a DSH restart | Yes, restored from a snapshot after a restart | Yes, restored from a snapshot after DSH restarts |
+| Who owns the conversation, permissions and approvals | DSH | Prime itself | DSH |
+| Which tools it can call | DSH's tools | Prime's own files, commands, subagents and MCP connections, all called from Python | DSH's tools plus trusted Python skills, such as the browser, desktop and remote tools in this repository |
+
+**What it takes from Prime.** Only the Python kernel from Prime's runtime: `rlm/repl.py` and its instructions. Both files sit unchanged in [`vendor/prime/`](vendor/prime/); their source and hashes are recorded in [PROVENANCE.md](vendor/PROVENANCE.md). Prime's conversation loop, tools and installer are not installed.
+
+**Why not write one from scratch.** I had already written my own Python kernel for DSH. It was feature-complete at close to ten thousand lines of code and tests, and it needed its own process pool and a virtual environment per session. That was too much to maintain, so I archived it. Prime's kernel already solves and tests the hard parts, persistent variables and snapshot restore, so borrowing it left me with only the bridge to DSH to write.
+
+**What it turns off.** The bundle turns off DSH's built-in TypeScript code mode and the workflow feature that depends on it, including the matching entries in the standard and creation presets. To run several subagents from Python, use `repl.agent`.
 
 ## Requirements and supported platforms
 

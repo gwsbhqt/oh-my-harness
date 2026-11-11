@@ -54,6 +54,8 @@
 - **工具说明按需展开。** 常用的工具给完整说明，其余只给一句摘要，用到时再查，省下每一轮都要重复发送的说明文字。[提示组装源码](dsh-python-repl/src/index.ts)
 - **长输出只显示首尾。** 一次打印几千行时，对话里只显示开头和结尾，完整内容仍留在程序里，随时可以再算。
 
+**和 DSH 自带的代码模式、Prime Agent 有什么不同？** DSH 自带的代码模式让模型写 TypeScript，默认每次跑完就清空。Prime Agent 是一个独立的 AI 助手，核心是一个一直开着的 Python 环境，但它装不进 DSH。dsh-python-repl 把 Prime 的 Python 内核拿过来装进 DSH：变量能跨步骤、跨重启保留，对话和权限仍归 DSH 管。[三者的详细对比](dsh-python-repl/README.md#和-dsh-自带的代码模式prime-agent-有什么不同)
+
 [部件说明和演示](dsh-python-repl/README.md) · [教程](docs/dsh-python-repl.md) · [设计文章：数据留在程序里](docs/design/python-data-locality.md)
 
 ## 核心二：dsh-control，让一个助手带着几个助手干活

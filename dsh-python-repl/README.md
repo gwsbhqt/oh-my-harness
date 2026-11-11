@@ -29,7 +29,27 @@
 - 启动前发现可信技能，在第一个用户代码格执行前导入它们提供的 Python 函数。一个技能导入失败，不影响其他技能加载。
 - 在内核标签页查看名字，明确控制当前会话的 Python 内核。输出显示有上限，但可以取回完整文本。需要后台执行的 Python 工作可用 `repl.background`。
 
-DSH 自带的代码模式运行 TypeScript。本插件运行 Python，并在两次调用之间保留会话的解释器。底层使用上游 Prime Agent 的 REPL 核心，再接上 DSH 工具桥；不安装 Prime 的 agent 运行环境或它自带的工具入口。组合包会关闭原有的 TypeScript PTC 后端和依赖它的工作流引擎，也会关闭标准模式和创造模式中的对应工作流条目。Python 仍可通过 `repl.agent` 组织子代理。
+## 和 DSH 自带的代码模式、Prime Agent 有什么不同
+
+这三样东西做的是同一类事：让模型写一段代码，在代码里调工具。不同在于代码用什么语言写、跑完以后东西还在不在、由谁来管。
+
+- **DSH 自带的代码模式**，官方叫 PTC（程序化工具调用）。模型写一段 TypeScript，在里面调工具。默认每次都开一个新的 Node 进程，跑完就关，上一次算出来的东西下一次拿不到。DSH 也能开「保留内存」的模式，但 DSH 一重启就没了。
+- **[Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent)** 是 Prime Intellect 开源的一个独立 AI 助手。它的核心设计是给模型一个一直开着的 Python 环境，变量能存成快照，重启后接回来。读文件、跑命令、开子代理都在这个 Python 环境里写代码完成，还能接 MCP 服务。但它是一个完整的助手，有自己的对话循环，没法直接装进 DSH。
+- **dsh-python-repl** 把 Prime 的那个 Python 内核拿过来，装进 DSH，换掉自带的 TypeScript 代码模式。对话怎么跑、工具要不要审批、子代理怎么开，都还是 DSH 说了算。Prime 只贡献「一直开着的 Python 环境」这一块。
+
+| | DSH 自带代码模式 | Prime Agent | dsh-python-repl |
+| --- | --- | --- | --- |
+| 是什么 | DSH 内置功能 | 独立的 AI 助手 | DSH 插件 |
+| 模型写什么 | TypeScript | Python | Python |
+| 上一步的变量，下一步还在吗 | 默认不在。开了保留内存，也撑不过 DSH 重启 | 在，重启后从快照恢复 | 在，DSH 重启后从快照恢复 |
+| 对话、权限、审批归谁管 | DSH | Prime 自己 | DSH |
+| 能调哪些工具 | DSH 的工具 | Prime 自己的文件、命令、子代理和 MCP 连接，都在 Python 里调用 | DSH 的工具，再加上可信的 Python 技能，比如本仓库的浏览器、桌面、远程三个工具 |
+
+**从 Prime 拿了什么。** 只拿了 Prime 运行时里的 Python 内核，也就是 `rlm/repl.py` 和它的说明文件。两个文件原样放在 [`vendor/prime/`](vendor/prime/)，一个字节没改，来源和哈希记在 [PROVENANCE.md](vendor/PROVENANCE.md)。Prime 的对话循环、工具和安装包都没装。
+
+**为什么不自己写一个。** 我之前给 DSH 自己写过一版 Python 内核，功能都做完了，实现加测试接近一万行。进程池、每个会话的虚拟环境都得自己维护，代价太大，最后归档了。Prime 的内核已经把持久变量、快照恢复这些最难的部分做好、测好了。借过来以后，我只需要写一层把它接到 DSH 上的桥。
+
+**装上以后会关掉什么。** 组合包会关掉 DSH 自带的 TypeScript 代码模式，以及依赖它的工作流功能，标准模式和创造模式里对应的条目也一起关掉。想在 Python 里同时派几个子代理，用 `repl.agent`。
 
 ## 使用条件和支持平台
 
