@@ -1,5 +1,7 @@
 # browser-control
 
+[← oh-my-harness](../../README.md#components) · [中文首页](../../README.zh-CN.md#由哪几块组成)
+
 Control explicitly selected Chrome or Arc pages on macOS through the Chrome DevTools Protocol (CDP). The tool provides a command line interface and an asynchronous Python skill, including page inspection, navigation, screenshots, element actions and bounded network/debugging capture.
 
 ## Requirements and installation

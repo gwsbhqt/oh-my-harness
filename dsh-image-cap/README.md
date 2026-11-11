@@ -1,5 +1,7 @@
 # dsh-image-cap
 
+[← oh-my-harness](../README.md#components) · [中文首页](../README.zh-CN.md#由哪几块组成)
+
 Apply a long-edge limit and an image-count budget to model requests in DeepSeek Harness (DSH). This complements the host's image area, byte, encoding, and cache policies. It does not process pixels itself or add a native image dependency.
 
 ## Requirements and installation

@@ -1,5 +1,7 @@
 # dsh-compaction-bound
 
+[← oh-my-harness](../README.md#components) · [中文首页](../README.zh-CN.md#由哪几块组成)
+
 Bound the amount of recent text and summary text retained by DSH's built-in context compaction. This plugin augments the official `@deepseek-ai/dsh-compaction-basic` engine; it does not replace its compaction trigger, model context window, or maximum reply size.
 
 ## Requirements and installation

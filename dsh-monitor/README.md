@@ -1,5 +1,7 @@
 # dsh-monitor
 
+[← oh-my-harness](../README.md#components) · [中文首页](../README.zh-CN.md#由哪几块组成)
+
 Stream a long-running command's stdout into a DeepSeek Harness (DSH) agent session as lines arrive. Use it for log tails, build status, file watchers, and other event streams. Monitors also appear in DSH's background job list.
 
 ## Requirements and installation

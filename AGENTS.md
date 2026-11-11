@@ -6,7 +6,7 @@ Follow the user's task, the host's permissions, and more specific component inst
 
 - Root `dsh-*` directories contain independent DSH plugins. `tooling/` contains their shared build and contract utilities.
 - `skills/browser-control`, `skills/computer-control`, and `skills/remote-host` contain the operating tools; `skills/_shared` owns common transport and target handling.
-- Start with the relevant README and source call path. Use [docs](README.md#documentation-map) for scenarios and [design articles](docs/design/python-data-locality.md) for reasoning, not as substitutes for current code.
+- Start with the relevant README and source call path. Use [docs](README.md#components) for scenarios and [design articles](docs/design/python-data-locality.md) for reasoning, not as substitutes for current code.
 - Keep source imports, tests, package metadata, and documentation inside the released boundary. Never introduce an implicit dependency on a local personal configuration or an unpublished plugin.
 
 ## Execute with evidence

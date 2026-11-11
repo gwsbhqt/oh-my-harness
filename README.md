@@ -2,63 +2,126 @@
 
 # oh-my-harness
 
-**Keep the data in code. Put the evidence in the conversation.**
+**Add-ons for the AI assistant in DeepSeek Harness: let it write programs to get work done, split work with other assistants, operate the browser and the Mac, and keep working for hours without drowning in its own chat history.**
 
 [![CI](https://github.com/gwsbhqt/oh-my-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/gwsbhqt/oh-my-harness/actions)
-[![Release](https://img.shields.io/github/v/release/gwsbhqt/oh-my-harness)](https://github.com/gwsbhqt/oh-my-harness/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Extensions for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): persistent Python, controller/worker coordination, browser and macOS control, SSH, events, and context helpers. Install only what you need.
+## What this is
 
-An independent community project, **not affiliated with or endorsed by DeepSeek**. DeepSeek Harness is the host; these are unofficial extensions.
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) is an AI assistant app that runs on your Mac: you open a session, say what you need, and it calls tools to do the work.
+
+This repository is **not a standalone app**. It is 11 components that add abilities to DSH; install only the ones you need. There are two kinds:
+
+- **Plugins** load into DSH itself and change how it behaves. The 8 root folders that start with `dsh-` are plugins.
+- **Tools** are separate programs the assistant can call. The 3 tools live under `skills/` and also work on their own from a terminal.
+
+An independent community project, **not affiliated with or endorsed by DeepSeek**.
+
+## Components
+
+Click a name to open that component's own README with setup, configuration, and limits. "Guide" links to a task-oriented walkthrough.
+
+**Let the assistant write programs**
+
+| Component | What it does | Use it when |
+| --- | --- | --- |
+| [dsh-python-repl](dsh-python-repl/README.md) | Lets the assistant do its work in Python. One step can call many tools; large data stays in the program and only the checked conclusion goes into the chat. | You process big logs or tables, or one job needs many tool calls in a row. [Guide](docs/dsh-python-repl.md) |
+
+**Manage and coordinate**
+
+| Component | What it does | Use it when |
+| --- | --- | --- |
+| [dsh-control](dsh-control/README.md) | Remote-controls a running DSH: open sessions, hand out tasks, wait until they are really done, send notifications, restart. | One assistant acts as a lead and other sessions do the work. [Guide](docs/dsh-control.md) |
+| [dsh-monitor](dsh-monitor/README.md) | Watches a long-running command and wakes the assistant with each new line it prints. | You wait on a build, a log, or a file, and don't want the assistant to keep checking. [Guide](docs/dsh-monitor.md) |
+| [dsh-output-guard](dsh-output-guard/README.md) | Stops the model when it starts repeating itself, printing blank lines, or ending without an answer; can retry once automatically. | Long runs sometimes produce runaway output. [Guide](docs/dsh-output-guard.md) |
+
+**Operate the computer**
+
+| Component | What it does | Use it when |
+| --- | --- | --- |
+| [browser-control](skills/browser-control/README.md) | Operates chosen pages in Chrome or Arc: read, click, type, screenshot. Each task gets its own window and re-reads the page after acting. | The assistant should do something on a website for you. [Guide](docs/browser-control.md) |
+| [computer-control](skills/computer-control/README.md) | Operates ordinary Mac app windows: read the interface, click, type, screenshot. Keystrokes go only to the chosen window. | The target is a desktop app, not a web page. [Guide](docs/computer-control.md) |
+| [remote-host](skills/remote-host/README.md) | Runs commands, copies files, and manages background jobs on another machine over SSH. If the other side lacks a tool, it fails instead of quietly running locally. | The work happens on another computer or server. [Guide](docs/remote-host.md) |
+
+The three tools share a small library, [`skills/_shared`](skills/_shared/README.md), that handles connections and target machines. It is not used on its own.
+
+**Keep long sessions manageable**
+
+| Component | What it does | Use it when |
+| --- | --- | --- |
+| [dsh-compaction-bound](dsh-compaction-bound/README.md) | When the chat history is compacted, your own messages are copied word for word instead of being paraphrased by the model, and the result has a fixed size limit. | A session needs to keep going for hours. [Guide](docs/dsh-compaction-bound.md) |
+| [dsh-message-tidy](dsh-message-tidy/README.md) | Cleans up notices DSH adds to the chat: marks them as system notices rather than your words, drops duplicates, gives background jobs readable names, and sends only the changed part of an updated instruction file. | System notices pile up and clutter the chat. [Guide](docs/dsh-message-tidy.md) |
+| [dsh-image-cap](dsh-image-cap/README.md) | Limits the size and number of images sent to the model. | Screenshot-heavy tasks spend too much context on images. [Guide](docs/dsh-image-cap.md) |
+| [dsh-history-cap](dsh-history-cap/README.md) | Loads a long session's history in pages when you open it. Affects only the app window, not what the model sees. | Long sessions open slowly in the app. [Guide](docs/dsh-history-cap.md) |
+
+**Also in the repository:** [design articles](docs/design/python-data-locality.md) explain why each part works the way it does; [benchmarks](benchmarks/README.md) reproduce the numbers on this page; `tooling/` holds the shared plugin build tools; [llms.txt](llms.txt) is an entry point for AI assistants.
+
+## How they work together
 
 ```text
-Task → DSH agent writes a Python cell → Session kernel
-                                      ├─ Harness tools
-                                      ├─ Browser / desktop / SSH
-                                      └─ Complete values stay in variables
-                                                   │
-                              Filter, group, verify │
-                                                   ▼
-                              Evidence → Conversation
+You ──task──▶ the assistant in DSH
+                  │
+                  ├─ writes Python to do the work (dsh-python-repl)
+                  │     ├─ calls DSH's built-in tools
+                  │     ├─ operates web pages, desktop apps, remote machines (3 tools)
+                  │     └─ keeps large data in the program, returns only conclusions
+                  │
+                  ├─ hands tasks to other sessions and waits for them (dsh-control)
+                  ├─ wakes up when a background event arrives (dsh-monitor)
+                  └─ stays within limits however long the chat gets (4 context plugins + dsh-output-guard)
 ```
 
-## See the data flow
+## See it work
 
-The left shows selected moments from a terminal capture of the complete fictional log. The right replays three cells from a real DSH session: filter the same log, return the checked summary, and reuse the data to verify its hash. The counters estimate text payload size.
+These are real recordings using fictional data and local example pages. No accounts are signed in.
 
-![Terminal capture of the full fictional log beside a DSH replay that filters it in Python](docs/assets/python-data-locality.gif)
+**One log, two ways to answer.** Left: all 10,000 log records go to the model. Right: Python computes first and returns only the conclusion.
 
-For results you can inspect now, use the [offline benchmark](benchmarks/README.md) and its [recorded JSON output](benchmarks/results.json). It uses generated fictional data and calls no model.
+![Terminal recording of the full fictional log compared with filtering inside the DSH kernel](docs/assets/python-data-locality.gif)
+
+**A lead hands out work; a worker does it.** The lead dispatches and stops; when the worker finishes, the lead wakes up, recomputes the result, and accepts it.
+
+![Real session excerpt: lead dispatches, worker executes, lead verifies](docs/assets/controller-worker.gif)
+
+**Operate a browser.** Fill in and tick a local example page, re-reading the page after each step.
+
+![Browser control filling a fictional checklist and verifying the final page state](docs/assets/browser-control.gif)
+
+**Operate a Mac desktop app.** This recording is being redone and will appear here.
+
+**A background event wakes a session.** When a file is written, the idle session wakes, checks the content, and stops listening.
+
+![A real event wakes an idle session, which checks the example data](docs/assets/monitor.gif)
+
+**Long output shows only the head and tail**, while the full text stays in Python. **Remote receipt:** a read-only SSH command whose result was checked independently.
+
+<p>
+<img src="docs/assets/bounded-display.png" alt="The chat shows head and tail; the Python value and saved full text remain checkable" width="49%">
+<img src="docs/assets/remote-host.png" alt="Receipt of a read-only SSH operation with an independently checked digest" width="49%">
+</p>
+
+Recording inputs and acceptance checks are in the [asset list](docs/assets/README.md).
 
 ## Why this exists
 
-| Without | With oh-my-harness |
+| Without it | With it |
 | --- | --- |
-| A verbose tool result enters the conversation in full. | Python keeps the full value and returns a checked answer. |
-| One expensive model stays involved throughout a long task. | A controller delegates, then returns for decisions and acceptance. |
-| An external script has no bridge into the running DSH. | CLI, Python, and MCP reach its live sessions and receipts. |
-| Compaction asks the model to retell the user's wording. | A deterministic appendix copies marked user text and bounds older entries. |
-| Agents compete for browser tabs or desktop windows. | Task windows, ownership, and stable references bind the intended target. |
-| A remote tool is missing. | SSH preflight fails explicitly; it never substitutes the local machine. |
-
-## Pick a capability
-
-| | | |
-| --- | --- | --- |
-| **[Python kernel](docs/dsh-python-repl.md)**<br>Keep complete values across cells; return selected evidence. | **[Control and supervision](docs/dsh-control.md)**<br>Reach a running DSH instance; delegate and verify work. | **[Browser](docs/browser-control.md)**<br>Use CDP with task ownership and exact page selection. |
-| **[macOS desktop](docs/computer-control.md)**<br>Bind native windows and inspect actions. | **[SSH](docs/remote-host.md)**<br>Use authorized destinations and verify results. | **[Events](docs/dsh-monitor.md) · [Stream guard](docs/dsh-output-guard.md)**<br>Deliver producer events; detect invalid model output separately. |
-
-Independent context helpers: [compaction](docs/dsh-compaction-bound.md), [message tidy](docs/dsh-message-tidy.md), [image cap](docs/dsh-image-cap.md), and [history paging](docs/dsh-history-cap.md). History paging reduces UI transfer, not model context.
+| A tool returns a huge log and all of it lands in the chat: expensive and easy to misread. | The data stays in Python; only the computed conclusion comes back. |
+| An expensive model watches every step of a long job. | The expensive model leads and reviews; a cheaper model does the work. |
+| Outside scripts cannot reach a running DSH. | A command line, Python, and MCP (a common protocol for connecting tools) all control the same DSH. |
+| Compaction lets the model paraphrase, or change, what you said. | Your words are copied as written, plus an index with a size limit. |
+| Several assistants fight over one browser tab or desktop window. | Each task sticks to its own window and never clicks into another's. |
+| A command may quietly run locally when the remote machine lacks a tool. | The remote side is checked first; a missing tool is an error. |
 
 ## Engineering highlights
 
-- **Discover contracts as needed.** Fixed helpers and configured resident tools keep full contracts; others get summaries and on-demand detail. [Prompt assembly](dsh-python-repl/src/index.ts).
-- **Reuse state.** Variables and functions persist across cells. Snapshots restore supported values after kernel changes and report losses. [Session lifecycle](dsh-python-repl/src/session.ts).
-- **Check live completion.** Settled checks cover turns, queues, jobs, descendants, goals, and restarts over a stable clear interval. Restart handling resumes interrupted sessions and relaunches recoverable background commands. [Completion](dsh-control/src/service.ts) · [Recovery](dsh-control/src/cli/core.ts).
-- **Preserve wording outside the model.** Compaction selects user text by source metadata. Fixed budgets turn older text into indexed entries and ranges. [Appendix implementation](dsh-compaction-bound/src/summary.ts).
-- **Bind actions to targets.** Browser tasks can own dedicated windows. Desktop references bind window ID and process generation; directed input never falls back to global input. [Browser targets](skills/browser-control/src/browser_control/engine.py) · [Desktop routing](skills/computer-control/bin/computer-control.swift).
-- **Expose uncertain outcomes.** Remote preflight rejects missing capabilities. Browser actions with a lost reply report an unknown outcome and are not replayed. [Remote preflight](skills/_shared/agentkit/remote/target.py) · [Browser RPC](skills/browser-control/src/browser_control/client.py).
+- **Tool instructions on demand.** Frequently used tools get full instructions; the rest get a one-line summary until needed, so each turn sends less boilerplate. [Prompt assembly](dsh-python-repl/src/index.ts).
+- **Data survives between steps and restarts.** A variable computed in one step is used directly in the next. After DSH restarts, savable data comes back and anything lost is reported to the assistant. [Session lifecycle](dsh-python-repl/src/session.ts).
+- **"Done" means really done.** Instead of trusting a reply that says "finished", it checks that the session has truly stopped: no running turn, no queued message, no background job, stable for a while. Interrupted sessions resume after a restart. [Completion](dsh-control/src/service.ts) · [Recovery](dsh-control/src/cli/core.ts).
+- **Your words skip the model.** Compaction copies your messages into an appendix by source. When space runs out, older ones become a "which turn said what" index, and the oldest ranges merge first. [Appendix implementation](dsh-compaction-bound/src/summary.ts).
+- **Every action has a definite target.** Browser tasks get their own windows. Desktop actions remember the exact app and window, and keystrokes go only there. [Browser targets](skills/browser-control/src/browser_control/engine.py) · [Desktop routing](skills/computer-control/bin/computer-control.swift).
+- **Uncertain results are reported as uncertain.** A remote machine missing a tool is rejected before running. A browser action whose reply is lost is reported as "outcome unknown" and is not clicked again. [Remote preflight](skills/_shared/agentkit/remote/target.py) · [Browser RPC](skills/browser-control/src/browser_control/client.py).
 
 ## A measured example
 
@@ -119,20 +182,9 @@ Check the comparison and reuse the same variable in the next cell.
 
 ## Add the control surfaces you need
 
-Root directories contain plugins; `skills/` contains Python tools. Expose trusted skill directories through your agent's discovery mechanism. Find setup and APIs in the [documentation map](#documentation-map).
+The 3 computer-operating tools live under `skills/`. Install dsh-python-repl first, then register that folder as a trusted skill directory in its configuration so the assistant can call them. Each tool's README has the steps; see [Components](#components).
 
-### Demonstrations
-
-- [Controller/worker handoff](docs/assets/controller-worker.gif): dispatch a check, wait for the receipt, and independently verify the result (recorded excerpts).
-- [Browser task](docs/assets/browser-control.gif): complete a fictional checklist and verify the final page state.
-- **Native desktop task**: edit fictional text; inspect the target.
-- [Event handoff](docs/assets/monitor.gif): a real event wakes an idle session, which verifies the fixture (1× excerpts, `steer` delivery).
-- [Bounded display](docs/assets/bounded-display.png): the preview keeps the full Python value and saves the full output.
-- [SSH verification](docs/assets/remote-host.png): read-only SSH receipt with an independently verified checksum.
-
-Use the [asset checklist](docs/assets/README.md) for recording inputs and acceptance.
-
-## How the pieces fit
+## What DSH provides and what this adds
 
 ```mermaid
 flowchart TD
@@ -195,27 +247,9 @@ Read [SECURITY.md](SECURITY.md) for private vulnerability reporting and [CONTRIB
 
 ## When something goes wrong
 
-Check the failing boundary: build outputs, skill discovery, original page/window, or send receipt. Inspect complete or saved output before counting. Component READMEs explain recovery.
+First find which step actually failed: was the plugin built, did the assistant find the tool, is the target page or window still there, was the message really delivered? Confirm you have complete data before counting anything. Each component's README explains recovery.
 
 Use the [bug form](.github/ISSUE_TEMPLATE/bug.yml) with fictional inputs and actual check results; report private findings through [security reporting](SECURITY.md).
-
-## Documentation map
-
-| I want to… | Read |
-| --- | --- |
-| Keep a large result across cells | [Python kernel](docs/dsh-python-repl.md) |
-| Control sessions and supervise work | [DSH control](docs/dsh-control.md) |
-| Follow a producer's events | [Monitor](docs/dsh-monitor.md) |
-| Diagnose repeated or empty model output | [Output guard](docs/dsh-output-guard.md) |
-| Bound summaries and retain exact user text | [Compaction](docs/dsh-compaction-bound.md) |
-| Tidy instructions and notices | [Message tidy](docs/dsh-message-tidy.md) |
-| Limit images before requests | [Image cap](docs/dsh-image-cap.md) |
-| Reduce history transferred to the UI | [History cap](docs/dsh-history-cap.md) |
-| Operate a web page | [Browser control](docs/browser-control.md) |
-| Operate a native application | [Computer control](docs/computer-control.md) |
-| Reach an authorized remote machine | [Remote host](docs/remote-host.md) |
-| Reproduce a quoted number | [Benchmarks](benchmarks/README.md) |
-| Find the project as an agent | [llms.txt](llms.txt) |
 
 ## Contributing, license, and attribution
 

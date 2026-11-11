@@ -1,5 +1,7 @@
 # remote-host
 
+[← oh-my-harness](../../README.md#components) · [中文首页](../../README.zh-CN.md#由哪几块组成)
+
 Execute explicit payloads over the system SSH client, inspect configured hosts, transfer and verify files, and manage remote jobs, application commands and screenshots. The asynchronous Python skill and the command line interface share the same routing and transport behavior.
 
 ## Requirements and installation

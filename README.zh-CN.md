@@ -4,63 +4,126 @@
 
 # oh-my-harness
 
-**数据留在程序里，对话只展示判断所需的证据。**
+**给 DeepSeek Harness 里的 AI 助手装上的一组扩展：让它能写程序连续做事、带着别的助手分工、动手操作浏览器和电脑，并且长时间工作也不被聊天记录撑爆。**
 
 [![CI](https://github.com/gwsbhqt/oh-my-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/gwsbhqt/oh-my-harness/actions)
-[![Release](https://img.shields.io/github/v/release/gwsbhqt/oh-my-harness)](https://github.com/gwsbhqt/oh-my-harness/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-这是给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的一组扩展：持久 Python 执行、主控与执行端协作、浏览器和 macOS 桌面操作、SSH 远程操作、事件推送，以及上下文处理。按需安装。
+## 先说清楚：这是什么
 
-本项目由社区独立维护，**并非 DeepSeek 官方产品，也不隶属或获得 DeepSeek 背书**。DSH 是宿主，本仓库提供围绕它工作的插件和技能。
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（下文简称 DSH）是一个在 Mac 上运行的 AI 助手应用：你开一个会话，跟它说要做什么，它调用各种工具去做。
+
+本仓库**不是一个独立软件**，而是给 DSH 加能力的 11 个部件，可以只装需要的那几个。部件分两种：
+
+- **插件**：装进 DSH 本身，改变 DSH 的行为。仓库根目录下 `dsh-` 开头的 8 个文件夹都是插件。
+- **工具**：助手可以调用的独立程序，放在 `skills/` 下，一共 3 个，也能在终端里单独使用。
+
+本项目由社区独立维护，**并非 DeepSeek 官方产品，也不隶属或获得 DeepSeek 背书**。
+
+## 由哪几块组成
+
+点部件名进入它自己的说明，里面有安装方法、配置和限制；「教程」是按使用场景写的上手步骤。
+
+**让助手写程序做事**
+
+| 部件 | 它做什么 | 什么时候用 |
+| --- | --- | --- |
+| [dsh-python-repl](dsh-python-repl/README.md) | 让助手写 Python 来做事。一次可以调用很多工具，大块数据留在程序里，只把算好的结论放进对话。 | 要处理大日志、大表格，或者一件事要连着调很多次工具。[教程](docs/dsh-python-repl.md) |
+
+**管理和协作**
+
+| 部件 | 它做什么 | 什么时候用 |
+| --- | --- | --- |
+| [dsh-control](dsh-control/README.md) | 从外面遥控正在运行的 DSH：开会话、派任务、等它真的做完、发通知、重启。 | 让一个助手当主控，另开几个会话当长工分头干活。[教程](docs/dsh-control.md) |
+| [dsh-monitor](dsh-monitor/README.md) | 盯着一个一直在跑的程序，它每打出一行，就送进会话叫醒助手。 | 等构建、盯日志、等某个文件出现，不想让助手一遍遍去查。[教程](docs/dsh-monitor.md) |
+| [dsh-output-guard](dsh-output-guard/README.md) | 发现模型开始复读、刷空行、什么都没答就结束时，及时拦下，可以自动重试一次。 | 长任务跑着跑着输出失控。[教程](docs/dsh-output-guard.md) |
+
+**动手操作电脑**
+
+| 部件 | 它做什么 | 什么时候用 |
+| --- | --- | --- |
+| [browser-control](skills/browser-control/README.md) | 操作 Chrome 或 Arc 里指定的网页：看、点、填、截图。每个任务用自己的窗口，做完重读页面核对。 | 要助手替你在网页上操作。[教程](docs/browser-control.md) |
+| [computer-control](skills/computer-control/README.md) | 操作 Mac 上的普通应用窗口：读界面、点按钮、打字、截图，输入只发给指定的那个窗口。 | 要操作的不是网页，而是桌面应用。[教程](docs/computer-control.md) |
+| [remote-host](skills/remote-host/README.md) | 通过 SSH 在另一台机器上执行命令、传文件、跑后台任务。对面缺工具就直接报错，不会悄悄改在本机执行。 | 要助手去另一台电脑或服务器上干活。[教程](docs/remote-host.md) |
+
+上面三个工具共用一个底层库 [`skills/_shared`](skills/_shared/README.md)，负责连接和目标机器的判断，它本身不单独使用。
+
+**让长对话不被撑爆**
+
+| 部件 | 它做什么 | 什么时候用 |
+| --- | --- | --- |
+| [dsh-compaction-bound](dsh-compaction-bound/README.md) | 聊天记录太长要压缩时，你说过的原话照抄保留，不让模型转述；压缩后的总长度有固定上限。 | 一个会话要连续干几个小时。[教程](docs/dsh-compaction-bound.md) |
+| [dsh-message-tidy](dsh-message-tidy/README.md) | 整理 DSH 自动塞进对话的提示：标明哪些是系统提示、不是你说的话，去掉重复的通知，给后台任务起看得懂的名字，说明文件只改一点时只发改动的部分。 | 对话里系统提示越来越多、越来越乱。[教程](docs/dsh-message-tidy.md) |
+| [dsh-image-cap](dsh-image-cap/README.md) | 限制发给模型的图片尺寸和张数。 | 截图多的任务，图片占掉太多上下文。[教程](docs/dsh-image-cap.md) |
+| [dsh-history-cap](dsh-history-cap/README.md) | 打开很长的会话时，界面分页加载历史，不一次拉完。只影响界面，不影响模型看到的内容。 | 长会话在界面上打开很慢。[教程](docs/dsh-history-cap.md) |
+
+**仓库里的其他东西**：[设计长文](docs/design/python-data-locality.md)讲每块为什么这样做；[测量脚本](benchmarks/README.md)可以复跑首页的数字；`tooling/` 是插件共用的构建工具；[llms.txt](llms.txt) 是给 AI 助手看的入口。
+
+## 它们怎么配合
 
 ```text
-任务 → DSH 中的模型编写 Python → 会话内核
-                                 ├─ 调用宿主工具
-                                 ├─ 操作浏览器、桌面和 SSH
-                                 └─ 完整数据保存在变量中
-                                             │
-                              筛选、聚合、核对 │
-                                             ▼
-                                  必要证据 → 对话
+你  ──说任务──▶  DSH 里的 AI 助手
+                    │
+                    ├─ 写 Python 做事（dsh-python-repl）
+                    │     ├─ 调用 DSH 自带的工具
+                    │     ├─ 操作网页、桌面应用、远程机器（3 个工具）
+                    │     └─ 大块数据留在程序里，只把结论放回对话
+                    │
+                    ├─ 派活给别的会话、等它们做完（dsh-control）
+                    ├─ 后台有新消息时被叫醒（dsh-monitor）
+                    └─ 对话再长也有上限（4 个上下文插件 + dsh-output-guard）
 ```
 
-## 先看数据怎么流动
+## 看看实际效果
 
-左侧是完整虚构日志的终端录像选段。右侧回看 DSH 真实执行的三个代码格，依次筛选同一份日志、返回核对后的摘要、复用内核里的数据核对校验值。计数是文本返回量估算。
+下面都是真实录屏，用的是虚构数据和本地示例网页，没有登录任何账号。
+
+**同一份日志，两种回法。** 左边把 1 万条日志整段交给模型；右边在 Python 里先算好，只回结论。
 
 ![完整虚构日志的终端录像与 DSH 内核筛选回看的对比](docs/assets/python-data-locality.gif)
 
-现在可以直接复核[离线测量](benchmarks/README.md)和[实际输出](benchmarks/results.json)。
+**主控派活，长工干活。** 主控派单后就停下等；长工做完，主控被叫醒，自己重算一遍再验收。
+
+![主控派单、长工执行、主控验收的真实会话节选](docs/assets/controller-worker.gif)
+
+**操作浏览器。** 在本地示例页上填写、勾选，每一步做完都重读页面核对。
+
+![浏览器控制填写虚构清单并核对页面最终状态](docs/assets/browser-control.gif)
+
+**操作 Mac 桌面应用。** 这段演示正在补录，录好后放在这里。
+
+**后台事件叫醒会话。** 文件一写进来，空闲的会话就被叫醒，核对内容后停止监听。
+
+![真实事件唤醒空闲会话并核对示例数据](docs/assets/monitor.gif)
+
+**长输出只显示首尾。** 一次打印 6000 行时，对话里只显示开头和结尾，完整内容仍留在 Python 里。　**远程执行回执。** 通过 SSH 跑一条只读命令，结果经过独立核对。
+
+<p>
+<img src="docs/assets/bounded-display.png" alt="对话显示首尾，Python 变量和落盘全文仍可复核" width="49%">
+<img src="docs/assets/remote-host.png" alt="只读 SSH 操作回执，校验值经独立核对" width="49%">
+</p>
+
+录制方式和验收办法见[素材清单](docs/assets/README.md)。
 
 ## 为什么要做这套扩展
 
-| 原来的麻烦（Without） | 这套扩展怎样处理（With） |
+| 没有它时 | 有了它 |
 | --- | --- |
-| 工具返回一大段日志，整段进入对话。 | 完整数据保存在 Python 变量里，核对后只返回结论。 |
-| 长任务始终由昂贵模型参与每一步。 | 主控分配执行端，等需要判断和验收时再回来。 |
-| 外部脚本无法通过本机控制入口接上正在运行的 DSH。 | 命令行（CLI）、Python 接口和模型上下文协议（MCP）访问同一实例的会话及回执。 |
-| 压缩对话时，让模型重新转述用户说过的话。 | 按消息来源直接提取原话，另附有长度预算的清单。 |
-| 多个 agent 抢同一个标签页或桌面窗口。 | 用任务窗口、归属记录和稳定窗口引用绑定目标。 |
-| 对面机器缺工具，可能被误改成本机执行。 | SSH 执行前核对远端能力，缺失就报错，不替换成当前机器。 |
-
-## 按需求选择
-
-| | | |
-| --- | --- | --- |
-| **[Python 内核](docs/dsh-python-repl.md)**<br>跨次执行保留完整数据，只返回必要证据。 | **[控制与监督](docs/dsh-control.md)**<br>操作正在运行的 DSH，派任务后核对结果。 | **[浏览器](docs/browser-control.md)**<br>通过浏览器调试协议（CDP）绑定任务和页面。 |
-| **[macOS 桌面](docs/computer-control.md)**<br>绑定原生窗口，操作后检查结果。 | **[SSH](docs/remote-host.md)**<br>明确目标机器，用真实结果核对操作。 | **[事件推送](docs/dsh-monitor.md) · [输出保护](docs/dsh-output-guard.md)**<br>接收生产者事件，另行检测模型异常输出。 |
-
-还有四个可独立安装的上下文插件：[压缩](docs/dsh-compaction-bound.md)、[消息整理](docs/dsh-message-tidy.md)、[图片限制](docs/dsh-image-cap.md)、[历史分页](docs/dsh-history-cap.md)。历史分页负责界面传输。
+| 工具返回一大段日志，整段塞进对话，又贵又容易看漏。 | 数据留在 Python 里，算好后只回结论。 |
+| 长任务每一步都要贵的模型盯着。 | 贵的模型当主控只管派活和验收，便宜的模型当长工干活。 |
+| 外面的脚本没法接上正在运行的 DSH。 | 命令行、Python 和 MCP（一种通用的工具接入协议）都能遥控同一个 DSH。 |
+| 压缩聊天记录时，模型会转述甚至改掉你说过的话。 | 你的原话照抄保留，另附有长度上限的清单。 |
+| 几个助手抢同一个网页标签或桌面窗口。 | 每个任务认准自己的窗口，不会点到别人的。 |
+| 远程机器缺工具时，命令可能被悄悄改在本机执行。 | 执行前先核对对面有没有这个工具，缺了就报错。 |
 
 ## 工程亮点
 
-- **说明按需展开。** 固定基础工具和配置指定的常驻工具保留完整说明，其余先给摘要，用到时再查参数和返回值。[提示组装源码](dsh-python-repl/src/index.ts)。
-- **跨格复用，换内核后接回。** 变量和函数保留在会话内核中。快照（snapshot）恢复支持保存的值，同时说明哪些状态没有回来。[内核生命周期](dsh-python-repl/src/session.ts)。
-- **看实时状态判断做完。** 不读回复里的“已完成”。程序核对回合、队列、后台任务、子代理、持续目标和重启状态，并要求一段连续的稳定状态。重启后续接被打断的会话，重新拉起能够恢复启动信息的后台命令。[完成判据](dsh-control/src/service.ts) · [重启恢复](dsh-control/src/cli/core.ts)。
-- **用户原话绕过模型转述。** 压缩附录按来源标记收集文本。固定长度预算放不下旧原话时，先降成轮次清单，再合并最早的范围。[附录实现](dsh-compaction-bound/src/summary.ts)。
-- **操作绑定具体目标。** 浏览器任务可以拥有独立窗口。桌面引用同时记录原生窗口号和进程代际；定向输入只发给该进程，不回退到全局输入。[浏览器目标](skills/browser-control/src/browser_control/engine.py) · [桌面投递](skills/computer-control/bin/computer-control.swift)。
-- **未知结果原样暴露。** 远端能力不匹配时，在执行前拒绝。浏览器动作已经发出却丢了响应，就返回“结果未知”，不自动重发。[远端预检](skills/_shared/agentkit/remote/target.py) · [浏览器调用](skills/browser-control/src/browser_control/client.py)。
+- **工具说明按需展开。** 常用的工具给完整说明，其余只给一句摘要，用到时再查参数，省下每一轮都要重复发送的说明文字。[提示组装源码](dsh-python-repl/src/index.ts)。
+- **程序跨步骤保留数据，重启后能接回。** 上一步算出的变量，下一步直接用；DSH 重启后，能保存的数据自动恢复，没恢复的会明确告诉助手。[内核生命周期](dsh-python-repl/src/session.ts)。
+- **看真实状态判断「做完」。** 不信回复里写的「已完成」，而是查会话是不是真的停了：没有正在跑的回合、没有排队的消息、没有后台任务，并且稳定一段时间。DSH 重启后，被打断的会话自动接着做。[完成判据](dsh-control/src/service.ts) · [重启恢复](dsh-control/src/cli/core.ts)。
+- **你的原话不经模型转述。** 压缩聊天记录时，按来源把你发的消息原文收进附录；长度放不下时，先缩成「第几轮说了什么」的清单，再合并最早的部分。[附录实现](dsh-compaction-bound/src/summary.ts)。
+- **每个操作认准具体目标。** 浏览器任务各开各的窗口；桌面操作记住具体是哪个应用的哪个窗口，键盘输入只发给它，不会打进别的窗口。[浏览器目标](skills/browser-control/src/browser_control/engine.py) · [桌面投递](skills/computer-control/bin/computer-control.swift)。
+- **结果不确定就直说。** 远程机器缺工具时，执行前就拒绝；浏览器动作发出去却没收到回应，就报「结果未知」，不擅自再点一次。[远端预检](skills/_shared/agentkit/remote/target.py) · [浏览器调用](skills/browser-control/src/browser_control/client.py)。
 
 ## 一组可以复跑的数据
 
@@ -121,20 +184,8 @@ python3 benchmarks/run.py --export-log example-log.jsonl --export-conclusion exa
 
 ## 按需要加控制能力
 
-仓库根目录放 DSH 插件，`skills/` 放 Python 工具。把可信技能目录交给 agent 的发现机制；具体设置和接口见[文档索引](#文档索引)。
-
-### 操作演示
-
-- [主控与执行端](docs/assets/controller-worker.gif)：下发任务、等回执、独立重算验收（真实会话节选）。
-- [浏览器](docs/assets/browser-control.gif)：填写虚构清单，再核对页面最终状态。
-- **原生桌面**：编辑虚构文本，再检查目标窗口。
-- [事件推送](docs/assets/monitor.gif)：真实事件唤醒空闲会话，会话核对示例数据（原速节选，`steer` 投递）。
-- [有限展示](docs/assets/bounded-display.png)：对话显示首尾，Python 变量和落盘全文仍可复核。
-- [SSH 核对](docs/assets/remote-host.png)：只读 SSH 操作回执，校验值经独立核对。
-
-录制输入和验收方式见[素材清单](docs/assets/README.md)。
-
-## 宿主和扩展如何配合
+操作电脑的 3 个工具放在 `skills/` 下。先装好 dsh-python-repl，再在它的配置里把这个目录登记为可信的技能目录，助手就能直接调用；每个工具的说明里有具体步骤，见[由哪几块组成](#由哪几块组成)。
+## DSH 自带什么，本仓库加了什么
 
 ```mermaid
 flowchart TD
@@ -197,27 +248,9 @@ Python 组合包会替换原有的 TypeScript 程序化工具调用（PTC）后�
 
 ## 出错时先看哪里
 
-先定位真正失败的环节：构建产物、技能发现、原页面或窗口、发送回执。计数前检查完整数据或保存的全文。恢复步骤见对应组件说明。
+先找出到底哪一步坏了：插件有没有构建出来、助手有没有找到工具、要操作的网页或窗口还在不在、消息有没有真的送到。统计数字前，先确认拿到的是完整数据。各部件的说明里有恢复步骤。
 
 用[缺陷表单](.github/ISSUE_TEMPLATE/bug.yml)提供虚构复现和实际检查结果；私密发现走[安全报告](SECURITY.md)。
-
-## 文档索引
-
-| 我想…… | 从这里开始 |
-| --- | --- |
-| 跨次执行保留数据 | [Python 内核](docs/dsh-python-repl.md) |
-| 控制会话和监督任务 | [DSH 控制](docs/dsh-control.md) |
-| 接收持续事件 | [Monitor](docs/dsh-monitor.md) |
-| 排查重复或空白模型输出 | [Output guard](docs/dsh-output-guard.md) |
-| 控制摘要并保留原话 | [上下文压缩](docs/dsh-compaction-bound.md) |
-| 整理指令与通知 | [消息整理](docs/dsh-message-tidy.md) |
-| 限制请求图片 | [图片限制](docs/dsh-image-cap.md) |
-| 减少界面历史传输 | [历史分页](docs/dsh-history-cap.md) |
-| 操作网页 | [浏览器控制](docs/browser-control.md) |
-| 操作原生应用 | [电脑控制](docs/computer-control.md) |
-| 访问授权的远端机器 | [远端主机](docs/remote-host.md) |
-| 复核数字 | [测量说明](benchmarks/README.md) |
-| 为 agent 找入口 | [llms.txt](llms.txt) |
 
 ## 贡献、许可与致谢
 

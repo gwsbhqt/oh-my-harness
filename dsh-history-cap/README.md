@@ -1,5 +1,7 @@
 # dsh-history-cap
 
+[← oh-my-harness](../README.md#components) · [中文首页](../README.zh-CN.md#由哪几块组成)
+
 Limit the number of history records sent to the DSH interface in a single response, so a turn with many tool events does not produce one enormous initial page. This improves history delivery; it does not trim model context or reduce model token usage.
 
 ## Requirements and installation

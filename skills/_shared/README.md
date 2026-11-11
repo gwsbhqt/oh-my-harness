@@ -1,5 +1,7 @@
 # Shared Python support (`agentkit`)
 
+[← oh-my-harness](../../README.md#components) · [中文首页](../../README.zh-CN.md#由哪几块组成)
+
 Internal Python support for the sibling browser, native-desktop and SSH tools. This directory is a library, not an agent skill: do not expose it as a callable skill or install a global compatibility alias.
 
 ## Layout and dependencies

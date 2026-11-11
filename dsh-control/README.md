@@ -1,5 +1,7 @@
 # dsh-control
 
+[← oh-my-harness](../README.md#components) · [中文首页](../README.zh-CN.md#由哪几块组成)
+
 Control a running DeepSeek Harness (DSH) instance from another local agent. The plugin exposes a private Unix socket, a CLI, an asynchronous Python API, and an MCP stdio server. It can inspect and manage sessions, dispatch work, preserve send receipts, wait for completion, notify the originating session, select models by tier, and operate remote instances through SSH.
 
 **Platform: macOS only.** Node.js 22.19+ (or 24+), pnpm, Python 3, and the DSH desktop app are required. App launch, restart, notifications, and machine identification use macOS facilities. A graphical login is required when starting the desktop app through SSH.

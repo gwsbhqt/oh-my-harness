@@ -1,5 +1,7 @@
 # dsh-output-guard
 
+[← oh-my-harness](../README.md#components) · [中文首页](../README.zh-CN.md#由哪几块组成)
+
 Stop runaway model output in DeepSeek Harness (DSH), and optionally retry the failed step once with a corrective notice. The plugin protects the main agent and subagents from repeated text, long blank runs, oversized tool arguments, and replies that finish without an answer or tool call.
 
 ## Requirements and installation
