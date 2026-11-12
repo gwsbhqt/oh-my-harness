@@ -11,6 +11,8 @@ const ptc = () => [
     {id: 'workflow-ptc', name: '@x/workflow', disabled: true},
   ]},
   {id: 'tool-presentation', name: '@deepseek-ai/dsh-agent-tool-presentation', config: {mode: 'ptc'}},
+  {id: 'present', name: '@x/present'},
+  {id: 'tool-office', name: '@x/office'},
   {id: 'tool-plugin-manager', name: '@x/pm', disabled: true},
 ];
 const cordis = () => [
@@ -20,6 +22,7 @@ const cordis = () => [
     {id: 'workflow-ptc', name: '@x/workflow'},
   ]},
   {id: 'tool-cordis', name: '@x/cordis'},
+  {id: 'present', name: '@x/present'},
   {id: 'tool-plugin-manager', name: '@x/pm', disabled: js("!ctx.get('profileContext')")},
 ];
 
@@ -27,8 +30,10 @@ test('已知差别之外两边一致时没有提醒；只是创造模式新增�
   assert.deepEqual(presetDrift(ptc(), cordis()), []);
   const c = cordis(); c.push({id: 'tool-new', name: '@x/new'});
   assert.deepEqual(presetDrift(ptc(), c), [], '创造模式新增的会自动带上');
-  const c2 = cordis(); c2[0].config.prefix = 'changed';
-  assert.ok(presetDrift(ptc(), c2).some(s => s.includes('persona')), '两边写得不一样要提醒');
+  const c2 = cordis(); c2[4].config = {changed: true};
+  assert.ok(presetDrift(ptc(), c2).some(s => s.includes('present')), '两边写得不一样要提醒');
+  const c3 = cordis(); c3[0].config.prefix = 'creator';
+  assert.deepEqual(presetDrift(ptc(), c3), [], '创造模式有自己的 persona，tool-office 由微调照搬');
 });
 
 test('PTC 模式新增、创造模式没有的条目要提醒', () => {
@@ -42,7 +47,7 @@ test('PTC 模式没有工具呈现条目时要提醒', () => {
 });
 
 test('从补丁文档里取条目；读不到要说明', () => {
-  assert.equal(officialPlugins([{insert: [{id: 'preset-ptc', config: {plugins: ptc()}}]}], 'preset-ptc').length, 5);
+  assert.equal(officialPlugins([{insert: [{id: 'preset-ptc', config: {plugins: ptc()}}]}], 'preset-ptc').length, 7);
   assert.deepEqual(presetDrift(undefined, cordis()), ['读不到 DSH 自带 PTC 模式的条目']);
 });
 

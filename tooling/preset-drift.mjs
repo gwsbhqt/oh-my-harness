@@ -10,8 +10,8 @@
 
 /** Support both official tool presentation layouts. */
 const PRESENTATION = new Set(['@deepseek-ai/dsh-tool-executor-ptc', '@deepseek-ai/dsh-agent-tool-presentation']);
-/** 两边本来就不一样、PTC 创造模式有意跟创造模式（或由微调处理）的条目。 */
-const KNOWN = new Set(['skill-filesystem', 'tool-presentation', 'tool-executor-ptc', 'delegation/workflow-ptc', 'delegation/tool-workflow', 'tool-plugin-manager', 'tool-plugin-market']);
+/** 两边本来就不一样、PTC 创造模式有意跟创造模式（或由微调处理）的条目。0.2.2-rc.2 起创造模式有自己的 persona，tool-office 由微调从 PTC 模式照搬。 */
+const KNOWN = new Set(['persona', 'skill-filesystem', 'tool-presentation', 'tool-executor-ptc', 'tool-office', 'delegation/workflow-ptc', 'delegation/tool-workflow', 'tool-plugin-manager', 'tool-plugin-market']);
 
 export function loadedPresetComparisons(bundles, skipped=[]) {
   const excluded=new Set(skipped.map(bundle=>bundle.name??bundle.packageName));
