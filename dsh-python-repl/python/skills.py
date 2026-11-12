@@ -361,7 +361,7 @@ class _SkillsNamespace(_Namespace):
             if member is None:
                 item["instructions"] = _instructions(record)
                 if record.get("path"):
-                    # Without this a model resolves references/… against a skillRoot it saw elsewhere (I-062).
+                    # Without this a model resolves references/… against a skillRoot it saw elsewhere.
                     item["directory"] = record["path"]
                     item["links"] = "Relative links in instructions (references/…, src/…) resolve against directory."
             if item["status"] == "available":
@@ -380,6 +380,10 @@ class _SkillsNamespace(_Namespace):
                     item.update({k: v for k, v in _function_details(module.get("run"), item["access"]).items() if k != "description"})
             elif member is not None:
                 item["access"] = None
+            if "instructions" in item:
+                # The guide is long and models print `str(result)[:N]`; keep directory and members
+                # ahead of it so a cut print still shows where references/… live.
+                item["instructions"] = item.pop("instructions")
             items.append(item)
         return {"items": items}
 

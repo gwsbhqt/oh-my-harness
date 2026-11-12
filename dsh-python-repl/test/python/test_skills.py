@@ -305,6 +305,7 @@ class SkillInstructions(unittest.TestCase):
         self.assertEqual(result["instructions"], (directory / "PYSKILL.md").read_text(encoding="utf-8"))
         self.assertEqual(result["directory"], str(directory), "relative links in the guide need the skill's own directory")
         self.assertIn("directory", result["links"])
+        self.assertEqual(list(result)[-1], "instructions", "a truncated print of the result must still reach directory")
         self.assertEqual(result["description"], "Use skills.good_skill in Python.")
         catalog = asyncio.run(self.namespace.list())["items"]
         self.assertEqual(catalog[0]["summary"], "Use skills.good_skill in Python.")
