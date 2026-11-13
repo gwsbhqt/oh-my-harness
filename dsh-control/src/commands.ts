@@ -64,13 +64,13 @@ export function validateCommand(command: string, args: string[], options: Record
     monitor: ['command cwd label restart quiet', 1], 'kill-jobs': ['', Infinity], cancel: ['', 1], answer: ['select json call-id', Infinity], quota: ['refresh', 0],
     models: ['', 0], pick: ['tier', 1], model: ['tier model effort force', 1], plugins: ['', 0], plugin: ['force', 2],
     config: ['set', 1], api: ['items timeout', args[0] === 'call' ? 3 : 2],
-    start: ['', 0], restart: ['detach kill notify before quit-via install-app', 0], upgrade: ['feed check rollback force before detach notify quit-via', 0],
+    start: ['', 0], restart: ['detach kill notify before quit-via install-app', 0], upgrade: ['feed check force before detach notify quit-via', 0],
     'restart-status': ['request-id', 0], doctor: ['full profile timeout-ms', 0], version: ['', 0], help: ['', 1],
   }
   const spec = specs[command]
   if (spec === undefined) throw new UsageError(`没有命令 "${command}"。dsh-control help 看全部`)
   const allowed = new Set([...spec[0].split(' ').filter(Boolean), 'help'])
-  const flags = new Set(['running', 'all', 'ungrouped', 'include-blank', 'tools', 'now', 'steer', 'interrupt', 'refresh', 'force', 'when-idle', 'if-idle', 'detach', 'kill', 'full', 'quiet', 'check', 'rollback', 'settled', 'help', 'sound', 'no-title', 'no-body', 'no-sound'])
+  const flags = new Set(['running', 'all', 'ungrouped', 'include-blank', 'tools', 'now', 'steer', 'interrupt', 'refresh', 'force', 'when-idle', 'if-idle', 'detach', 'kill', 'full', 'quiet', 'check', 'settled', 'help', 'sound', 'no-title', 'no-body', 'no-sound'])
   for (const [key, value] of Object.entries(options)) {
     if (!allowed.has(key)) throw new UsageError(`${command} 不支持 --${key}`)
     if (flags.has(key)) {
