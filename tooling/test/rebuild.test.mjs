@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {fileURLToPath} from 'node:url';
-import {rebuildLinkedPlugins} from '../rebuild.mjs';
+import {rebuildLinkedPlugins,checkLinkedPlugins} from '../rebuild.mjs';
 import {run} from '../doctor.mjs';
 import {fixture,put,changeBuilder,root,checkout} from '../test-support/rebuild-fixture.mjs';
 
@@ -95,4 +95,38 @@ test('CLI JSON 可直接读取，失败非零，参数必须显式绝对路径',
   await changeBuilder(f,'dsh-first','process.exit(9)');
   const bad=await run(process.execPath,args);assert.equal(bad.code,1);assert.equal(JSON.parse(bad.stdout).ok,false);
   const invalid=await run(process.execPath,[path.join(checkout,'tooling/rebuild.mjs'),'--profile','.']);assert.equal(invalid.code,2);assert.match(invalid.stderr,/绝对/);
+});
+
+test('只检查模式不运行 builder，列出过期、缺清单、缺目录和缺依赖，口径与构建模式一致',async()=>{
+  const f=await fixture('check');
+  const clean=await checkLinkedPlugins(f);assert.equal(clean.ok,true,JSON.stringify(clean));assert.equal(clean.mode,'check');
+  assert.deepEqual(clean.plugins.map(p=>[p.name,p.status,p.action]),[['dsh-first','verified','skip'],['dsh-second','verified','skip']]);
+  await fs.appendFile(path.join(f.dir('dsh-first'),'src/index.js'),'\nexport const changed=1;');
+  await fs.unlink(path.join(f.dir('dsh-second'),'lib/dsh-build.json'));
+  f.manifest.dependencies['dsh-absent']='link:'+f.dir('dsh-absent');
+  f.manifest.dependencies.elsewhere='link:'+path.join(root,'check-elsewhere','dsh-gone');
+  f.manifest.dependencies.registry='1.0.0';
+  await put(f.profile,'package.json',JSON.stringify(f.manifest));
+  const report=await checkLinkedPlugins(f);assert.equal(report.ok,false);
+  assert.deepEqual(report.plugins.map(p=>[p.name,p.status,p.action]),[['dsh-first','stale','build'],['dsh-second','unverified','build'],['dsh-absent','missing','failed']]);
+  assert.match(report.plugins[0].message,/src\/index\.js/);assert.match(report.plugins[2].message,/不存在/);
+  assert.deepEqual(report.skipped.map(s=>s.name).sort(),['elsewhere','registry']);
+  assert.deepEqual(report.missingDependencies,['dsh-absent','elsewhere','registry']);
+  assert.deepEqual(report.summary,{scanned:3,verified:0,stale:1,unverified:1,missing:1,error:0,wouldBuild:2,failed:1,skipped:2,missingDependencies:3});
+  for(const name of ['dsh-first','dsh-second'])assert.equal(await fs.readFile(path.join(f.dir(name),'calls'),'utf8'),'build\n');
+  const built=await f.build();
+  assert.deepEqual(built.plugins.map(p=>[p.name,p.before?.status,p.built]),[['dsh-first','stale',true],['dsh-second','unverified',true],['dsh-absent',undefined,false]]);
+  assert.deepEqual(built.skipped.map(s=>s.name).sort(),['elsewhere','registry']);
+});
+
+test('只检查 CLI：全部一致退出 0，有要处理的退出 1 且 JSON 可读，不构建',async()=>{
+  const f=await fixture('check-cli',['dsh-first']);
+  const args=[path.join(checkout,'tooling/rebuild.mjs'),'--check','--repository',f.repository,'--profile',f.profile];
+  const good=await run(process.execPath,[...args,'--json']);assert.equal(good.code,0,good.stderr);assert.equal(JSON.parse(good.stdout).ok,true);
+  await fs.unlink(path.join(f.dir('dsh-first'),'lib/dsh-build.json'));
+  const bad=await run(process.execPath,[...args,'--json']);assert.equal(bad.code,1,bad.stderr);
+  assert.deepEqual(JSON.parse(bad.stdout).plugins.map(p=>[p.name,p.status]),[['dsh-first','unverified']]);
+  const text=await run(process.execPath,args);assert.equal(text.code,1);assert.match(text.stdout,/需要处理/);assert.match(text.stdout,/dsh-first（unverified）/);
+  await assert.rejects(fs.stat(path.join(f.dir('dsh-first'),'lib/dsh-build.json')),{code:'ENOENT'});
+  const invalid=await run(process.execPath,[path.join(checkout,'tooling/rebuild.mjs'),'--check','--profile','.']);assert.equal(invalid.code,2);assert.match(invalid.stderr,/绝对/);
 });
