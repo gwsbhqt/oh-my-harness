@@ -2,7 +2,8 @@
  * dsh-compaction-bound：DSH 自带压缩的两处收紧，不改触发点、不改模型回复上限。
  *
  * 1. 压完原样留下的近期对话改成固定量（retain.ts）；
- * 2. 写摘要那次请求换成分栏限长、用户原话照抄、在旧摘要上增量合并的指令（summary.ts）。
+ * 2. 写摘要那次请求换成分栏限长、用户原话照抄、在旧摘要上增量合并的指令（summary.ts）；
+ * 3. 写摘要那次请求超出模型窗口时，压进窗口再发（fit.ts）。
  *
  * @module
  */
@@ -14,6 +15,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { installRetain, isPresetRegistry, mountedRetain, type PresetRegistry, type RetainState } from './retain.ts'
 import { attachmentText, boundItems, checkOutput, collectUserMessages, condenseInstruction, placesById, rewriteRequest, turnSpan, type Condense, type OutputReport, type Place, type RequestLike } from './summary.ts'
+import { budgetTokens, fitMessages, promptTokens, requestChars } from './fit.ts'
 
 export const name = 'dsh-compaction-bound'
 
@@ -30,6 +32,8 @@ export const Config = z.object({
   userIndexChars: z.natural().min(300).default(2000).volatile(),
   /** 原文读取说明；空串使用通用说明，{sessionId} 替换为当前会话编号。 */
   historyReaderHint: z.string().default('').volatile(),
+  /** 写摘要请求超出模型窗口时，截长工具结果、拿掉最早的对话，压进窗口再发；最多重发两次。 */
+  fitWindow: z.boolean().default(true).volatile(),
 })
 
 type ConfigCells = ReturnType<typeof Config>
@@ -118,10 +122,14 @@ export function apply(ctx: Context, config: ConfigCells): void {
     }
   }
 
-  // 插件自己发的压短请求也走 llm/stream，认出来直接放行
+  // 插件自己发的压短请求、压进窗口后的重发也走 llm/stream，认出来直接放行
   const own = new WeakSet<object>()
+  const llmOf = () => ctx.get('llm' as never) as {
+    stream(request: unknown): AsyncIterable<unknown>
+    resolveModelInfo?(provider: string, model: string, signal?: AbortSignal): Promise<{ context?: { contextWindow?: number } }>
+  } | undefined
   const condenseWith = (options: RequestLike): Condense => async (original, limit) => {
-    const llm = ctx.get('llm' as never) as { stream(request: unknown): AsyncIterable<unknown> } | undefined
+    const llm = llmOf()
     if (llm === undefined || options.provider === undefined || options.model === undefined) return undefined
     const request = {
       provider: options.provider,
@@ -149,39 +157,45 @@ export function apply(ctx: Context, config: ConfigCells): void {
   }
 
   ctx.on('llm/stream' as never, ((options: RequestLike, next: () => AsyncIterable<unknown>) => {
-    if (options?.purpose !== 'compaction' || own.has(options) || !live(config.boundSummary)) return next()
+    if (options?.purpose !== 'compaction' || own.has(options)) return next()
+    if (!live(config.boundSummary) && !live(config.fitWindow)) return next()
     return bounded(options, next)
   }) as never, { global: true, prepend: true } as never)
 
-  /** 写摘要请求：先异步读出轮次，再换指令、调下游，最后核对字数并附原话。 */
+  /** 写摘要请求：先异步读出轮次，再换指令、调下游（必要时压进窗口），最后核对字数并附原话。 */
   async function* bounded(options: RequestLike, next: () => AsyncIterable<unknown>): AsyncGenerator<unknown> {
     let attachment = ''
     let replaced = false
     const limit = live(config.summaryChars)
-    const places = await placesOf(options.sessionId, options.signal)
-    try {
-      // 先取原话再换指令：只有认出并换掉宿主指令，才在输出后面附原话、核对字数，几件事同进同退
-      const messages = options.messages ?? []
-      const items = boundItems(collectUserMessages(messages, places), { fullChars: live(config.userMessageChars), indexChars: live(config.userIndexChars) })
-      const span = turnSpan(messages, places)
-      const result = rewriteRequest(options, limit)
-      const count = (kind: string) => items.filter((item) => item.kind === kind).length
-      const merged = items.reduce((n, item) => (item.kind === 'range' ? n + item.count : n), 0)
-      if (result === 'replaced') {
-        replaced = true
-        attachment = attachmentText(items, { ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }), ...(span === undefined ? {} : { turns: span }) }, live(config.historyReaderHint))
-        logger.info(`写摘要改用有界指令（上限 ${limit} 字），附用户原话：逐字 ${count('full')} 条、清单 ${count('index')} 条、并掉 ${merged} 条，共 ${attachment.length} 字`)
-      } else if (result === 'unrecognized') logger.warn('认不出宿主的压缩指令，这次照宿主原样写摘要')
-      lastSummary = { at: new Date().toISOString(), sessionId: options.sessionId ?? null, result, summaryChars: limit, userMessages: count('full'), indexed: count('index'), merged, turnsKnown: places.size > 0, ...(span === undefined ? {} : { turns: span }), attachmentChars: attachment.length }
-      history.push(lastSummary)
+    if (!live(config.boundSummary)) lastSummary = { at: new Date().toISOString(), sessionId: options.sessionId ?? null, result: 'off' }
+    else {
+      const places = await placesOf(options.sessionId, options.signal)
+      try {
+        // 先取原话再换指令：只有认出并换掉宿主指令，才在输出后面附原话、核对字数，几件事同进同退
+        const messages = options.messages ?? []
+        const items = boundItems(collectUserMessages(messages, places), { fullChars: live(config.userMessageChars), indexChars: live(config.userIndexChars) })
+        const span = turnSpan(messages, places)
+        const result = rewriteRequest(options, limit)
+        const count = (kind: string) => items.filter((item) => item.kind === kind).length
+        const merged = items.reduce((n, item) => (item.kind === 'range' ? n + item.count : n), 0)
+        if (result === 'replaced') {
+          replaced = true
+          attachment = attachmentText(items, { ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }), ...(span === undefined ? {} : { turns: span }) }, live(config.historyReaderHint))
+          logger.info(`写摘要改用有界指令（上限 ${limit} 字），附用户原话：逐字 ${count('full')} 条、清单 ${count('index')} 条、并掉 ${merged} 条，共 ${attachment.length} 字`)
+        } else if (result === 'unrecognized') logger.warn('认不出宿主的压缩指令，这次照宿主原样写摘要')
+        lastSummary = { at: new Date().toISOString(), sessionId: options.sessionId ?? null, result, summaryChars: limit, userMessages: count('full'), indexed: count('index'), merged, turnsKnown: places.size > 0, ...(span === undefined ? {} : { turns: span }), attachmentChars: attachment.length }
+      } catch (error) {
+        logger.warn(`换压缩指令失败，照宿主原样：${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    const summary = lastSummary
+    if (summary !== undefined) {
+      history.push(summary)
       if (history.length > HISTORY) history.splice(0, history.length - HISTORY)
       report()
-    } catch (error) {
-      logger.warn(`换压缩指令失败，照宿主原样：${error instanceof Error ? error.message : String(error)}`)
     }
-    const stream = next()
+    const stream = live(config.fitWindow) ? fitted(options, next, summary) : next()
     if (!replaced) { yield* stream; return }
-    const summary = lastSummary
     yield* checkOutput(stream, attachment, limit, condenseWith(options), (output: OutputReport) => {
       if (output.outcome === 'over-kept') logger.warn(`模型摘要 ${output.modelChars} 字超上限 ${limit}，压短没过核对（${output.reason}），保留原稿`)
       else if (output.outcome === 'condensed') logger.info(`模型摘要 ${output.modelChars} 字超上限，压短到 ${output.condensedChars} 字`)
@@ -189,4 +203,94 @@ export function apply(ctx: Context, config: ConfigCells): void {
       report()
     })
   }
+
+  /** 每个模型「序列化字符数 ÷ 服务商回报的输入 token」，从写摘要请求的用量里学，下次发之前就能估算超不超窗。 */
+  const charsPerToken = new Map<string, number>()
+
+  const windowOf = async (options: RequestLike): Promise<number | undefined> => {
+    const llm = llmOf()
+    if (llm?.resolveModelInfo === undefined || options.provider === undefined || options.model === undefined) return undefined
+    try {
+      const window = (await llm.resolveModelInfo(options.provider, options.model, options.signal)).context?.contextWindow
+      return typeof window === 'number' && window > 0 ? window : undefined
+    } catch (error) {
+      if (options.signal?.aborted === true) throw error
+      logger.warn(`查不到 ${options.provider}/${options.model} 的窗口大小，写摘要请求不做压窗：${error instanceof Error ? error.message : String(error)}`)
+      return undefined
+    }
+  }
+
+  /**
+   * 发写摘要请求；以 CONTEXT_WINDOW_EXCEEDED 结束时压进窗口重发，最多两次，失败那次的输出不交给宿主。
+   * 宿主的溢出恢复和按压力压缩都把整段对话重放给模型，会话已超窗时这一步不压就永远失败。
+   */
+  async function* fitted(options: RequestLike & { tools?: unknown }, next: () => AsyncIterable<unknown>, summary: Record<string, unknown> | undefined): AsyncGenerator<unknown> {
+    const window = await windowOf(options)
+    if (window === undefined) { yield* next(); return }
+    const key = `${options.provider}/${options.model}`
+    const budget = budgetTokens(window, options.maxTokens)
+    const fit: Record<string, unknown> = { contextWindow: window, budgetTokens: budget, overflows: 0, refits: 0 }
+    const shrink = (request: RequestLike & { tools?: unknown }, targetChars: number, basis: string): readonly unknown[] | undefined => {
+      const result = fitMessages(request.messages ?? [], request.tools, targetChars)
+      if (result === undefined || result.afterChars >= result.beforeChars) return undefined
+      Object.assign(fit, { basis, beforeChars: fit['beforeChars'] ?? result.beforeChars, afterChars: result.afterChars, trimmedToolResults: result.trimmedToolResults, droppedMessages: result.droppedMessages })
+      fit['refits'] = (fit['refits'] as number) + 1
+      return result.messages
+    }
+    const record = (outcome: string) => {
+      if ((fit['refits'] as number) === 0 && (fit['overflows'] as number) === 0) return
+      fit['outcome'] = outcome
+      if (summary !== undefined) summary['fit'] = fit
+      logger.info(`写摘要请求压窗：${JSON.stringify(fit)}`)
+      report()
+    }
+
+    const known = charsPerToken.get(key)
+    if (known !== undefined && !Object.isFrozen(options)) {
+      const chars = requestChars(options.messages ?? [], options.tools)
+      if (chars / known > budget) {
+        const messages = shrink(options, Math.floor(budget * known), 'estimate')
+        if (messages !== undefined) (options as { messages: readonly unknown[] }).messages = messages
+      }
+    }
+
+    let request = options
+    for (let attempt = 0; ; attempt++) {
+      const chunks: unknown[] = []
+      let finish: { type: string; reason?: { kind?: string; failure?: { code?: string } } } | undefined
+      let usage: unknown
+      const source = attempt === 0 ? next() : llmOf()!.stream(request)
+      for await (const raw of source) {
+        const chunk = raw as { type?: string; usage?: unknown }
+        if (chunk?.type === 'finish') { finish = chunk as typeof finish; break }
+        if (chunk?.type === 'usage') usage = chunk.usage
+        chunks.push(raw)
+      }
+      const chars = requestChars(request.messages ?? [], request.tools)
+      const prompt = promptTokens(usage)
+      if (prompt !== undefined) charsPerToken.set(key, chars / prompt)
+      const overflow = finish?.reason?.kind === 'error' && finish.reason.failure?.code === 'CONTEXT_WINDOW_EXCEEDED'
+      if (!overflow || attempt >= 2 || options.signal?.aborted === true) {
+        record(overflow ? 'still-over' : finish?.reason?.kind ?? 'unfinished')
+        yield* chunks
+        if (finish !== undefined) yield finish
+        return
+      }
+      fit['overflows'] = (fit['overflows'] as number) + 1
+      const ratio = charsPerToken.get(key)
+      let target = ratio === undefined ? Math.floor(chars / 2) : Math.floor(budget * ratio)
+      // 服务商的实际窗口比登记的小时，按比例算出来「放得下」也照样拒收，至少再砍四成
+      if (target >= chars * 0.9) target = Math.floor(chars * 0.6)
+      const messages = shrink(request, target, prompt !== undefined ? 'reported-usage' : ratio !== undefined ? 'learned-ratio' : 'halve')
+      if (messages === undefined) {
+        record('cannot-fit')
+        yield* chunks
+        yield finish!
+        return
+      }
+      request = { ...options, messages }
+      own.add(request)
+    }
+  }
 }
+

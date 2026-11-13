@@ -2,10 +2,11 @@
 
 收紧 DSH 自带的上下文压缩（`@deepseek-ai/dsh-compaction-basic`），解决「压完留下太多、摘要越滚越大」。不改触发点、不改窗口、不改模型回复上限。
 
-## 做了两件事
+## 做了三件事
 
 1. **压完只留少量近期原文。** 本插件给每个模式里的压缩引擎那一行补 `retainTokens`（默认 12000）。这是宿主按每 4 个字符算 1 token 的估算值，不是模型分词器的精确计数；不据此承诺实际 token 或费用。
 2. **模型写的摘要限长，用户原话不经模型。** 写摘要那次请求发出前，把宿主的压缩指令换成分栏限长（默认 12000 字）、在旧摘要上增量改的版本；模型写完后，插件把这段里**用户亲手发的每一条消息**逐字接在摘要后面，上一份检查点附过的原样接上。模型只写其余各栏，不转述也不挑选用户原话。
+3. **写摘要请求超窗时压进窗口重发**（`fitWindow`，默认开，见 `src/fit.ts`）。会话已经长过模型登记的窗口时，宿主写摘要把整段对话重放给模型，这次请求同样超窗：服务商拒收，或 pi-ai 发现回报的输入超过登记窗口、把写完的摘要判成 `CONTEXT_WINDOW_EXCEEDED`。宿主的溢出恢复每次都走这条路，所以永远失败，用户说「继续」也一样。插件在写摘要请求以 `CONTEXT_WINDOW_EXCEEDED` 结束时丢掉这次结果，按失败那次回报的输入 token（没有回报就砍半）压进窗口重发，最多两次：先截最早的长工具结果，再从最早处整段拿掉消息，切口只在用户消息前、不拆工具调用和结果，系统提示、上一份检查点、最后的指令保留。按模型记住字符和 token 的比例，下次同模型发之前就压好。只改这次请求，不动会话记录；拿掉的用户原话照样进附录。
 
 ### 哪些算用户原话
 
@@ -35,6 +36,7 @@
 
 - **保留量不能写在 profile 补丁里。** 补丁只能整份替换模式的条目清单，够不着模式里的一行；整份覆盖 PTC 模式会让它不再跟着 DSH 升级。因此包住模式注册表的 `register`，改注册表自己的记录再按它的方式重挂。只补没写 `retainTokens` / `retainRatio` 的行，其余键原样保留；卸载时只撤自己补的。已经在跑的会话绑在旧那一代上，新会话（和重启后恢复的会话）才用新值。
 - **摘要走公开的 `llm/stream` 钩子。** 宿主写摘要时 `purpose: "compaction"`，指令是最后一条用户消息。只换这一条，前缀不动，写摘要照样命中会话缓存。指令认不出来（宿主改了措辞）、请求对象被冻结时原样放行并打 warn；只有认出并换掉指令，才在输出后附原话，两件事同进同退。模型出错、取消、写超长时不附，宿主照常判失败。
+- **压窗也只能在 `llm/stream` 里做。** 宿主没有「回合因超窗失败后由插件压缩并续跑」的接口：`agent/request-error` 只能让宿主重试同一请求，`compaction-basic` 已经在这里做溢出恢复，失败点恰恰是它写摘要那一步超窗。插件够得着的只有这一步的请求本身。窗口大小用宿主公开的 `llm.resolveModelInfo` 查登记值；查不到就原样发。
 
 ## 配置
 
@@ -48,23 +50,25 @@
 | `userMessageChars` | `8000` | 附录里逐字原话的额度，按写出来的行长算；放不下的旧原话降成轮次清单 |
 | `userIndexChars` | `2000` | 附录里轮次清单的额度；超了把最早的并成一行范围 |
 | `historyReaderHint` | `''` | 空串使用通用读取说明；非空时替换会话读取说明，所有 `{sessionId}` 按字面换成当前会话编号，再追加轮次说明。不会安装或验证读取工具 |
+| `fitWindow` | `true` | 写摘要请求超出模型登记窗口时压进窗口重发，最多两次；关掉就照宿主原样发。和 `boundSummary` 互不影响 |
 
 ## 怎么核对在不在生效
 
 宿主日志不落盘。插件每次模式挂好、每次写摘要后都会改写 `$DSH_HOME/plugins/compaction-bound/status.json`：
 
 - `mounted`：每个模式实际挂载的树里，压缩引擎那一行经宿主 schema 解析后的 `retainTokens`（不是插件写进记录的值）。新会话用的就是这一代。
-- `history`：最近 20 次写摘要的记录，最新的在最后，`lastSummary` 是它的最后一条。插件启动时先读回旧文件里的记录接着记，重启不丢。每条有会话、是否换了指令（`replaced` / `unrecognized`）、逐字 `userMessages` / 清单 `indexed` / 并掉 `merged` 各几条、`turnsKnown`（查到轮次没有）、压掉的轮次 `turns`、附录字数；`output` 是字数核对结果（`within` / `condensed` / `over-kept` / `failed`，附模型原稿字数），压短过的还有 `condenseUsage`。
+- `history`：最近 20 次写摘要的记录，最新的在最后，`lastSummary` 是它的最后一条。插件启动时先读回旧文件里的记录接着记，重启不丢。每条有会话、是否换了指令（`replaced` / `unrecognized`）、逐字 `userMessages` / 清单 `indexed` / 并掉 `merged` 各几条、`turnsKnown`（查到轮次没有）、压掉的轮次 `turns`、附录字数；`output` 是字数核对结果（`within` / `condensed` / `over-kept` / `failed`，附模型原稿字数），压短过的还有 `condenseUsage`。请求压过窗的还有 `fit`：登记窗口、输入预算、超窗几次、目标依据（`reported-usage` / `learned-ratio` / `halve` / `estimate`）、截掉的工具结果数、拿掉的消息数、最终结果（`stop` / `still-over` / `cannot-fit` 等）。
 
 ## 依赖的宿主内部结构
 
 - 模式注册表的 `definitions` / `register` / `activate` / `collect`，以及记录上的 `config` / `ready` / `generation`。缺了就不装、打 warn，压缩照宿主默认。
 - 宿主压缩指令以 `You are now acting as a compaction engine` 开头、写摘要请求带 `purpose: "compaction"`。测试直接读安装的 `dsh-compaction-basic` 源码核对，DSH 改了措辞测试先红。
-- 检查点消息来源是 `compact-checkpoint`，内容是 `frameSummary` 的四块（开头说明、模型正文、插件附录、`</compacted-summary>`）。`test/host-chain.test.ts` 用宿主真实的会话存储、计数、模型运行时和压缩引擎连跑 3 次压缩核对；只有模型是假的。
+- 检查点消息来源是 `compact-checkpoint`，内容是 `frameSummary` 的四块（开头说明、模型正文、插件附录、`</compacted-summary>`）。`test/host-chain.test.ts` 用宿主真实的会话存储、计数、模型运行时和压缩引擎连跑 3 次压缩核对；只有模型是假的。超窗测试给假模型一个很小的登记窗口，复现 pi-ai 判溢出和服务商直接拒收两种形状。
+- `llm.resolveModelInfo(provider, model)` 返回的 `context.contextWindow`，以及超窗失败统一用 `CONTEXT_WINDOW_EXCEEDED` 这个 code。
 
 ## 删除条件
 
-宿主的压缩引擎提供了摘要长度上限（含超限处理）和「用户原话不经模型转述」的能力，且官方模式里能单独配压缩那一行的保留量时，整条删除：从 profile 的 `dependencies` 和 `dsh.profile.bundles` 去掉 `dsh-compaction-bound`，重装依赖，删目录，清插件索引里的行，重启 DSH。
+宿主的压缩引擎提供了摘要长度上限（含超限处理）和「用户原话不经模型转述」的能力，且官方模式里能单独配压缩那一行的保留量、写摘要请求超窗时宿主自己会压进窗口时，整条删除：从 profile 的 `dependencies` 和 `dsh.profile.bundles` 去掉 `dsh-compaction-bound`，重装依赖，删目录，清插件索引里的行，重启 DSH。
 
 ## 开发
 
