@@ -38,6 +38,7 @@ import { boundCellOutput, type SaveOutput } from './output-budget.ts'
 import { sharedPipeline, type PipelineLike } from './background-tools.ts'
 import type { SubagentsLike } from './agent-runs.ts'
 import { JobNotices, listUnfinished, unfinishedNotice, type HostJobs, type JobsService } from './bash-jobs.ts'
+import { copyKernelSources } from './kernel-sources.ts'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { reminderSummary, reminderText } from '../../tooling/runtime/notice.mjs'
 
@@ -262,6 +263,8 @@ export class PythonReplRuntime extends PtcRuntime {
   private readonly sessionDiscoveries = new Map<string, SkillDiscovery>()
   /** One notice for background jobs a cell left running that end close together (src/bash-jobs.ts). */
   readonly jobNotices: JobNotices
+  /** Where kernels load `python/` and `vendor/` from: a copy taken when this host started (src/kernel-sources.ts). */
+  readonly kernelRoot: string
 
   /** Plain snapshot of the (possibly volatile-cell) config, resolved per read. */
   get config(): ResolvedConfig { return resolveConfig(this.rawConfig) }
@@ -269,6 +272,12 @@ export class PythonReplRuntime extends PtcRuntime {
   constructor(ctx: Context, config: Config) {
     super(ctx)
     this.rawConfig = config
+    try {
+      this.kernelRoot = copyKernelSources(packageRoot, pluginState('kernel-sources'))
+    } catch (error) {
+      this.kernelRoot = packageRoot
+      ctx.logger?.('python-repl')?.warn?.(`python-repl: could not copy the kernel's Python sources, kernels read the checkout and break if it moves: ${error instanceof Error ? error.message : String(error)}`)
+    }
     this.jobNotices = new JobNotices(() => ctx.get('jobs' as never) as JobsService | undefined, {
       deliver: (owner, text, summary, extras) => {
         const agent = (ctx.get('agents') as { get?(id: string): { status?: string; followup(m: unknown): void; inject(m: unknown): void } | undefined } | undefined)?.get?.(owner)
@@ -794,8 +803,8 @@ export class PythonReplRuntime extends PtcRuntime {
     const session = new ReplSession({
       python,
       sessionId: key,
-      vendorRoot: join(packageRoot, 'vendor', 'prime'),
-      pythonRoot: join(packageRoot, 'python'),
+      vendorRoot: join(this.kernelRoot, 'vendor', 'prime'),
+      pythonRoot: join(this.kernelRoot, 'python'),
       // The kernel runs in the SESSION's workspace, the same directory `bash`
       // and the file tools use, so `open("out.csv")` in a cell and `> out.csv`
       // in a shell land in the same place.
