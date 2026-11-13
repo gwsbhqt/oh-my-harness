@@ -65,10 +65,18 @@ it('a missing key on a tool result names its keys; slicing it says it is a dict'
   assert.match(sliced, /is a dict, not text or a list, so it cannot be sliced/)
 })
 
-it('awaiting a plain value says to drop await or parenthesize', async () => {
+it('awaiting a plain value names the synchronous function and says to remove await, once', async () => {
   const text = message(await session.runCell('def sync():\n    return {"a": 1}\nawait sync()', new Map()))
   assert.match(text, /can't be awaited/)
-  assert.match(text, /drop `await`/)
+  assert.match(text, /`sync` is a plain \(synchronous\) function: it already returned a dict, so remove the `await`/)
+  assert.equal(count(text, 'remove the `await`'), 1, text)
+  assert.doesNotMatch(text, /drop `await`/)
+})
+
+it('a call with a parameter the function does not take lists its real parameters', async () => {
+  const text = message(await session.runCell('class Snap:\n    def find(self, role=None, name=None):\n        pass\nsnap = Snap()\nsnap.find(idx=2)', new Map()))
+  assert.match(text, /unexpected keyword argument 'idx'/)
+  assert.match(text, /`snap\.find` takes find\(role=None, name=None\): pass only these parameters/)
 })
 
 it('an edit that matched several places says how to fix it', async () => {

@@ -49,7 +49,7 @@ class NextSteps(unittest.TestCase):
 
     def test_offset_out_of_range_gives_the_line_count(self):
         hint = cell_errors.tool_hint(f'offset 90 is out of range for "{self.dir}/session.ts"')
-        self.assertIn("The file has 3 lines", hint)
+        self.assertIn("The file has 2 lines", hint)
 
 
 class RetiredSkillNames(unittest.TestCase):

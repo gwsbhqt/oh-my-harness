@@ -49,14 +49,24 @@ function readAsarFile(archive: string, path: readonly string[]): string {
   return buf.subarray(start, start + node.size).toString('utf8')
 }
 
-/** The ToolRow stylesheet text a host bundle injects under TOOL_ROW_STYLE_ID. */
+/**
+ * The ToolRow stylesheet text a host bundle injects under TOOL_ROW_STYLE_ID.
+ *
+ * The npm build writes `const css$3 = "…";`, the App build since 0.2.2-rc.2
+ * a minified template literal `const css$3=\`…\`;`; both tag the same id.
+ */
 function toolRowCss(hostJs: string): string {
-  const idAt = hostJs.indexOf(JSON.stringify(TOOL_ROW_STYLE_ID))
+  const idAt = [JSON.stringify(TOOL_ROW_STYLE_ID), `\`${TOOL_ROW_STYLE_ID}\``]
+    .map((quoted) => hostJs.indexOf(quoted)).find((at) => at > 0) ?? -1
   assert.ok(idAt > 0, 'host still tags the ToolRow stylesheet with the same id')
   const decl = hostJs.lastIndexOf('const css', idAt)
-  const literal = /const css\$?\d* = ("(?:[^"\\]|\\.)*");/.exec(hostJs.slice(decl, idAt))
+  const literal = /const css\$?\d*\s*=\s*("(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`);/.exec(hostJs.slice(decl, idAt))
   assert.ok(literal !== null, 'ToolRow stylesheet literal found')
-  return JSON.parse(literal[1]!) as string
+  const text = literal[1]!
+  if (text.startsWith('"')) return JSON.parse(text) as string
+  // A template literal without substitutions is plain data; evaluating it only applies its escapes.
+  assert.ok(!text.includes('${'), 'ToolRow stylesheet literal has no substitutions')
+  return new Function(`return ${text}`)() as string
 }
 
 /** Every class the card uses resolves in this host bundle, and matches the names the host renders with. */
@@ -66,7 +76,8 @@ function assertHostHasClasses(hostJs: string, label: string): void {
   assert.ok(classes !== null)
   for (const key of TOOL_ROW_CLASS_KEYS) {
     assert.match(classes[key], new RegExp(`^[\\w-]+_${key}$`))
-    assert.ok(hostJs.includes(`"${key}": "${classes[key]}"`), `${label}: host renders ${key} under another name`)
+    const rendered = new RegExp(`"${key}":\\s*["\`]${classes[key]}["\`]`)
+    assert.match(hostJs, rendered, `${label}: host renders ${key} under another name`)
   }
 }
 
