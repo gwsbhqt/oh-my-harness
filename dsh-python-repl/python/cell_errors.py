@@ -202,11 +202,16 @@ def _edit_target(message: str, args) -> tuple[str, str] | None:
 
 
 def _line_count(path: str) -> int | None:
+    """Lines as the host's read counts them: a final line break does not start another line."""
     try:
         with open(path, "rb") as fh:
-            return sum(chunk.count(b"\n") for chunk in iter(lambda: fh.read(1 << 20), b"")) + 1
+            breaks, last = 0, b""
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                breaks += chunk.count(b"\n")
+                last = chunk[-1:]
     except OSError:
         return None
+    return breaks + (1 if last not in (b"", b"\n") else 0)
 
 
 def tool_hint(message: str, args=None) -> str | None:
@@ -318,7 +323,215 @@ def _next_step(message: str, args) -> str | None:
         return None if near is None else f"{near} await glob('**/<name>', path=<dir>) searches deeper."
     found = re.search(r"offset (\d+) is out of range", message)
     if found:
+        # 2026-11-04 evolve I-065: counting here said 45 lines where the host's own message said (44 lines).
+        stated = re.search(r"\((\d+) lines?\)", message)
         quoted = _QUOTED_PATH.search(message)
-        total = None if quoted is None else _line_count(quoted.group(1))
-        return None if total is None else f"The file has {total} lines; pass an offset from 1 to {total}."
+        total = int(stated.group(1)) if stated else None if quoted is None else _line_count(quoted.group(1))
+        if total is None:
+            return None
+        if total == 0:
+            return "The file is empty: there is nothing to read past line 1."
+        return f"The file has {total} line{'s' if total != 1 else ''}; pass an offset from 1 to {total}."
+    return None
+
+
+# Hints for the Python mistakes that guessing an interface produces (evolve I-044, 150 occurrences by
+# 2026-11-12): awaiting a synchronous result, using an un-awaited coroutine, treating text or a list as
+# a dict, passing parameters a function does not take, guessing a key, importing from `skills`.
+# Each hint names the failing expression, found by the exact source position Python 3.11+ records;
+# values are looked up without running user code (no properties, no __getattr__ on user objects), and
+# anything that cannot be confirmed gets the generic sentence or no hint at all.
+
+_EXPR_CHARS = 80
+_KEYS_SHOWN = 12
+
+
+def exception_hint(exc: BaseException) -> str | None:
+    """One line on how to write the failing expression correctly, or None when unsure."""
+    try:
+        return _exception_hint(exc)
+    except Exception:  # noqa: BLE001 - a hint must never break error reporting
+        return None
+
+
+def _site(exc: BaseException):
+    """(frame, node) where the exception was raised: the innermost frame and the AST node at its exact position."""
+    import ast
+    import linecache
+
+    tb = exc.__traceback__
+    if tb is None:
+        return None, None
+    while tb.tb_next is not None:
+        tb = tb.tb_next
+    frame = tb.tb_frame
+    positions = list(frame.f_code.co_positions())
+    index = tb.tb_lasti // 2
+    if not 0 <= index < len(positions):
+        return frame, None
+    line, end_line, col, end_col = positions[index]
+    if None in (line, end_line, col, end_col):
+        return frame, None
+    try:
+        tree = ast.parse("".join(linecache.getlines(frame.f_code.co_filename)))
+    except (SyntaxError, ValueError):
+        return frame, None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.expr) and (node.lineno, node.col_offset, node.end_lineno, node.end_col_offset) == (line, col, end_line, end_col):
+            return frame, node
+    return frame, None
+
+
+def _code(node) -> str:
+    import ast
+
+    text = ast.unparse(node)
+    return text if len(text) <= _EXPR_CHARS else text[: _EXPR_CHARS - 1] + "…"
+
+
+_MISSING = object()
+
+
+def _lookup(node, frame):
+    """The value of a name, attribute or constant-key subscript expression, read without running user code.
+
+    Attributes are read normally only on modules, classes and the skills namespace; on any
+    other object statically, so a property or __getattr__ never runs. _MISSING when unsure.
+    """
+    import ast
+    import builtins
+    import inspect
+    import types
+
+    if isinstance(node, ast.Name):
+        for scope in (frame.f_locals, frame.f_globals, vars(builtins)):
+            if node.id in scope:
+                return scope[node.id]
+        return _MISSING
+    if isinstance(node, ast.Attribute):
+        base = _lookup(node.value, frame)
+        if base is _MISSING:
+            return _MISSING
+        if isinstance(base, (types.ModuleType, type)) or type(base).__name__ == "_SkillsNamespace":
+            return getattr(base, node.attr, _MISSING)
+        try:
+            found = inspect.getattr_static(base, node.attr)
+        except AttributeError:
+            return _MISSING
+        if isinstance(found, (types.FunctionType, staticmethod, classmethod)):
+            return found.__get__(base, type(base)) if not isinstance(found, staticmethod) else found.__func__
+        return found if type(found).__module__ == "builtins" and not isinstance(found, (property, types.MemberDescriptorType, types.GetSetDescriptorType)) else _MISSING
+    if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
+        base = _lookup(node.value, frame)
+        if isinstance(base, dict) and type(base).__module__ in ("builtins", "dsh_kernel"):
+            return dict.get(base, node.slice.value, _MISSING) if isinstance(node.slice.value, (str, int)) else _MISSING
+        if isinstance(base, list) and type(base).__module__ in ("builtins", "dsh_kernel") and type(node.slice.value) is int:
+            try:
+                return list.__getitem__(base, node.slice.value)
+            except IndexError:
+                return _MISSING
+    return _MISSING
+
+
+def _keys(value) -> str:
+    keys = list(dict.keys(value))
+    shown = ", ".join(repr(k) for k in keys[:_KEYS_SHOWN])
+    return shown + (f" (+{len(keys) - _KEYS_SHOWN} more)" if len(keys) > _KEYS_SHOWN else "")
+
+
+def _close_key(key: str, keys) -> str | None:
+    """The key the model probably meant: same letters ignoring case and _/-, a unique *Id for id, or a close spelling."""
+    import difflib
+
+    names = [k for k in keys if isinstance(k, str)]
+    flat = re.sub(r"[_\-]", "", key).lower()
+    same = [k for k in names if re.sub(r"[_\-]", "", k).lower() == flat]
+    if len(same) == 1:
+        return same[0]
+    if key.lower() == "id":
+        ids = [k for k in names if k.endswith("Id") or k.endswith("_id")]
+        if len(ids) == 1:
+            return ids[0]
+    close = difflib.get_close_matches(key, names, n=1, cutoff=0.75)
+    return close[0] if close else None
+
+
+def _list_shape(value) -> str:
+    count = list.__len__(value)
+    first = list.__getitem__(value, 0) if count else None
+    inner = f"; its items are dicts with keys {_keys(first)}" if isinstance(first, dict) and type(first).__module__ in ("builtins", "dsh_kernel") else ""
+    return f"a list of {count} item{'s' if count != 1 else ''}{inner}"
+
+
+def _exception_hint(exc: BaseException) -> str | None:
+    import ast
+
+    message = str(exc)
+    if isinstance(exc, ImportError) and not isinstance(exc, ModuleNotFoundError) and exc.name == "skills":
+        wanted = getattr(exc, "name_from", None) or (re.search(r"cannot import name '(\w+)'", message) or [None, None])[1]
+        use = f"skills.{wanted}" if wanted else "skills.<name>"
+        return f"`skills` is already loaded in every cell and nothing is imported from it: use `{use}` directly, with no import line.\n"
+    frame, node = _site(exc)
+    if frame is None:
+        return None
+
+    if isinstance(exc, TypeError) and re.fullmatch(r"'[\w.]+' object can't be awaited|object [\w.]+ can't be used in 'await' expression", message):
+        kind = re.search(r"'?([\w.]+)'? (?:object )?can't", message).group(1)
+        kind = "dict" if kind in ("_ToolResult", "_NestedResult") else kind
+        if isinstance(node, ast.Await):
+            inner = node.value
+            if isinstance(inner, (ast.Attribute, ast.Subscript)) and isinstance(inner.value, ast.Call):
+                return (f"`await {_code(inner)}` takes the {'attribute' if isinstance(inner, ast.Attribute) else 'item'} before awaiting the call; "
+                        f"if `{_code(inner.value.func)}` is async, write `(await {_code(inner.value)}){_code(inner)[len(_code(inner.value)):]}`.\n")
+            if isinstance(inner, ast.Call):
+                return f"`{_code(inner.func)}` is a plain (synchronous) function: it already returned a {kind}, so remove the `await` in front of it.\n"
+            return f"`{_code(inner)}` is already a {kind}, not something to wait for: remove the `await`.\n"
+        return f"The value after `await` is a {kind}: the function that produced it is synchronous, so remove the `await`.\n"
+
+    if re.search(r"'coroutine' object|of type 'coroutine'", message):
+        target = node.value if isinstance(node, (ast.Subscript, ast.Attribute)) else None
+        if isinstance(target, ast.Call):
+            rest = _code(node)[len(_code(target)):]
+            return f"`{_code(target)}` is async and was not awaited yet: write `(await {_code(target)}){rest}`.\n"
+        return "This value is a coroutine that has not run: put `await` before the call that made it, in parentheses before indexing: `(await f(...))['key']`.\n"
+
+    if isinstance(exc, AttributeError) and isinstance(getattr(exc, "obj", None), (str, list)) and type(exc.obj).__module__ in ("builtins", "dsh_kernel"):
+        value, name = exc.obj, exc.name
+        where = f"`{_code(node.value)}`" if isinstance(node, ast.Attribute) else "This value"
+        if isinstance(value, str):
+            json_like = value.lstrip()[:1] in ("{", "[")
+            start = value[:60]
+            return (f"{where} is text (a str of {len(value)} characters starting {start!r}), not a dict or object, so it has no `.{name}`"
+                    + (": it looks like JSON, parse it first with json.loads(...).\n" if json_like else ".\n"))
+        return f"{where} is {_list_shape(value)}, not a dict, so it has no `.{name}`: pick an item (`[0]`) or loop over it.\n"
+
+    if isinstance(exc, TypeError) and isinstance(node, ast.Subscript):
+        if message.startswith("string indices must be integers"):
+            return f"`{_code(node.value)}` is text (a str), not a dict, so it has no keys: if it holds JSON, parse it first with json.loads(...).\n"
+        if message.startswith("list indices must be integers"):
+            value = _lookup(node.value, frame)
+            shape = _list_shape(value) if isinstance(value, list) and type(value).__module__ in ("builtins", "dsh_kernel") else "a list"
+            return f"`{_code(node.value)}` is {shape}, not a dict: pick an item by position or loop over it, then use the key on the item.\n"
+
+    called = re.match(r"([\w.<>]+)\(\) (?:got an unexpected keyword argument|got multiple values for|takes |missing \d+ required)", message)
+    if isinstance(exc, TypeError) and called and isinstance(node, ast.Call):
+        import inspect
+
+        function = _lookup(node.func, frame)
+        if function is _MISSING or getattr(function, "__qualname__", None) != called.group(1):
+            return None
+        try:
+            signature = inspect.signature(function)
+        except (TypeError, ValueError):
+            return None
+        return f"`{_code(node.func)}` takes {getattr(function, '__name__', 'it')}{signature}: pass only these parameters.\n"
+
+    if isinstance(exc, KeyError) and len(exc.args) == 1 and isinstance(exc.args[0], str) and isinstance(node, ast.Subscript):
+        value = _lookup(node.value, frame)
+        if type(value) is not dict:
+            return None
+        key = exc.args[0]
+        guess = _close_key(key, list(dict.keys(value)))
+        return (f"`{_code(node.value)}` has no key {key!r}; its keys are {_keys(value)}"
+                + (f". Did you mean {guess!r}?\n" if guess else ".\n"))
     return None

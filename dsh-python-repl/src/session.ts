@@ -29,7 +29,7 @@ import { AgentRuns, type SubagentsLike } from './agent-runs.ts'
 import { describeDenial, LeaseRegistry, type BoundTool } from './lease.ts'
 import { BackgroundGrant, ToolLane, type PipelineLike } from './background-tools.ts'
 import { argumentFix, catalogBindings, isCatalogBinding, TOP_LEVEL_TOOLS, type ToolSchemaLike } from './catalog.ts'
-import { awaitPrecedenceHint, failedTasksNotice, foreignLanguageHint, missingModuleHint, usageHint } from './hints.ts'
+import { failedTasksNotice, foreignLanguageHint, missingModuleHint, usageHint } from './hints.ts'
 import { RESTORE_TIMEOUT_MS, SNAPSHOT_DEBOUNCE_MS, SNAPSHOT_SUPPORT_TIMEOUT_MS, SNAPSHOT_TIMEOUT_MS, readRestoreReport, restoreNotice, snapshotFiles, type RestoreSummary, type RestoreReport } from './snapshot.ts'
 
 export interface SessionOptions {
@@ -1153,7 +1153,7 @@ export class ReplSession {
         : `${error.ename}: ${error.evalue}${
             error.traceback === undefined ? '' : `\n${error.traceback.join('')}`
           }${error?.ename === 'SyntaxError' && code !== undefined ? foreignLanguageHint(code, error.evalue) : ''}${
-            error === undefined ? '' : missingModuleHint(error.ename, error.evalue) + awaitPrecedenceHint(error.ename, error.evalue)}`
+            error === undefined ? '' : missingModuleHint(error.ename, error.evalue)}`
     return { ...base, error: { kind: 'exception', message: report === '' ? message : `${message.trimEnd()}\n\n${report}` } }
   }
 

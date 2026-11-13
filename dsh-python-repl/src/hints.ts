@@ -46,22 +46,6 @@ export function foreignLanguageHint(code: string, evalue = ''): string {
 }
 
 /**
- * `await f(...)[k]` and `await f(...).x` index the coroutine before awaiting
- * it — Python binds `await` looser than subscripts and attribute access. The
- * plain TypeError does not say so.
- */
-export function awaitPrecedenceHint(ename: string, evalue: string): string {
-  // `await skills.demo.status()` and `await f(...).__class__` (real sessions 2026-11-03): the value is not awaitable.
-  if (ename === 'TypeError' && /object can't be awaited/.test(evalue)) {
-    return '\n\nThe awaited value is not awaitable: either the function is synchronous and already returned its result (drop `await`; '
-      + 'skill functions are often synchronous, check with inspect.iscoroutinefunction), or `await f(...).x` applied `.x` before awaiting — write `(await f(...)).x`.'
-  }
-  if (!/^(TypeError|AttributeError)$/.test(ename) || !/'coroutine' object (is not subscriptable|has no attribute)/.test(evalue)) return ''
-  return '\n\n`await f(...)[k]` and `await f(...).x` apply the index or attribute to the coroutine BEFORE awaiting it. '
-    + 'Parenthesize the await: `(await f(...))[k]`, `(await f(...)).x`.'
-}
-
-/**
  * Import names whose package is named differently. Only mismatches: for every
  * other name the import name is the best guess, and the installer says so if not.
  */

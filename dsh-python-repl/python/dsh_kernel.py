@@ -114,7 +114,17 @@ class _ToolResult(dict):
         keys = ", ".join(repr(k) for k in self)
         if isinstance(key, slice):
             raise KeyError(f"this tool result is a dict, not text or a list, so it cannot be sliced; its keys are {keys}")
-        raise KeyError(f"{key!r} is not a key of this tool result; its keys are {keys}")
+        guess = None
+        if isinstance(key, str):
+            try:
+                import cell_errors
+
+                guess = cell_errors._close_key(key, list(self))
+            except Exception:  # noqa: BLE001 - the key list below is enough without a guess
+                guess = None
+        # 2026-11-03 evolve I-044: `exit_code`, `id` guessed for `exitCode`, `jobId` even with the keys listed.
+        tail = f"; did you mean {guess!r}?" if guess else ""
+        raise KeyError(f"{key!r} is not a key of this tool result; its keys are {keys}{tail}")
 
     def __getattr__(self, name: str) -> Any:
         # 2026-11-03 evolve I-044: after the KeyError hint, cells still wrote `r.totalLines`, `files.paths`,
@@ -591,6 +601,8 @@ def _hint_name_errors(repl_module: Any) -> None:
             if isinstance(exc, ToolCallError):
                 hint = cell_errors.tool_hint(str(exc), getattr(exc, "_dsh_args", None))
                 hint = None if hint is None else hint + "\n"
+            elif hint is None:
+                hint = cell_errors.exception_hint(exc)
             if hint is not None:
                 event["traceback"] = [*event.get("traceback", []), hint]
             skipped = cell_errors.skipped_note(exc)

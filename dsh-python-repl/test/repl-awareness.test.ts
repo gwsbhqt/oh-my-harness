@@ -216,7 +216,7 @@ describe('shadowed-binding warning', () => {
   it('names the parenthesized await when a coroutine is indexed', async () => {
     const session = newSession()
     const result = await session.runCell('async def rows():\n    return [1, 2]\nawait rows()[0]', noTools())
-    assert.match(result.error?.message ?? '', /\(await f\(\.\.\.\)\)\[k\]/)
+    assert.match(result.error?.message ?? '', /`rows\(\)` is async and was not awaited yet: write `\(await rows\(\)\)\[0\]`/)
   })
 
   it('stays quiet when nothing is shadowed', async () => {
