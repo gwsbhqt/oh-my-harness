@@ -14,6 +14,46 @@ import asyncio
 import sys as _sys
 
 
+def _guard_skills_import(ns):
+    """`import skills` in a cell yields the preloaded namespace.
+
+    `sys.modules["skills"]` is python/skills.py, the loader that fills the
+    namespace; a plain import rebound the cell's `skills` to that module and
+    every `skills.<name>` after it failed. Only imports made from the cell
+    namespace are redirected, so the kernel's own `import skills` still gets
+    the loader. A name the namespace lacks fails as ImportError(name="skills")
+    with the namespace's own reason, which python/cell_errors.py turns into
+    "use skills.<name> directly".
+    """
+    import builtins
+
+    original = getattr(builtins.__import__, "__dsh_original__", builtins.__import__)
+
+    def __import__(name, globals=None, locals=None, fromlist=(), level=0):
+        if name != "skills" or level != 0 or globals is not ns:
+            return original(name, globals, locals, fromlist, level)
+        namespace = _sys.modules["dsh_kernel"].skills
+        for item in fromlist or ():
+            if item == "*":
+                continue
+            try:
+                getattr(namespace, item)
+            except AttributeError as exc:
+                raise ImportError(f"cannot import name {item!r} from 'skills': {exc}", name="skills") from None
+        return namespace
+
+    __import__.__dsh_original__ = original
+    builtins.__import__ = __import__
+
+
+def _background_doc(subagent):
+    """The first line `repl.background` shows: a subagent's background work dies with its turn (src/subagent.ts)."""
+    if subagent:
+        return ("Run long work after this cell ends, as a DSH background job. You are a subagent: "
+                "`await` it before you finish, because ending your turn stops it with no notice.")
+    return "Run long work after this cell ends, as a DSH background job; DSH wakes you when it finishes."
+
+
 def _bootstrap(tool_names, top_level_names, epoch, skill_entries=(), disabled_skills=(), skill_renames=None):
     """Build the namespace. Returns the skill report for the host."""
     import rlm.repl as _repl
@@ -35,8 +75,11 @@ def _bootstrap(tool_names, top_level_names, epoch, skill_entries=(), disabled_sk
         _bridge.tools._put(name, _bridge._proxy(name))
 
     _bridge.skills = _skills._SkillsNamespace(skill_renames)
+    # repl.helpers()/describe show this line; a subagent must not read "DSH wakes you".
+    _Repl.background.__doc__ = _background_doc(_bridge._SUBAGENT)
     ns["tools"] = _bridge.tools
     ns["skills"] = _bridge.skills
+    _guard_skills_import(ns)
     ns["ToolCallError"] = _bridge.ToolCallError
     ns["asyncio"] = asyncio
     ns["repl"] = _Repl(_repl_info, epoch)
@@ -281,7 +324,7 @@ class _Repl:
         return _lifecycle_ops("unarchive", names)
 
     async def background(self, work, label=None):
-        """Run long work after this cell ends, as a DSH background job; DSH wakes you when it finishes."""
+        """Run long work after this cell ends, as a DSH background job; DSH wakes you when it finishes."""  # replaced by _background_doc at bootstrap
         import background as _background
 
         return await _background.start(work, label)

@@ -117,7 +117,7 @@ Options are stored under the `python-repl` loader id. The plugin settings card e
 | `toolCallTimeoutMs` | `0` | Optional bridge reply deadline. Zero follows Harness tool lifetimes, including human waits. |
 | `maxCellOutputTokens` | `8000` | Estimated cell output budget. Full overflow output goes to the Harness spill store; zero disables the limit. |
 | `maxCellTimeoutMs` | `86400000` | Maximum cell duration, including tool and approval waits. A smaller call-level `timeoutMs` wins. |
-| `cellWaitMs` | `5000` | Maximum foreground wait for a bash command or job before it continues in the background. Zero disables this cap. |
+| `cellWaitMs` | `5000` | Maximum foreground wait for a bash command or job before it continues in the background. Zero disables this cap. A subagent session waits at least 10 minutes: when a subagent's turn ends, DSH stops its background jobs without a notice, so it has to wait for results in a cell. |
 | `archiveAfterCells` | `100` | Archive unpinned names after this many unused cells; using them restores them automatically. Zero disables archiving. |
 | `deleteAfterCells` | `200` | Delete unpinned names after this many unused cells. Zero disables deletion. |
 | `idleKernelMinutes` | `60` | Reclaim fully recoverable idle kernels when no tasks, threads, or child processes are active. Zero disables reclaim. |
@@ -130,7 +130,7 @@ Runtime state lives below `DSH_HOME/plugins/python-repl/`. Each session has its 
 
 Each trusted skill has a standard `SKILL.md` identity and a Python package under `src/<import_name>/`. When present, `PYSKILL.md` supplies Python instructions; otherwise `SKILL.md` is used. Invalid Python instructions are reported without silently switching documents. Import names replace hyphens with underscores. Skills are available through `skills.<import_name>`; use `await skills.list()` and `await skills.describe("demo_reader")` to discover their functions and instructions.
 
-Do not use `import skills.demo_reader` or install a package named `skills`. `skills` is already a bound namespace. Documentation-only skills remain accessible through the Harness `skill` tool.
+Do not use `import skills.demo_reader` or install a package named `skills`. `skills` is already a bound namespace and needs no import; `import skills` returns that same namespace. Documentation-only skills remain accessible through the Harness `skill` tool.
 
 ## Trust and cancellation
 

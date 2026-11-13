@@ -470,7 +470,7 @@ def _exception_hint(exc: BaseException) -> str | None:
     if isinstance(exc, ImportError) and not isinstance(exc, ModuleNotFoundError) and exc.name == "skills":
         wanted = getattr(exc, "name_from", None) or (re.search(r"cannot import name '(\w+)'", message) or [None, None])[1]
         use = f"skills.{wanted}" if wanted else "skills.<name>"
-        return f"`skills` is already loaded in every cell and nothing is imported from it: use `{use}` directly, with no import line.\n"
+        return f"`skills` is already loaded in every cell, so no import is needed: use `{use}` directly, with no import line.\n"
     frame, node = _site(exc)
     if frame is None:
         return None
