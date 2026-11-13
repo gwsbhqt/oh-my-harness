@@ -233,6 +233,12 @@ SLEEP_POLL_NOTE = (
     "This cell polls in a loop with sleep. While a cell runs the user cannot reach you and you cannot do other work: "
     "end the turn instead. DSH wakes you when a background job or subagent finishes."
 )
+#: A subagent's jobs die with its turn and send no notice (src/subagent.ts): waiting is right, sleeping is not.
+SUBAGENT_SLEEP_POLL_NOTE = (
+    "This cell polls in a loop with sleep. You are a subagent, so waiting in a cell is right (ending your turn kills your jobs with no notice), "
+    "but wait on the job itself instead of sleeping between checks: `await r` on a bash handle, `await job` on repl.background work, "
+    "or tools.job_output with wait=True each return as soon as it ends."
+)
 
 
 def _sleep_poll(tree: ast.AST) -> list[str]:
@@ -245,7 +251,8 @@ def _sleep_poll(tree: ast.AST) -> list[str]:
                 func = node.func
                 name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else ""
                 if name == "sleep":
-                    return [SLEEP_POLL_NOTE]
+                    kernel = sys.modules.get("dsh_kernel")
+                    return [SUBAGENT_SLEEP_POLL_NOTE if getattr(kernel, "_SUBAGENT", False) else SLEEP_POLL_NOTE]
     return []
 
 

@@ -117,7 +117,7 @@ pnpm run check
 | `toolCallTimeoutMs` | `0` | 可选的工具桥回复等待上限。零表示跟随 DSH 工具的生命周期，包括等待用户。 |
 | `maxCellOutputTokens` | `8000` | 每格输出的估算展示额度。超出部分的全文存入 DSH 溢出存储；零表示不限制。 |
 | `maxCellTimeoutMs` | `86400000` | 单格最长执行时间，包含工具和审批等待。调用时传入更小的 `timeoutMs`，以更小值为准。 |
-| `cellWaitMs` | `5000` | 前台等待 Bash 命令或任务的最长时间，之后转后台继续。零表示关闭这个上限。 |
+| `cellWaitMs` | `5000` | 前台等待 Bash 命令或任务的最长时间，之后转后台继续。零表示关闭这个上限。子代理会话至少等 10 分钟：子代理一结束这一轮，DSH 就停掉它的后台任务，也不发通知，所以它要在格里等到结果。 |
 | `archiveAfterCells` | `100` | 未固定的名字连续多少格没使用后归档。再次使用会自动恢复。零表示不归档。 |
 | `deleteAfterCells` | `200` | 名字连续多少格没使用后删除。零表示不删除。 |
 | `idleKernelMinutes` | `60` | 没有任务、线程或子进程在运行，且状态能完整恢复时，回收闲置内核的等待时间。零表示不回收。 |
@@ -130,7 +130,7 @@ pnpm run check
 
 每个可信技能都有标准的 `SKILL.md` 身份说明，以及 `src/<import_name>/` 下的 Python 包。如果存在 `PYSKILL.md`，就用它提供 Python 使用说明；否则使用 `SKILL.md`。Python 说明无效时会报告错误，不会悄悄改读另一个文件。导入名中的连字符会换成下划线。通过 `skills.<import_name>` 使用技能；用 `await skills.list()` 和 `await skills.describe("demo_reader")` 查函数和说明。
 
-不要执行 `import skills.demo_reader`，也不要安装名叫 `skills` 的包。`skills` 已经是绑定好的命名空间。只有文档、没有 Python 入口的技能，仍通过 DSH 的 `skill` 工具使用。
+不要执行 `import skills.demo_reader`，也不要安装名叫 `skills` 的包。`skills` 已经是绑定好的命名空间，不用导入；写了 `import skills` 拿到的也是同一个命名空间。只有文档、没有 Python 入口的技能，仍通过 DSH 的 `skill` 工具使用。
 
 ## 信任和取消
 

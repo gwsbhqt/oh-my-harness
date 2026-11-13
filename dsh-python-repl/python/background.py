@@ -5,7 +5,8 @@ blocks every later cell and the user. Handed to `repl.background`, the work
 runs as an asyncio task (a plain function in a thread) after the cell ends,
 and the host registers it as a DSH background job: it shows in the job panel,
 `job_kill` stops it, and its end wakes the agent through the same merged
-notice as bash jobs. Once its cell has ended the work still calls the cell's
+notice as bash jobs. A subagent gets no such notice: DSH stops the work when
+the subagent's turn ends (src/subagent.ts), so there it must be awaited. Once its cell has ended the work still calls the cell's
 DSH tools: the host sends those calls through DSH's public tool pipeline
 (approval, sandbox and hooks as usual) until the job ends or is stopped
 (src/background-tools.ts).
@@ -102,8 +103,11 @@ class BackgroundJob:
         except TimeoutError:
             raise dsh_kernel.JobStillRunning(
                 f"background job {self.id} still running after {cap / 1000:g}s; it keeps running. "
-                "DSH wakes you when it finishes, so end this turn instead of waiting in a cell; "
-                "`await` this handle then returns its value at once."
+                + ("You are a subagent: ending your turn ends your run and stops this work with no notice, "
+                   "so `await` this handle again to keep waiting."
+                   if dsh_kernel._SUBAGENT else
+                   "DSH wakes you when it finishes, so end this turn instead of waiting in a cell; "
+                   "`await` this handle then returns its value at once.")
             ) from None
 
     def cancel(self) -> str:

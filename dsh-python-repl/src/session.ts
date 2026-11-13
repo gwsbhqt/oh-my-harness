@@ -17,6 +17,7 @@ import type { PanelState, PanelName, PanelPreview, PanelCell, PanelControlAction
 import { CellLog } from './cell-log.ts'
 import { callsReport, newCall, traceNotes, withWaitCap, type CellTrace } from './cell-trace.ts'
 import { withJobBash, type HostJobs } from './bash-jobs.ts'
+import { waitCapFor } from './subagent.ts'
 import { estimateTokens, SOFT_NOTE_EVERY, SOFT_OUTPUT_TOKENS, softOutputNote, wasCut } from './output-budget.ts'
 
 export type PanelObservation = Omit<PanelState, 'session' | 'now' | 'snapshot' | 'recordedSince' | 'cells' | 'cellsDropped' | 'generations' | 'lifecycle'>
@@ -55,6 +56,10 @@ export interface SessionOptions {
   deleteAfterCells?: number
   /** Longest one cell waits on a bash command or a job before handing it to the background (ms); 0 = no cap. */
   cellWaitMs?: number
+  /** The session is a delegated subagent (src/subagent.ts): its jobs die with its turn, so it waits in cells and is told so. */
+  subagent?: boolean
+  /** A subagent's raised wait cap; defaults to SUBAGENT_WAIT_MS. */
+  subagentWaitMs?: number
   /**
    * The session this kernel belongs to. Passed to the kernel as
    * DSH_SESSION_ID so subprocesses (for example, dsh-control restart)
@@ -647,6 +652,11 @@ export class ReplSession {
     })
   }
 
+  /** How long one cell waits on a command or job: cellWaitMs, raised in a subagent. */
+  #waitCap(): number {
+    return waitCapFor(this.#options.cellWaitMs ?? DEFAULT_CELL_WAIT_MS, this.#options.subagent === true, this.#options.subagentWaitMs)
+  }
+
   /**
    * Run one cell. Serialized against other cells on this session.
    * @param code - the cell source, as the model wrote it.
@@ -668,7 +678,7 @@ export class ReplSession {
     // model actually needs, from this cell's own schema.
     for (const [name, fn] of tools) {
       if (!isCatalogBinding(name)) {
-        const cap = this.#options.cellWaitMs ?? DEFAULT_CELL_WAIT_MS
+        const cap = this.#waitCap()
         const fixed = withArgumentFix(name, withPythonSkillDocument(name, fn, this.#options.skills ?? []), byName.get(name)?.parameters)
         const capped = withWaitCap(name, fixed, byName.get(name), cap)
         bound.set(name, name === 'bash' ? withJobBash(fixed, byName.get(name), cap, host, signal, capped)
@@ -1104,7 +1114,7 @@ export class ReplSession {
     }
     if ((teardown.failed ?? []).length > 0) base.logs.push(failedTasksNotice(teardown.failed ?? []))
     for (const note of teardown.advice ?? []) base.logs.push(`[dsh-python-repl] ${note}`)
-    for (const note of trace === undefined ? [] : traceNotes(trace)) base.logs.push(`[dsh-python-repl] ${note}`)
+    for (const note of trace === undefined ? [] : traceNotes(trace, this.#options.subagent === true)) base.logs.push(`[dsh-python-repl] ${note}`)
     const report = trace === undefined ? '' : callsReport(trace.calls)
     const usage = code === undefined ? '' : usageHint(code)
     if (usage.length > 0 && !base.logs.some((line) => line.includes('Hand-rolled file edit'))) {
@@ -1240,7 +1250,8 @@ export class ReplSession {
             DSH_PYTHON_REPL_ARCHIVE_AFTER: String(this.#options.archiveAfterCells ?? 100),
             DSH_PYTHON_REPL_DELETE_AFTER: String(this.#options.deleteAfterCells ?? 200),
           }),
-          DSH_PYTHON_REPL_WAIT_MS: String(this.#options.cellWaitMs ?? DEFAULT_CELL_WAIT_MS),
+          DSH_PYTHON_REPL_WAIT_MS: String(this.#waitCap()),
+          ...(this.#options.subagent === true ? { DSH_PYTHON_REPL_SUBAGENT: '1' } : {}),
         },
         onHostRequest: (id, data) => this.#onHostRequest(id, data, kernel),
         onUnattributedOutput: (text) => this.#appendBackgroundOutput(text),

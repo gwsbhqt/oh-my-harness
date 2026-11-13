@@ -303,7 +303,10 @@ class _BashResult(_ToolResult):
             job = self.get("jobId")
             raise KeyError(
                 f"{key!r}: this bash call became a {self['kind']} job {job!r} and has no {key!r} yet. "
-                f"DSH wakes you when it finishes, so end this turn instead of waiting in a cell; then `await` this value for its result (or tools.job_output({{'job_id': {job!r}}})). Do not re-run the command"
+                + (f"You are a subagent: ending your turn ends your run, and DSH then kills this job with no notice, so wait for it in a cell: `await` this value for its result "
+                 f"(or call tools.job_output({{'job_id': {job!r}, 'wait': True}}) until it is not running). Do not re-run the command"
+                 if _SUBAGENT else
+                 f"DSH wakes you when it finishes, so end this turn instead of waiting in a cell; then `await` this value for its result (or tools.job_output({{'job_id': {job!r}}})). Do not re-run the command")
             )
         return _ToolResult.__missing__(self, key)
 
@@ -316,7 +319,12 @@ class _BashResult(_ToolResult):
             if kind == "promoted":
                 out.extend(["[output received before promotion]", self.get("output") or "(no output)"])
             out.append("(still running, not a final result — do not re-run the command)")
-            out.append("DSH wakes you when it finishes, so end this turn instead of waiting in a cell; then `await` this value for its result.")
+            out.append(
+                "You are a subagent: ending your turn kills this job and no notice comes back, so wait for it in a cell: "
+                "`await` this value (again if it raises JobStillRunning) before you finish."
+                if _SUBAGENT else
+                "DSH wakes you when it finishes, so end this turn instead of waiting in a cell; then `await` this value for its result."
+            )
             return "\n".join(out)
         status = [f"exitCode={self['exitCode']}"]
         if self.get("signal"):
@@ -457,7 +465,11 @@ class _JobOutputResult(_ToolResult):
         head = f"── job {job['id']} · {' · '.join(status)} (view of a dict) ──"
         lines = [head, text.rstrip("\n") if text else "(no new output since the previous read)"]
         if job["status"] == "running":
-            lines.append("(still running; output shown here is consumed. " + "DSH wakes you when it finishes, so end this turn instead of waiting in a cell" + ")")
+            lines.append("(still running; output shown here is consumed. " + (
+                "You are a subagent: ending your turn kills this job with no notice, so keep waiting in a cell, calling job_output with wait=True again until it ends"
+                if _SUBAGENT else
+                "DSH wakes you when it finishes, so end this turn instead of waiting in a cell"
+            ) + ")")
         return "\n".join(lines)
 
 
@@ -902,8 +914,11 @@ _JOB_EXIT = re.compile(r"exit code: (-?\d+)")
 _JOB_LIVE = ("running", "stopping")
 
 #: Longest a cell waits on one job, in ms (host setting cellWaitMs; 0 = no cap). A cell that
-#: waits blocks the user and the agent; DSH wakes the agent when a job ends.
+#: waits blocks the user and the agent; DSH wakes a root agent when a job ends.
 _WAIT_MS = int(os.environ.get("DSH_PYTHON_REPL_WAIT_MS") or 0)
+#: This kernel serves a subagent (src/subagent.ts). DSH stops a subagent's jobs when its turn
+#: ends and sends no notice, so the host raised _WAIT_MS and every note says to keep waiting.
+_SUBAGENT = os.environ.get("DSH_PYTHON_REPL_SUBAGENT") == "1"
 
 
 class JobStillRunning(TimeoutError):
@@ -1027,7 +1042,10 @@ class BashJob:
                 # asking again spun 1000+ calls a second (2026-11-08: 11737 calls in 10 s).
                 raise JobStillRunning(
                     f"bash job {self.id} still running; the user just sent a message, so the wait stopped. "
-                    "Read it now. The job keeps running and DSH wakes you when it finishes; `await job` then returns its result at once. Do not start it again."
+                    + ("Read it now. The job keeps running. You are a subagent: ending your turn kills it with no notice, "
+                       "so after answering, `await job` again in a cell. Do not start it again."
+                       if _SUBAGENT else
+                       "Read it now. The job keeps running and DSH wakes you when it finishes; `await job` then returns its result at once. Do not start it again.")
                 )
             if job.get("status") not in _JOB_LIVE:
                 match = _JOB_EXIT.search(job.get("detail") or "")
@@ -1049,7 +1067,9 @@ class BashJob:
     def _still_running(self, timeout_ms: float) -> "JobStillRunning":
         return JobStillRunning(
             f"bash job {self.id} still running after {timeout_ms / 1000:g}s; it keeps running. "
-            "DSH wakes you when it finishes, so end this turn instead of waiting in a cell; `await job` then returns its result at once. Do not start it again."
+            + ("You are a subagent: ending your turn kills it and no notice comes back, so `await job` again to keep waiting. Do not start it again."
+               if _SUBAGENT else
+               "DSH wakes you when it finishes, so end this turn instead of waiting in a cell; `await job` then returns its result at once. Do not start it again.")
         )
 
     async def peek(self) -> str:

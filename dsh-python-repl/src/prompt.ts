@@ -13,6 +13,7 @@
 
 import { accessPath, summarize, type ToolSchemaLike } from './catalog.ts'
 import type { SkillSummary } from './skill-discovery.ts'
+import { SUBAGENT_WAIT_MS } from './subagent.ts'
 
 export const RUN_CODE_DESCRIPTION = 'Execute a persistent Python cell. Variables, functions, classes and imports you define stay in the kernel across cells and turns, and are saved and restored if the kernel is replaced; only values that cannot be serialized (open files, connections, processes) are dropped then, and named. Top-level await works; top-level return does not. Display a small trailing expression or print a summary; assignments display nothing. Use the SDK catalog for actual tool contracts. Failed/cancelled cells do not roll back prior effects. Project imports, tests, scripts, CLIs, and dependency checks should run through the target project\'s own environment.'
 
@@ -161,6 +162,39 @@ When you produce a file the user asked for, you must still call \`await tools.pr
 
 The available tools:`
 
+const SUBAGENT_WAIT = `${SUBAGENT_WAIT_MS / 60_000} minutes`
+
+/**
+ * A subagent's run ends with its turn, and DSH then stops its jobs without a
+ * notice (src/subagent.ts), so every "end your reply, DSH wakes you" becomes
+ * "wait for it in a cell". Each pair must match CELL_INSTRUCTIONS exactly.
+ */
+const SUBAGENT_SWAPS: ReadonlyArray<readonly [string, string]> = [
+  [
+    'A cell waits only a few seconds on a command: a longer one keeps running, `r` says so, and DSH wakes you when it finishes; `await r` then gives its result (before that it raises `JobStillRunning`, a `TimeoutError`).',
+    `A cell waits up to ${SUBAGENT_WAIT} on a command: a longer one keeps running and \`r\` says so; \`await r\` waits again (each wait lasts up to ${SUBAGENT_WAIT}, then raises \`JobStillRunning\`, a \`TimeoutError\`).`,
+  ],
+  [
+    'Never wait in a cell for a job, a subagent or anything slow: while a cell runs the user cannot reach you and you cannot do other work. End your reply; DSH wakes you when a background job or subagent finishes. `tools.job_output({"job_id": id, "wait": True})` waits only a few seconds and then returns `status: "running"` — a timeout, not a failure.',
+    'You are a subagent: ending your turn ends your run. DSH then stops every background job, `repl.background` work and kernel task you started, and no notice ever comes back. '
+      + 'So before you finish, wait in a cell for every result you need: `await r` on a bash handle, `await job` on `repl.background` work, or call `tools.job_output({"job_id": id, "wait": True})` again until its status is not `running`. '
+      + `Each wait lasts up to ${SUBAGENT_WAIT}; \`running\` after one is a timeout, not a failure. Never end your turn while a job you depend on is still running.`,
+  ],
+  [
+    'the cell ends at once, the work shows as a DSH background job (`job_kill` stops it), and DSH wakes you when it finishes; `await job` then gives its value or raises its error.',
+    'the cell ends at once and the work shows as a DSH background job (`job_kill` stops it). You are a subagent, so `await job` in a later cell before you finish: ending your turn stops the work with no notice. `await job` gives its value or raises its error.',
+  ],
+]
+
+/** The cell preamble for a root session, or its subagent version. */
+export function cellInstructions(subagent = false): string {
+  if (!subagent) return CELL_INSTRUCTIONS
+  return SUBAGENT_SWAPS.reduce((text, [from, to]) => {
+    if (!text.includes(from)) throw new Error(`dsh-python-repl: subagent prompt text out of date: ${from.slice(0, 60)}`)
+    return text.replace(from, to)
+  }, CELL_INSTRUCTIONS)
+}
+
 /**
  * Replace the official preamble with cell semantics, keeping the generated
  * declaration block verbatim.
@@ -170,14 +204,15 @@ The available tools:`
  * survive untouched, while the prose above them is what contradicts us.
  *
  * @param officialSection - the text `renderToolsSdkPy` produced.
+ * @param options.subagent - the session is a delegated subagent (src/subagent.ts).
  * @returns the section with our preamble, or the original if the shape is
  *   unrecognized (fail visible, not silent).
  */
-export function rewriteSdkSection(officialSection: string): string {
+export function rewriteSdkSection(officialSection: string, options: { subagent?: boolean } = {}): string {
   const fenceAt = officialSection.indexOf(DECLARATION_FENCE)
   if (fenceAt === -1) return officialSection
   const declarations = officialSection.slice(fenceAt)
-  return `${CELL_INSTRUCTIONS}\n\n${declarations}`
+  return `${cellInstructions(options.subagent === true)}\n\n${declarations}`
 }
 
 /**

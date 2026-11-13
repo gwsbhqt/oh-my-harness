@@ -29,6 +29,7 @@ import { controlRoute, nameRoute, panelRoute, previewRoute, type PanelWebServer 
 import type { PanelControlAction, PanelControlResult, PanelNameAction, PanelNameResult, PanelState } from './panel-types.ts'
 import type { BoundTool } from './lease.ts'
 import { renderResidentAccess, renderSkillCatalog, rewriteSdkSection, RUN_CODE_EXECUTION_INSTRUCTIONS, renderToolSummaries } from './prompt.ts'
+import { isSubagentAgent, isSubagentHeader } from './subagent.ts'
 import { renderToolsSdkPy } from '@deepseek-ai/dsh-tool-executor-ptc'
 import { TOP_LEVEL, type ToolSchemaLike } from './catalog.ts'
 import { applyPresetWorkflowOff } from './preset-workflow.ts'
@@ -412,6 +413,7 @@ export class PythonReplRuntime extends PtcRuntime {
    */
   async run(spec: PtcRunSpec): Promise<PtcRunResult> {
     const identity = this.resolveIdentity()
+    const subagent = isSubagentAgent(this.ctx.get('agents')?.currentInitiator())
     const host = this.hostJobs()
     const cwd = this.currentCwd() ?? spec.cwd
     if (identity.kind === 'denied') {
@@ -424,7 +426,7 @@ export class PythonReplRuntime extends PtcRuntime {
     if (session === undefined) {
       try {
         const interpreter = await this.interpreterFor(this.config.python)
-        session = this.sessionFor(identity.key, cwd, interpreter.python)
+        session = this.sessionFor(identity.key, cwd, interpreter.python, subagent)
       } catch (error) {
         // No interpreter satisfies the floor: fail this cell with the remedy
         // instead of starting a kernel that cannot clean up after itself.
@@ -745,12 +747,22 @@ export class PythonReplRuntime extends PtcRuntime {
       if (cwd === undefined) return { action, ok: false, epoch: 0, reason: '在 DSH 里找不到这个会话，无法确定内核的工作目录' }
       try {
         const interpreter = await this.interpreterFor(this.config.python)
-        session = this.sessionFor(key, cwd, interpreter.python)
+        session = this.sessionFor(key, cwd, interpreter.python, this.sessionIsSubagent(key))
       } catch (error) {
         return { action, ok: false, epoch: 0, reason: error instanceof Error ? error.message : String(error) }
       }
     }
     return session.panelControl(action)
+  }
+
+  /** Whether DSH created this session as a subagent, from its header; false when DSH does not hold it. */
+  sessionIsSubagent(key: string): boolean {
+    try {
+      const live = (this.ctx.get('sessions' as never) as { get?(id: string): unknown } | undefined)?.get?.(key)
+      return live !== null && typeof live === 'object' && isSubagentHeader((live as { header?: unknown }).header)
+    } catch {
+      return false
+    }
   }
 
   /** The live session's current directory, the one `bash` uses; undefined when DSH does not hold it. */
@@ -773,7 +785,7 @@ export class PythonReplRuntime extends PtcRuntime {
   }
 
   /** @internal */
-  sessionFor(key: string, runCwd?: string, python: string = this.config.python): ReplSession {
+  sessionFor(key: string, runCwd?: string, python: string = this.config.python, subagent = false): ReplSession {
     const existing = this.sessions.get(key)
     if (existing !== undefined) return existing
     const config = this.config
@@ -803,6 +815,7 @@ export class PythonReplRuntime extends PtcRuntime {
       archiveAfterCells: config.archiveAfterCells,
       deleteAfterCells: config.deleteAfterCells,
       cellWaitMs: config.cellWaitMs,
+      subagent,
       startupTimeoutMs: config.startupTimeoutMs,
       maxFrameBytes: config.maxFrameBytes,
       teardownGraceMs: config.teardownGraceMs,
@@ -1128,6 +1141,8 @@ export function apply(ctx: Context, config: Config): void {
       const key = sessionKeyOf(context.scope)
       const state = await runtime?.stateContext?.(key, scopeCwd(context.scope))
       if (state) result.contexts.push({ name: 'python-repl:state', text: state })
+      // Fixed for a session's life (DSH writes it into the header at creation), so the prefix cache holds.
+      const subagent = isSubagentAgent(context.scope)
       for (const section of result.sections) {
         if (section.name === 'tools:sdk' && section.text.length > 0) {
           // Append the skill catalog to the SDK section rather than
@@ -1139,13 +1154,13 @@ export function apply(ctx: Context, config: Config): void {
           if (schemas.length === 0) {
             // Preserve the host's declarations when introspection is unavailable.
             // This is an explicit loss of disclosure, not a pretend empty catalog.
-            section.text = rewriteSdkSection(section.text)
+            section.text = rewriteSdkSection(section.text, { subagent })
               + '\n\nCatalog metadata unavailable; the host declarations above are retained. Do not guess missing contracts.'
           } else {
             const resident = new Set(runtime?.config.residentTools ?? resolveConfig(config).residentTools)
             const declared = (name: string) => TOP_LEVEL.has(name) || resident.has(name)
             const full = schemas.filter((schema) => declared(schema.name))
-            section.text = rewriteSdkSection(renderToolsSdkPy(full as unknown as Parameters<typeof renderToolsSdkPy>[0]))
+            section.text = rewriteSdkSection(renderToolsSdkPy(full as unknown as Parameters<typeof renderToolsSdkPy>[0]), { subagent })
               + renderResidentAccess(full.map((schema) => schema.name).filter((name) => !TOP_LEVEL.has(name)))
               + '\n\n' + renderToolSummaries(schemas.filter((schema) => !declared(schema.name)))
           }

@@ -95,13 +95,16 @@ export function pythonMs(trace: CellTrace): number {
   return Math.max(0, end - trace.startedAt - covered)
 }
 
-/** Notes for the end of a cell that finished or failed. */
-export function traceNotes(trace: CellTrace): string[] {
+/** Notes for the end of a cell that finished or failed; `subagent`: the session is a delegated subagent (src/subagent.ts). */
+export function traceNotes(trace: CellTrace, subagent = false): string[] {
   const notes: string[] = []
   const python = pythonMs(trace)
   if (python >= PYTHON_NOTE_MS) {
-    notes.push(`This cell spent ${Math.round(python / 1000)}s in Python itself (tool waits not counted). The user cannot reach you while a cell runs. `
-      + 'To wait for something, end the turn: background jobs and subagents wake you when they finish. For long computation, `await repl.background(work)` runs it after the cell ends and DSH wakes you when it is done.')
+    notes.push(subagent
+      ? `This cell spent ${Math.round(python / 1000)}s in Python itself (tool waits not counted). `
+        + 'For long computation, `await repl.background(work)` frees the kernel for other cells. You are a subagent: ending your turn stops that work with no notice, so `await` it in a later cell before you finish.'
+      : `This cell spent ${Math.round(python / 1000)}s in Python itself (tool waits not counted). The user cannot reach you while a cell runs. `
+        + 'To wait for something, end the turn: background jobs and subagents wake you when they finish. For long computation, `await repl.background(work)` runs it after the cell ends and DSH wakes you when it is done.')
   }
   return notes
 }
@@ -116,7 +119,8 @@ function promotesOnTimeout(schema: ToolSchemaLike | undefined): boolean {
  * Keep a cell from waiting long on one command or job (setting cellWaitMs).
  * bash: only where DSH moves a timed-out command to a background job, never
  * where the timeout kills it. job_output: caps `wait: true`. A cell that waits
- * blocks the user; DSH's job notice wakes the agent when the work ends.
+ * blocks the user; DSH's job notice wakes a root agent when the work ends. A
+ * subagent gets no notice, so its cap is raised instead (src/subagent.ts).
  */
 export function withWaitCap(tool: string, fn: BoundTool, schema: ToolSchemaLike | undefined, capMs: number): BoundTool {
   if (!(capMs > 0)) return fn
