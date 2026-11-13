@@ -322,7 +322,7 @@ async def restart(*args: _Any, host: str | None = None, local: bool = False, **o
 
 
 async def upgrade(*args: _Any, host: str | None = None, local: bool = False, **options: _Any) -> dict[str, _Any]:
-    '升级 DSH App：读更新源、下载、校验大小和 sha512、核对签名公证和开发者，用新版 App 对实际配置跑离线检查，全过才走重启；旧 App 退出后才替换，新版拉不起来自动换回旧版。已是最新直接退出 0。--check 只备好并检查、不替换；--rollback 换回上一版；--force 同版本也重装；--before、--detach、--notify、--quit-via 同 restart（--before 在换 App 之前、会话都中止后跑）。用法：upgrade [--feed <清单网址>] [--check] [--rollback] [--force] [--before <命令>] [--detach] [--notify <会话>] [--quit-via apple-event|menu]'
+    '升级 DSH App：读更新源、下载、校验大小和 sha512、核对签名公证和开发者，用新版 App 对实际配置跑离线检查，全过才走重启；旧 App 退出后才替换，新版拉不起来自动换回旧版，新版就绪后删掉旧版。已是最新直接退出 0。--check 只备好并检查、不替换；--force 同版本也重装；--before、--detach、--notify、--quit-via 同 restart（--before 在换 App 之前、会话都中止后跑）。用法：upgrade [--feed <清单网址>] [--check] [--force] [--before <命令>] [--detach] [--notify <会话>] [--quit-via apple-event|menu]'
     return await run('upgrade', *args, host=host, local=local, **options)
 
 

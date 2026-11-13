@@ -64,7 +64,7 @@ dsh-control use --clear         # 清除默认机器，恢复本机
 | 配置 | `dsh-control config`、`dsh-control config <命名空间>`、`dsh-control config <命名空间> --set '{"字段":值}'` |
 | 启动检查 | `dsh-control doctor`（离线检查并隔离试启动；运行时还会调用在线 doctor 工具；全部通过才退出 0） |
 | 重启 | 先 `dsh-control doctor`，全部通过再 `dsh-control restart`：一律中止在跑的会话后直接重启，没有等空闲模式；会话里自动转后台并通知你。重启后被中止的会话（包括你自己）自动收到「继续」，被停的后台任务在原会话自动重新拉起、不叫醒闲着的会话 |
-| 升级 App | `dsh-control upgrade [--check] [--before <命令>]`：按更新源取包，校验大小、sha512、签名、公证和开发者，用新版 App 对实际配置跑启动检查，全过才重启；旧 App 退出后才替换，新版拉不起来自动换回旧版。`--check` 只备好并检查不替换，`--rollback` 换回上一版，已是最新直接退出 0 |
+| 升级 App | `dsh-control upgrade [--check] [--before <命令>]`：按更新源取包，校验大小、sha512、签名、公证和开发者，用新版 App 对实际配置跑启动检查，全过才重启；旧 App 退出后才替换，新版拉不起来自动换回旧版，新版就绪后删掉旧版。`--check` 只备好并检查不替换，已是最新直接退出 0 |
 | 网页登录网址 | `dsh-control web-url [--base 网址]`：带这次启动的一次性口令，等同登录凭据，别外传；DSH 重启后失效。从别的机器打开 DSH 网页一般直接用下一行的 `open` |
 | 打开别的机器上的服务 | `dsh-control open <机器> <服务>`：拉起隧道并在本机浏览器打开，例如 `dsh-control open beta dsh`、`dsh-control open beta hermes`；`dsh-control tunnel close <机器> <服务>` 关掉。机器和服务由 profile 的 `dsh-control` 配置提供，插件默认清单为空 |
 | 退出检查 | `dsh-control quit-check`：现在退出 DSH 会不会弹「任务将中断」确认框、卡在哪 |
@@ -135,7 +135,6 @@ dsh-control restart --detach --before 'cp /tmp/x.yml <profile>/cordis.patch.yml 
 ```bash
 dsh-control upgrade --check          # 只取包、校验、用新版对实际配置跑启动检查，不替换
 dsh-control upgrade --detach         # 检查通过后重启：旧 App 退出后才换成新版
-dsh-control upgrade --rollback       # 换回备份里的上一版，同样走重启
 dsh-control -H beta upgrade --detach   # 给别的机器升级；远端在后台进程里做，SSH 断了也不影响
 ```
 

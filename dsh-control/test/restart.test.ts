@@ -1118,7 +1118,7 @@ function fakeApp(path: string, version: string): string {
   return path
 }
 
-test('restart --install-app：旧 App 退出后才换，拉起的是新版；旧版留备份，upgrade --rollback 能换回', { skip: process.platform === 'darwin' ? false : 'requires macOS plutil' }, async () => {
+test('restart --install-app：旧 App 退出后才换，拉起的是新版；新版就绪后删掉旧版，不再有 --rollback', { skip: process.platform === 'darwin' ? false : 'requires macOS plutil' }, async () => {
   let atOpen: string[] = []
   const f = await fixture(() => [], { onOpen: () => { atOpen.push(appVersion(join(f.dir, 'Apps/DeepSeek Harness.app'))) } })
   try {
@@ -1130,14 +1130,10 @@ test('restart --install-app：旧 App 退出后才换，拉起的是新版；旧
     assert.deepEqual(atOpen, ['0.2.2-rc.1'], '拉起时已经是新版')
     assert.equal(appVersion(target), '0.2.2-rc.1')
     assert.equal(existsSync(staged), false)
-    const backup = join(f.dir, 'upgrade/backups/DeepSeek Harness 0.2.1-rc.5.app')
-    assert.equal(appVersion(backup), '0.2.1-rc.5')
-    atOpen = []
-    assert.equal(await f.cli(['upgrade', '--rollback'], extra), 0, f.err())
-    assert.match(f.out(), /换回 0\.2\.1-rc\.5/)
-    assert.deepEqual(atOpen, ['0.2.1-rc.5'])
-    assert.equal(appVersion(target), '0.2.1-rc.5')
-    assert.deepEqual(readdirSync(join(f.dir, 'upgrade/backups')), ['DeepSeek Harness 0.2.2-rc.1.app'], '只留刚换下来的那一份')
+    assert.deepEqual(readdirSync(join(f.dir, 'upgrade')), [], '新版就绪后旧版和下载目录都删掉')
+    assert.match(f.out(), /已删掉旧版 0\.2\.1-rc\.5/)
+    assert.notEqual(await f.cli(['upgrade', '--rollback'], extra), 0, '没有退回旧版的命令')
+    assert.equal(appVersion(target), '0.2.2-rc.1')
   } finally { await f.close() }
 })
 

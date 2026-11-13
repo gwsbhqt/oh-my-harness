@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url'
 import { COMMANDS, validateCommand } from '../commands.ts'
 import { UsageError } from '../gateway.ts'
 import { appLaunchEnv, backendRunning, fromSsh, hostRunning, offlineDoctor, layeredDoctor, reportText, type Report } from './doctor.ts'
-import { DEFAULT_FEED, appVersion, fetchFeed, latestBackup, pruneUpgrade, stageRelease, swapBack, swapIn, type Swap } from './upgrade.ts'
+import { DEFAULT_FEED, appVersion, fetchFeed, pruneUpgrade, stageRelease, swapBack, swapIn, type Swap } from './upgrade.ts'
 
 /** argv → 位置参数 + 选项。`--key value`、`--key=value`、`--flag`；重复的选项收成数组；`--` 之后全算位置参数。 */
 export function parseArgv(argv: string[], booleans: Set<string>, takesValue: (key: string, next: string) => boolean = () => false): { positional: string[]; options: Record<string, unknown> } {
@@ -54,7 +54,7 @@ export function parseArgv(argv: string[], booleans: Set<string>, takesValue: (ke
   return { positional, options }
 }
 
-const BOOLEAN_OPTIONS = new Set(['running', 'all', 'ungrouped', 'include-blank', 'tools', 'steer', 'now', 'interrupt', 'force', 'refresh', 'json', 'help', 'full', 'kill', 'when-idle', 'if-idle', 'detach', 'quiet', 'check', 'rollback', 'settled', 'sound', 'no-title', 'no-body', 'no-sound'])
+const BOOLEAN_OPTIONS = new Set(['running', 'all', 'ungrouped', 'include-blank', 'tools', 'steer', 'now', 'interrupt', 'force', 'refresh', 'json', 'help', 'full', 'kill', 'when-idle', 'if-idle', 'detach', 'quiet', 'check', 'settled', 'sound', 'no-title', 'no-body', 'no-sound'])
 
 export function parseCommand(argv: string[]) {
   const [command, ...rest] = argv
@@ -454,7 +454,7 @@ export function createCli(
         recordRestart('starting', { message: `旧程序已退出，正在把 App 换成 ${installApp}` })
         try {
           installed = swapIn(installApp, APP, join(UPGRADE_DIR, 'backups'))
-          stamp(`已把 App 从 ${installed.from || '未安装'} 换成 ${installed.to}，旧版留在 ${installed.backup}`)
+          stamp(`已把 App 从 ${installed.from || '未安装'} 换成 ${installed.to}，旧版暂放在 ${installed.backup}，新版就绪后删掉`)
         } catch (error) {
           installError = error instanceof Error ? error.message : String(error)
           stamp(`没换成新版，原来的 App 留在原位：${installError}`)
@@ -475,8 +475,8 @@ export function createCli(
     if (await waitForSocket(Number(env['DSH_CONTROL_START_TIMEOUT_MS'] ?? 120_000))) {
       if (installError !== undefined) fail(`DSH 已拉起，但没换成新版：${installError}`, EXIT.error)
       if (installed !== undefined) {
-        print(`DSH 已就绪，App 现在是 ${installed.to}；要换回旧版用 dsh-control upgrade --rollback`)
-        try { pruneUpgrade(UPGRADE_DIR, installed.backup) } catch (error) { stamp(`清理下载目录没成功，不影响使用：${error instanceof Error ? error.message : String(error)}`) }
+        print(`DSH 已就绪，App 现在是 ${installed.to}`)
+        try { pruneUpgrade(UPGRADE_DIR); print(`已删掉旧版 ${installed.from || '（无）'} 和下载文件`) } catch (error) { stamp(`删旧版和下载目录没成功，不影响使用：${error instanceof Error ? error.message : String(error)}`) }
         return EXIT.ok
       }
       print('DSH 已就绪')
@@ -1564,25 +1564,15 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
 
   /**
    * upgrade：按更新源升级 App。先下载、校验、用新版 App 对实际配置跑离线检查，全过才交给 restart --install-app，
-   * 由重启流程在旧 App 退出后替换、拉起；新版拉不起来就换回旧版。--rollback 用同一条路换回备份里的旧版。
+   * 由重启流程在旧 App 退出后替换、拉起；新版拉不起来就换回旧版；新版就绪后旧版和下载文件一并删掉。
    */
   async function upgrade(options: Record<string, unknown>): Promise<number> {
-    let staged: string
-    if (options['rollback'] === true) {
-      if (options['feed'] !== undefined || options['force'] !== undefined) fail('--rollback 不和 --feed、--force 同用', EXIT.usage)
-      const current = existsSync(APP) ? appVersion(APP) : ''
-      const backup = latestBackup(UPGRADE_DIR, current)
-      if (backup === undefined) fail(`${join(UPGRADE_DIR, 'backups')} 里没有可换回的旧版`, EXIT.error)
-      staged = backup
-      print(`换回 ${appVersion(staged)}（现在是 ${current || '未安装'}）：${staged}`)
-    } else {
-      const feed = typeof options['feed'] === 'string' ? options['feed'] : DEFAULT_FEED
-      const entry = fetchFeed(feed)
-      const current = existsSync(APP) ? appVersion(APP) : ''
-      print(`本机 ${current || '未安装'}，更新源最新 ${entry.version}${entry.releaseDate ? `（${entry.releaseDate} 发布）` : ''}`)
-      if (entry.version === current && options['force'] !== true) { print('已是最新，不用升级'); return EXIT.ok }
-      staged = await stageRelease(entry, { dir: UPGRADE_DIR, installed: APP, print })
-    }
+    const feed = typeof options['feed'] === 'string' ? options['feed'] : DEFAULT_FEED
+    const entry = fetchFeed(feed)
+    const current = existsSync(APP) ? appVersion(APP) : ''
+    print(`本机 ${current || '未安装'}，更新源最新 ${entry.version}${entry.releaseDate ? `（${entry.releaseDate} 发布）` : ''}`)
+    if (entry.version === current && options['force'] !== true) { print('已是最新，不用升级'); return EXIT.ok }
+    const staged = await stageRelease(entry, { dir: UPGRADE_DIR, installed: APP, print })
     installApp = staged
     let ok: boolean
     try { ok = await preflight() } finally { installApp = undefined }
@@ -1600,7 +1590,7 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
     { name: 'chat', summary: '发消息并等它跑完（send + wait 一步做完），退出码同 wait；--settled 等到真做完（同 wait --settled），--notify 同 send', usage: 'chat <会话> <消息> [--now|--interrupt] [--tier normal|fast] [--model provider/model] [--effort 档位] [--settled] [--notify <会话>|self] [--timeout 秒，默认 1800]', writes: true },
     { name: 'start', summary: '确保 DSH 在运行：已在运行直接返回；没在运行就先做离线检查再拉起来，等通信口就绪。在远程登录里运行也会用桌面会话的环境打开', usage: 'start', writes: true },
     { name: 'restart', summary: '强制重启：先离线检查，再中止在跑的会话、停掉后台任务和子代理、退出再拉起；正常退出没走成就结束进程再拉起，不会因为「退不出」失败。不论重启成没成，都给被中止的会话发消息让它们接着做，给任务的主人说明停掉了什么，被停的任务在原会话重新拉起。一律强制，没有等空闲、也不需要 --force。--detach 转到后台独立进程（DSH 会话里自动带上，否则 DSH 一退出命令就没了）；--notify 结束后给这个会话发结果（带 --detach 时默认通知发起的会话）；--before <命令> 在会话都中止后、退出前跑（写 profile、装依赖用），失败就不重启；--kill 直接结束进程再拉起，不先试正常退出；--quit-via apple-event|menu 显式选择普通退出入口，默认 apple-event；menu 要求本机 computer-control 协议并只点普通退出项，绝不换路线或点确认；--install-app <App 路径> 在旧 App 退出后、拉起前换成这一份（upgrade 用），新版拉不起来自动换回旧版；--background 不受支持', usage: 'restart [--before <命令>] [--detach] [--notify <会话>] [--kill] [--quit-via apple-event|menu] [--install-app <App 路径>]', writes: true },
-    { name: 'upgrade', summary: `升级 DSH App：读更新源（默认 ${DEFAULT_FEED}），下载、校验大小和 sha512、核对签名公证和开发者，用新版 App 对实际配置跑离线检查，全过才走 restart：旧 App 退出后才替换，新版拉不起来自动换回旧版。已是最新直接退出 0。--check 只备好并检查、不替换；--rollback 换回备份里的上一版；--force 同版本也重装；--before、--detach、--notify、--quit-via 同 restart（--before 在换 App 之前、会话都中止后跑）。下载和备份在 ~/.local/state/dsh-control/app-upgrade`, usage: 'upgrade [--feed <清单网址>] [--check] [--rollback] [--force] [--before <命令>] [--detach] [--notify <会话>] [--quit-via apple-event|menu]', writes: true },
+    { name: 'upgrade', summary: `升级 DSH App：读更新源（默认 ${DEFAULT_FEED}），下载、校验大小和 sha512、核对签名公证和开发者，用新版 App 对实际配置跑离线检查，全过才走 restart：旧 App 退出后才替换，新版拉不起来自动换回旧版，新版就绪后删掉旧版。已是最新直接退出 0。--check 只备好并检查、不替换；--force 同版本也重装；--before、--detach、--notify、--quit-via 同 restart（--before 在换 App 之前、会话都中止后跑）。下载和换下来的旧版暂放在 ~/.local/state/dsh-control/app-upgrade`, usage: 'upgrade [--feed <清单网址>] [--check] [--force] [--before <命令>] [--detach] [--notify <会话>] [--quit-via apple-event|menu]', writes: true },
     { name: 'restart-watch', summary: '读取本机跨机器重启通知记录，显示远端执行结果和是否送回发起会话；由共享目标入口处理，不连接默认机器', usage: 'restart-watch WATCHID [--json]', writes: false },
     { name: 'restart-status', summary: '读取最近一次重启的真实阶段、阻碍、结果和日志；进程消失但无完成记录不算成功', usage: 'restart-status [--request-id UUID] [--json]', writes: false },
     { name: 'doctor', summary: '离线检查并隔离试启动；运行时还会调用在线 doctor 工具；全部通过才退出 0', usage: 'doctor [--full] [--profile 名字] [--timeout-ms MS]', writes: false },

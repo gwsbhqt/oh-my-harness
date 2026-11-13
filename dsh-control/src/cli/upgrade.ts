@@ -166,24 +166,8 @@ export function swapBack(swap: Swap, exec: Exec = realExec): void {
   move(swap.backup, swap.target, exec)
 }
 
-/** 换成功后只留这一份备份，删掉下载和解包目录。 */
-export function pruneUpgrade(dir: string, keep: string): void {
-  const backups = join(dir, 'backups')
-  for (const name of existsSync(backups) ? readdirSync(backups) : []) {
-    if (join(backups, name) !== keep) rmSync(join(backups, name), { recursive: true, force: true })
-  }
-  for (const name of existsSync(dir) ? readdirSync(dir) : []) {
-    if (name !== 'backups') rmSync(join(dir, name), { recursive: true, force: true })
-  }
+/** 新版就绪后删掉换下来的旧版、下载和解包目录：不留备份（用户 2026-11-13 定，旧版每份约 1 GB，用不着）。 */
+export function pruneUpgrade(dir: string): void {
+  for (const name of existsSync(dir) ? readdirSync(dir) : []) rmSync(join(dir, name), { recursive: true, force: true })
 }
 
-/** 备份目录里最新、且不是当前版本的那份 App。 */
-export function latestBackup(dir: string, current: string, exec: Exec = realExec): string | undefined {
-  const backups = join(dir, 'backups')
-  if (!existsSync(backups)) return undefined
-  return readdirSync(backups)
-    .filter((name) => /^DeepSeek Harness .+\.app$/.test(name) && existsSync(join(backups, name, 'Contents/Info.plist')))
-    .map((name) => join(backups, name))
-    .filter((app) => appVersion(app, exec) !== current)
-    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0]
-}
