@@ -397,7 +397,8 @@ for (const withPythonDocument of [true, false]) {
     const result = await session.runCell([
       'selected = (await skills.describe("document_skill"))["items"][0]',
       'loaded = await tools.skill({"name": "document-skill"})',
-      'assert selected["instructions"] == loaded["content"]',
+      'assert loaded["content"].endswith("<skill_instructions>\\n" + selected["instructions"] + "\\n</skill_instructions>\\n</skill_content>")',
+      `assert ${JSON.stringify('Base directory for this skill: ' + directory)} in loaded["content"]`,
       `assert selected["instructions_file"] == ${JSON.stringify(selectedFile)}`,
       `assert selected["description"] == ${JSON.stringify(withPythonDocument ? 'Python summary' : 'CLI summary')}`,
       'assert skills.document_skill.VALUE == 7',

@@ -60,6 +60,7 @@ class FakeJobs implements JobsService {
   read(id: string) { const job = this.jobs.get(id)!; return { chunks: job.chunks.splice(0), lossy: false, job: job.view } }
   remove(id: string) { this.jobs.get(id)!.removed = true }
   kill(id: string) { this.settle(id, '', '', 'signal: SIGTERM', 'killed') }
+  list(_caller: string): JobView[] { return [...this.jobs.values()].map((job) => job.view) }
 }
 
 function harness(cap = 300) {
@@ -135,6 +136,43 @@ describe('bash runs as a job the cell waits on', () => {
     const h = harness(5_000)
     h.jobs.wait = async () => { throw new Error('unknown job bash-1') }
     await assert.rejects(h.bash()({ command: 'slow', description: 'd' }), (error: Error) => error.name !== 'AbortError' && /unknown job/.test(error.message))
+  })
+
+  /** DSH's refusal at its per-owner cap, verbatim (dsh-jobs-local JOB_LIMIT_REACHED). */
+  const refusal = (limit: number) => new Error(`background job limit reached for this owner (limit: ${limit}); use job_kill to stop an unneeded job, wait for it to finish, then retry`)
+  function capped(limit: number, ms: number, cap: number) {
+    const h = harness(cap)
+    const fn: BoundTool = async (args) => {
+      const a = args as { command: string }
+      if ([...h.jobs.jobs.values()].filter((j) => j.view.status === 'running').length >= limit) throw refusal(limit)
+      return { kind: 'background', jobId: h.jobs.spawn(a.command, ms, `${a.command} out\n`), cwd: '/w' }
+    }
+    return { ...h, bash: () => withJobBash(fn, SCHEMA, cap, { jobs: h.jobs, owner: 'agent-1', notices: h.notices }, undefined, async () => { throw new Error('fallback used') }) }
+  }
+
+  it('a gather larger than the job cap waits for slots instead of being refused', async () => {
+    // Field shape 2026-11-05..11: a dozen commands gathered in one cell, the 11th and later refused at DSH's cap of 10.
+    const h = capped(2, 100, 2_000)
+    const results = await Promise.all(['a', 'b', 'c', 'd', 'e'].map((c) => h.bash()({ command: c, description: c }))) as Array<Record<string, any>>
+    assert.deepEqual(results.map((r) => [r['kind'], r['exitCode'], r['stdout'].text]), ['a', 'b', 'c', 'd', 'e'].map((c) => ['foreground', 0, `${c} out\n`]))
+  })
+
+  it('still refused when no slot frees within the cell wait', async () => {
+    const h = capped(1, 5_000, 200)
+    const first = h.bash()({ command: 'long', description: 'a' })
+    const started = Date.now()
+    await assert.rejects(h.bash()({ command: 'other', description: 'b' }), /background job limit reached.*limit: 1/)
+    assert.ok(Date.now() - started >= 150, 'it waited for a slot first')
+    assert.equal((await first as Record<string, any>)['kind'], 'promoted')
+  })
+
+  it('without a job list the refusal passes straight through', async () => {
+    const h = capped(1, 5_000, 2_000)
+    Object.defineProperty(h.jobs, 'list', { value: undefined })
+    void h.bash()({ command: 'long', description: 'a' })
+    const started = Date.now()
+    await assert.rejects(h.bash()({ command: 'other', description: 'b' }), /background job limit reached/)
+    assert.ok(Date.now() - started < 100)
   })
 
   it('reports a signal, and keeps DSH notes after the exit code', () => {

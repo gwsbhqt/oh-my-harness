@@ -8,6 +8,33 @@ function object(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function escapeText(value: string): string {
+  return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+}
+
+/**
+ * The text DSH's skill tool shows the model for a directory skill
+ * (dsh-skill `renderSkillContent`, directory case), with the selected body.
+ * A cell gets the structured value instead, whose `content` is the bare body:
+ * the base directory was only in `resourceBase`, and a model that printed
+ * `content` resolved `references/…` against a guessed directory (evolve
+ * I-062, 2026-11-09). Keep in step with that function when DSH changes it.
+ */
+function renderDirectorySkill(name: string, directory: string, body: string): string {
+  return [
+    `<skill_content name="${name.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;')}">`,
+    '<skill_resources>',
+    `Base directory for this skill: ${escapeText(directory)}`,
+    'Resolve relative paths mentioned by this skill against the base directory before using them. Load referenced resources only as needed.',
+    '</skill_resources>',
+    '',
+    '<skill_instructions>',
+    body,
+    '</skill_instructions>',
+    '</skill_content>',
+  ].join('\n')
+}
+
 function realDirectory(path: string): string | undefined {
   if (!isAbsolute(path)) return undefined
   try { return realpathSync(path) } catch { return undefined }
@@ -32,6 +59,6 @@ export function withPythonSkillDocument(name: string, call: BoundTool, records: 
     if (record.document_error !== undefined) throw new Error(`skill ${JSON.stringify(record.skill)} instruction document unavailable: ${record.document_error}`)
     if (record.status !== 'discovered') return result
     const selected = readSkillDocument(record.path, record.instructions_file, record.skill)
-    return { ...result, content: selected.content }
+    return { ...result, content: renderDirectorySkill(result['name'], base['path'], selected.content) }
   }
 }

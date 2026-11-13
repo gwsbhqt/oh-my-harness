@@ -185,5 +185,58 @@ class ReadOffsetLineCount(unittest.TestCase):
         self.assertIn("The file is empty", cell_errors.tool_hint(f'offset 2 is out of range for "{self.dir}/c" (0 lines)'))
 
 
+class SlicingADict(unittest.TestCase):
+    def test_slicing_a_skills_describe_result_points_at_the_instructions(self):
+        # Field shape 2026-11-07..12: `d = await skills.describe("sync_up")` then `print(d[:4000])`.
+        described = {"items": [{"id": "sync_up", "status": "candidate", "instructions": "# sync-up"}]}
+        text = hint("d = described\nprint(d[:4000])\n", described=described)
+        self.assertIn("`d` is a dict, not text or a list, so it cannot be sliced; its keys are 'items'", text)
+        self.assertIn("`d['items'][0]['instructions'][:N]`", text)
+
+    def test_slicing_another_dict_names_its_first_key(self):
+        self.assertIn("`r['stdout']`", hint("r = {'stdout': {}, 'exitCode': 0}\nr[:10]\n"))
+
+
+class JsonThatIsNotJson(unittest.TestCase):
+    def test_tail_of_truncated_output(self):
+        # Field shape 2026-11-10: bash kept only the tail of a large JSON reply; stdout.truncated was True.
+        text = hint("import json\njson.loads(tail)\n", tail='n":null,"Layout":null}]}')
+        self.assertIn("not JSON from its first character: it starts 'n\":null", text)
+        self.assertIn("stdout.truncated is True", text)
+
+    def test_empty_text(self):
+        self.assertIn("is empty", hint("import json\njson.loads('')\n"))
+
+    def test_cut_off_text(self):
+        self.assertIn("cut off", hint("import json\njson.loads('{\"a\": \"abc')\n"))
+
+    def test_json_lines(self):
+        self.assertIn("more than one JSON value", hint("import json\njson.loads('{}\\n{}')\n"))
+
+
+class NextWithoutDefault(unittest.TestCase):
+    def test_top_level_next_names_the_cell_line(self):
+        exc = run_cell("import asyncio\nawait asyncio.sleep(0)\nrow = next(x for x in [] if x)\n")
+        self.assertIsInstance(exc, RuntimeError)
+        text = cell_errors.exception_hint(exc)
+        self.assertRegex(text, r"<cell-\d+> line 3: `row = next\(x for x in \[\] if x\)`")
+        self.assertIn("next(iterator, None)", text)
+
+
+class RestoredFunctionSource(unittest.TestCase):
+    def test_could_not_get_source_explains_the_restore(self):
+        text = cell_errors.exception_hint(OSError("could not get source code"))
+        self.assertIn("restored from the snapshot", text)
+        self.assertIn("repl.describe", text)
+
+
+class GoneJob(unittest.TestCase):
+    def test_unknown_job_says_why_it_is_gone(self):
+        # The host's message verbatim (dsh-jobs-local JOB_NOT_FOUND).
+        text = cell_errors.tool_hint("unknown job bash-78f3a785375d438d")
+        self.assertIn("DSH restart", text)
+        self.assertIn("before deciding to run it again", text)
+
+
 if __name__ == "__main__":
     unittest.main()
