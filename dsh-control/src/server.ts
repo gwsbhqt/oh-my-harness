@@ -9,9 +9,9 @@
  *
  * @module
  */
-import { chmodSync, existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, linkSync, mkdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { errorPayload, UsageError } from './gateway.ts'
 import type { CommandResult } from './service.ts'
 
@@ -31,7 +31,7 @@ export interface ServerOptions {
   run: Runner
   info: () => Record<string, unknown>
   log: (line: string) => void
-  /** 多久看一次通信口文件还在不在；测试用来缩短。 */
+  /** 多久看一次通信口文件还在不在（默认 5 秒）；测试用来缩短。 */
   watchMs?: number
 }
 
@@ -114,50 +114,76 @@ export async function startServer(options: ServerOptions): Promise<{ close(): Pr
     }
     send(res, 404, { ok: false, error: { code: 'not-found', message: `${req.method ?? ''} ${url.pathname}` } })
   }
-  const listen = async (): Promise<Server> => {
+  // Node（libuv）关监听时按绑定时的路径删文件，不管那个路径上现在是谁的。插件热重载或重启时旧实例晚于新实例关闭，
+  // 就会把新实例刚建的通信口删掉，之后 dsh-control 一直「找不到通信口」（复盘 I-029）。
+  // 所以先绑在只属于这一次的临时名上，再硬链接到正式路径：关监听只删临时名，正式路径按 inode 认是不是自己的再删。
+  // 用硬链接而不是改名：正式路径已被别的 socket 占着时链接失败，不会把它顶掉。
+  // 临时名和正式文件名一样长：socket 路径有长度上限（macOS 104 字节），正式路径放得下，临时名也必须放得下。
+  const tempName = (): string => {
+    const size = Math.max(4, basename(options.socketPath).length)
+    let name = '.'
+    while (name.length < size) name += Math.random().toString(36).slice(2)
+    return join(dirname(options.socketPath), name.slice(0, size))
+  }
+  const listen = async (): Promise<{ server: Server; ino: number }> => {
+    const temp = tempName()
     const server = createServer(onRequest)
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject)
-      server.listen(options.socketPath, () => {
+      server.listen(temp, () => {
         server.off('error', reject)
         resolve()
       })
     })
-    chmodSync(options.socketPath, 0o600)
-    return server
+    try {
+      chmodSync(temp, 0o600)
+      linkSync(temp, options.socketPath)
+      return { server, ino: statSync(options.socketPath).ino }
+    } catch (error) {
+      server.close()
+      throw error
+    } finally {
+      try { unlinkSync(temp) } catch { /* 已经没了 */ }
+    }
+  }
+  const ours = (ino: number): boolean => {
+    try { return statSync(options.socketPath).ino === ino } catch { return false }
   }
   let current = await listen()
   const retired: Server[] = []
   writeFileSync(join(dirname(options.socketPath), 'dsh.pid'), `${process.pid}\n`, { mode: 0o600 })
-  // 通信口文件被删后进程还开着它，外面却再也连不上，dsh-control 和等空闲重启全断，只能手动重启（2026-10-19 03:01 起，复盘 I-029）。
-  // 文件没了就在原路径重新监听；路径上换成了别人的 socket（另一个 DSH）就不抢。
-  // 旧监听必须先关：Node 关监听时会删掉绑定路径上的文件，后关会把刚建好的新文件删掉。
+  // 通信口文件被删后进程还开着它，外面却再也连不上（2026-10-19 起，复盘 I-029）。
+  // 文件没了就在原路径重新监听；路径上换成了别人的 socket（另一个 DSH、新加载的插件实例）就不抢。
   let rebinding = false
   let closed = false
   const watch = setInterval(() => {
     if (rebinding || existsSync(options.socketPath)) return
     rebinding = true
     Promise.resolve().then(() => {
-      if (!retired.includes(current)) { retired.push(current); current.close() }
-      prepareSocketPath(options.socketPath)
+      mkdirSync(dirname(options.socketPath), { recursive: true, mode: 0o700 })
+      chmodSync(dirname(options.socketPath), 0o700)
       return listen()
     }).then((next) => {
-      if (closed) { next.close(); return }
+      if (closed) { next.server.close(); if (ours(next.ino)) rmSync(options.socketPath); return }
+      retired.push(current.server)
+      current.server.close()
       current = next
       options.log('socket rebound')
     }, () => { /* 下次再试 */ }).finally(() => { rebinding = false })
-  }, options.watchMs ?? 30_000)
+  }, options.watchMs ?? 5_000)
   watch.unref()
   return {
     async close() {
       closed = true
       clearInterval(watch)
       for (const c of inflight) c.abort()
-      await Promise.all([...new Set([...retired, current])].map((server) => new Promise<void>((resolve) => {
+      await Promise.all([...new Set([...retired, current.server])].map((server) => new Promise<void>((resolve) => {
         server.close(() => resolve())
         server.closeAllConnections()
       })))
-      try { rmSync(options.socketPath) } catch { /* 已经没了 */ }
+      if (ours(current.ino)) {
+        try { rmSync(options.socketPath) } catch { /* 已经没了 */ }
+      }
     },
   }
 }

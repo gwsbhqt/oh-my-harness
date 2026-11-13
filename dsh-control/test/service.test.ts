@@ -2,13 +2,13 @@ import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createServer, request } from 'node:http'
-import { invokeCli } from './cli-fixture.ts'
+import { forbiddenApp, invokeCli } from './cli-fixture.ts'
 import { mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RemoteService, type Deps, type RestartRecoveryResult, type SessionSummaryWire, type MonitorStartRequest } from '../src/service.ts'
 import { runCommand } from '../src/commands.ts'
-import { parseCommand } from '../src/cli/core.ts'
+import { createCli, parseCommand, spawnDetachedCli, type AppControl } from '../src/cli/core.ts'
 import { UsageError } from '../src/gateway.ts'
 import { startServer } from '../src/server.ts'
 import { COMMANDS } from '../src/commands.ts'
@@ -1527,6 +1527,53 @@ test('通信口文件被删后自动在原路径重新监听；路径被别的 s
   } finally {
     await server.close()
     await new Promise<void>((resolve) => other === undefined ? resolve() : other.close(() => resolve()))
+  }
+})
+
+test('旧实例晚于新实例关闭时，不删新实例的通信口文件', async () => {
+  // 插件热重载、或重启时旧 DSH 还没退干净：新实例已在原路径监听，旧实例随后关闭，按路径删文件把新的删了，
+  // 之后 dsh-control 一直「找不到通信口」（复盘 I-029，2026-10-21 重启完成后和等待重启时都撞上）。
+  const socketPath = join(dir, 'reload', 'dsh.sock')
+  const health = (path: string) => new Promise<number>((resolve, reject) => {
+    const req = request({ socketPath: path, path: '/v1/health', agent: false }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode ?? 0)) })
+    req.on('error', reject)
+    req.end()
+  })
+  const options = { socketPath, commands: () => [], run: async () => ({ text: '' }), log: () => {}, watchMs: 60_000 }
+  const old = await startServer({ ...options, info: () => ({ generation: 'old' }) })
+  const next = await startServer({ ...options, info: () => ({ generation: 'new' }) })
+  try {
+    await old.close()
+    assert.equal(await health(socketPath), 200, '旧实例关闭后新实例仍连得上，不靠 30 秒自查补回')
+    assert.equal(statSync(socketPath).mode & 0o777, 0o600)
+  } finally {
+    await next.close()
+  }
+  assert.throws(() => statSync(socketPath), '自己的文件照常删掉')
+})
+
+test('DSH 开着但通信口文件不见了：说清原因和下一步，不让人去 start', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-control-down-'))
+  const running: AppControl = { ...forbiddenApp, running: () => true, backendRunning: () => true }
+  const stopped: AppControl = forbiddenApp
+  const call = async (app: AppControl) => {
+    let out = '', err = ''
+    const code = await createCli({ DSH_HOME: root, DSH_CONTROL_SOCKET: join(root, 'dsh-control', 'dsh.sock') }, (t) => { out += t }, (t) => { err += t }, spawnDetachedCli, app)(['sessions'])
+    return { code, out, err }
+  }
+  try {
+    const alive = await call(running)
+    assert.equal(alive.code, 69, alive.out + alive.err)
+    assert.match(alive.err, /DSH 还开着/)
+    assert.match(alive.err, /自动重建/)
+    assert.match(alive.err, /dsh-control restart/)
+    assert.doesNotMatch(alive.err, /dsh-control start/)
+    const dead = await call(stopped)
+    assert.equal(dead.code, 69, dead.out + dead.err)
+    assert.match(dead.err, /DSH 没在运行/)
+    assert.match(dead.err, /dsh-control start/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
   }
 })
 

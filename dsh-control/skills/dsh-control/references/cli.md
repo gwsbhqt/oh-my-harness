@@ -128,7 +128,7 @@ dsh-control restart --detach --before 'cp /tmp/x.yml <profile>/cordis.patch.yml 
 
 按实际 profile 替换占位符；更新的失败处理与不可重放要求见共用规则。
 
-可选参数：`--timeout 秒`（默认 3600）、`--notify 会话`、`--quit-via apple-event|menu`。默认 apple-event，明确选择 menu 才核对 computer-control 并点精确唯一普通退出项；等空闲的重启不自动换路线或强杀，强制重启退不出时结束进程再拉起。`--background` 无效，会话里自动转后台。
+可选参数：`--notify 会话`、`--quit-via apple-event|menu`、`--kill`（不试正常退出、直接结束进程再拉起，不能配 `--before`）。默认 apple-event，明确选择 menu 才核对 computer-control 并点精确唯一普通退出项；正常退出没走成时结束进程再拉起。没有等空闲模式，`--timeout`、`--when-idle`、`--force`、`--background` 都会被直接拒绝（退出 2）；会话里自动转后台。
 
 ## 升级 App
 

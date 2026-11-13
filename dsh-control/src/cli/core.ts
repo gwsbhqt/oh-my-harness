@@ -410,6 +410,12 @@ export function createCli(
     return app.running(APP, HOME)
   }
 
+  /** 连不上时按 App 在不在跑给下一步：App 开着去跑 start 什么也不会改变。 */
+  function downAdvice(reason: string): string {
+    if (!appRunning()) return `${reason}\nDSH 没在运行：先跑 dsh-control start 打开它。`
+    return `${reason}\nDSH 还开着，但通信口不在或不答话：多半是文件被删了，或 dsh-control 插件正在重新加载。插件发现文件没了会在几秒内自动重建，等半分钟再试；还连不上就跑 dsh-control doctor 看插件有没有加载，插件正常仍连不上再跑 dsh-control restart。`
+  }
+
   /** 通信口连不上时，没有后台就没有会话：App 已退出，或停在后台崩溃的窗口上。 */
   function noBackend(): boolean {
     return !appRunning() || !app.backendRunning(APP, HOME)
@@ -1164,7 +1170,7 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
         stamp('DSH 后台已经停了（多半停在崩溃窗口上），不会有会话在跑；直接结束 App 再拉起')
         return { code: await kill(), interrupted: [] }
       }
-      else if (appRunning()) fail('DSH 在运行，但无法确认有没有会话在跑。先修好通信口再来重启，不硬撞。', EXIT.error)
+      else if (appRunning()) fail(`DSH 在运行，但通信口 ${Math.round(RELOAD_GRACE_MS / 1000)} 秒都没答话，无法确认有没有会话在跑，所以没有重启：硬重启会让在跑的会话收不到「继续」。先跑 dsh-control doctor 看 dsh-control 插件有没有加载；插件正常而通信口一直不回来，只能在 DSH 菜单里手动退出再打开。`, EXIT.error)
     }
     if (running.length > 0) print(`重启会打断 ${running.length} 个在跑的会话，已记下，重启后让它们继续：${running.map(shortId).join(', ')}`)
     // 正常退出走不通（清不干净、退出命令失败、30 秒没退）就结束进程再拉起，不报失败（用户 2026-10-27 同意）。
@@ -1718,7 +1724,7 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
       return exitFor(res)
     } catch (error) {
       if (error instanceof CliExit || error instanceof UsageError) throw error
-      if (error instanceof Down) fail(`${error.message}\n先跑 dsh-control start；还不行跑 dsh-control doctor`, EXIT.down)
+      if (error instanceof Down) fail(downAdvice(error.message), EXIT.down)
       fail(error instanceof Error ? error.message : String(error), EXIT.error)
     }
   }
