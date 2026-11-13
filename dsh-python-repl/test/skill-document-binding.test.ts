@@ -37,6 +37,13 @@ function fixture(file: SkillSummary['instructions_file'] = 'PYSKILL.md') {
   return { directory, record, result, standard, python }
 }
 
+/** DSH's model-facing text for a directory skill (dsh-skill renderSkillContent), which a cell now gets as `content`. */
+function rendered(name: string, directory: string, body: string): string {
+  return `<skill_content name="${name}">\n<skill_resources>\nBase directory for this skill: ${directory}\n`
+    + 'Resolve relative paths mentioned by this skill against the base directory before using them. Load referenced resources only as needed.\n'
+    + `</skill_resources>\n\n<skill_instructions>\n${body}\n</skill_instructions>\n</skill_content>`
+}
+
 it('awaits the original binding once and changes only a copy of its successful content', async () => {
   const f = fixture()
   const original = Object.freeze({ ...f.result, resourceBase: Object.freeze(f.result.resourceBase) })
@@ -51,7 +58,7 @@ it('awaits the original binding once and changes only a copy of its successful c
   const result = await adapted(args) as typeof original
   assert.equal(calls, 1)
   assert.notEqual(result, original)
-  assert.equal(result.content, f.python + 'Read after authorization.\n')
+  assert.equal(result.content, rendered('demo', f.directory, f.python + 'Read after authorization.\n'))
   assert.deepEqual(Object.keys(result).sort(), Object.keys(original).sort())
   assert.equal(result.provider, original.provider)
   assert.equal(result.resourceBase, original.resourceBase)
@@ -74,7 +81,7 @@ it('matches the real directory through a filesystem symlink', async () => {
   symlinkSync(f.directory, alias, 'dir')
   const original = { ...f.result, resourceBase: { kind: 'directory', path: alias } }
   const result = await withPythonSkillDocument('skill', async () => original, [f.record])({ name: 'demo' }) as typeof original
-  assert.equal(result.content, f.python)
+  assert.equal(result.content, rendered('demo', alias, f.python))
   assert.equal(result.resourceBase, original.resourceBase)
 })
 
@@ -103,7 +110,7 @@ it('preserves a custom provider identity when it owns the exact authorized local
   const result = await withPythonSkillDocument('skill', async () => original, [f.record])({ name: 'demo' }) as typeof original
   assert.equal(result.provider, original.provider)
   assert.equal(result.resourceBase, original.resourceBase)
-  assert.equal(result.content, f.python)
+  assert.equal(result.content, rendered('demo', f.directory, f.python))
 })
 
 it('does not adapt unregistered, disabled, docs-only or unavailable Python skill records', async () => {
@@ -134,7 +141,21 @@ it('uses an explicitly selected SKILL document when no Python document was disco
   const f = fixture('SKILL.md')
   const expected = readSkillDocument(f.directory, 'SKILL.md', 'demo').content
   const result = await withPythonSkillDocument('skill', async () => f.result, [f.record])({ name: 'demo' }) as typeof f.result
-  assert.equal(result.content, expected)
+  assert.equal(result.content, rendered('demo', f.directory, expected))
+})
+
+it('a cell that prints content sees the base directory, as the model does through the skill tool (evolve I-062)', async () => {
+  // Field shape 2026-11-09: the cell printed `r['content']`, saw no directory, then read `references/...` from a guessed root.
+  const f = fixture()
+  const original = { ...f.result, name: 'de"m<o', resourceBase: { kind: 'directory', path: f.directory } }
+  const record = { ...f.record, skill: 'de"m<o' }
+  writeFileSync(join(f.directory, 'PYSKILL.md'), '---\nname: de"m<o\ndescription: Python guide\n---\nRead references/a&b.md.\n')
+  const result = await withPythonSkillDocument('skill', async () => original, [record])({ name: 'de"m<o' }) as typeof original
+  const lines = result.content.split('\n')
+  assert.equal(lines[0], '<skill_content name="de&quot;m&lt;o">')
+  assert.equal(lines[2], `Base directory for this skill: ${f.directory}`)
+  assert.ok(result.content.includes('<skill_instructions>\n---\nname: de"m<o\ndescription: Python guide\n---\nRead references/a&b.md.\n\n</skill_instructions>'), 'the body is not escaped, as in DSH')
+  assert.deepEqual(Object.keys(result).sort(), Object.keys(original).sort())
 })
 
 for (const [label, invalid] of [

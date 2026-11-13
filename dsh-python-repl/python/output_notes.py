@@ -34,6 +34,18 @@ def _describe(value) -> str | None:
     return f"a {kind.__module__}.{kind.__qualname__}" if kind.__module__ != "builtins" else f"a {kind.__name__}"
 
 
+def _how(value) -> str:
+    """Ways to look into this value that work for its type: a dict cannot be sliced."""
+    kind = type(value)
+    if kind in (str, bytes, list, tuple):
+        return "`_[:20]`, `len(_)`"
+    if isinstance(value, dict):
+        return "`list(_)[:5]`, `_[key]`, `len(_)`"
+    if kind in (set, frozenset):
+        return "`sorted(_)[:20]`, `len(_)`"
+    return "its fields or `len(_)`"
+
+
 def after_cell(ns: dict, truncated: bool) -> str | None:
     """Remember which object `_` is; when the output was cut, say what it holds."""
     global _last_id
@@ -46,5 +58,5 @@ def after_cell(ns: dict, truncated: bool) -> str | None:
         return ("This cell ended without a value, so `_` still holds an earlier result. "
                 "Next time assign what you print to a variable and show a slice or a count instead.")
     described = _describe(value)
-    return (f"`_` holds this cell's value, {described}. Slice, filter or count it (`_[:20]`, `len(_)`, `list(_)[:5]`) "
+    return (f"`_` holds this cell's value, {described}. Slice, filter or count it ({_how(value)}) "
             "instead of running the cell again.") if described else None

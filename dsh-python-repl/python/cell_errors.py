@@ -232,9 +232,14 @@ def tool_hint(message: str, args=None) -> str | None:
         # 2026-11-11 evolve I-094: one cell gathered dozens of slow bash calls; each became a job and 8 were refused.
         return (
             f"A bash call still running after a few seconds becomes a background job, each call in an asyncio.gather included, "
-            f"and at most {cap.group(1)} run at once. Run the batch as one command (a shell loop, or xargs -P 4) so it is one job; "
+            f"and at most {cap.group(1)} run at once; this call waited for a free slot as long as a cell waits and none came. Run the batch as one command (a shell loop, or xargs -P 4) so it is one job; "
             "jobs left running by earlier cells count too: tools.job_list({}) lists them."
         )
+    if re.fullmatch(r"unknown job [\w-]+", message.strip()):
+        # 2026-11-05..13: 13 lookups of a gone job; most came after a DSH restart or a subagent's turn ended.
+        return ("DSH keeps job records in memory only: a DSH restart, the end of a subagent's turn (its jobs are stopped) "
+                "and a bash call that already returned its result all remove them, so this id can no longer be read or stopped. "
+                "Check what the command left behind (files, git status, logs) before deciding to run it again.")
     if re.search(r"replace_all|provide a more specific|read it again|use glob", message, re.I):
         return None
     if re.search(r"old_string (?:matched|matches) \d+", message):
@@ -463,10 +468,69 @@ def _list_shape(value) -> str:
     return f"a list of {count} item{'s' if count != 1 else ''}{inner}"
 
 
+def _cell_line(tb) -> str | None:
+    """`<cell-N> line L: source` of the innermost cell frame in a traceback."""
+    import linecache
+
+    found = None
+    for summary in traceback.extract_tb(tb):
+        if summary.filename.startswith("<cell-"):
+            found = summary
+    if found is None:
+        return None
+    source = (linecache.getline(found.filename, found.lineno) or "").strip()
+    return f"{found.filename} line {found.lineno}" + (f": `{source[:_EXPR_CHARS]}`" if source else "")
+
+
+def _json_hint(exc) -> str | None:
+    """Why json.loads failed, read from the error's own doc and pos (what the text looks like there)."""
+    doc, pos, msg = getattr(exc, "doc", None), getattr(exc, "pos", None), getattr(exc, "msg", "")
+    if not isinstance(doc, str) or not isinstance(pos, int):
+        return None
+    if not doc.strip():
+        return "The text given to json.loads is empty. If it came from bash, the command printed nothing on stdout: check exitCode and stderr.\n"
+    if msg == "Extra data":
+        return (f"The text holds more than one JSON value: one ends at char {pos} and more follows ({doc[pos:pos + 40]!r}). "
+                "For one JSON value per line parse each line; otherwise cut the text down to the value you want.\n")
+    cut = ("The text stops in the middle of a JSON value (it is {} characters long), so it was cut off before it reached you. "
+           "Get the complete output (write it to a file, or ask for less) instead of parsing a partial one.\n").format(len(doc))
+    if msg.startswith("Unterminated"):
+        return cut
+    if pos <= len(doc) - len(doc.lstrip()):
+        return (f"The text is not JSON from its first character: it starts {doc.lstrip()[:60]!r}. "
+                "If it came from bash: when stdout.truncated is True, stdout.text keeps only the tail (the full output is at spillPath); "
+                "and a CLI may print a message before or instead of JSON, so check exitCode and stderr.\n")
+    if pos >= len(doc.rstrip()):
+        return cut
+    return f"The JSON breaks at char {pos}; the text there is {doc[max(0, pos - 30):pos + 30]!r}.\n"
+
+
+def _early_hint(exc: BaseException, message: str) -> str | None:
+    """Hints that need the exception alone, not the expression that raised it."""
+    if type(exc).__name__ == "JSONDecodeError" and isinstance(exc, ValueError):
+        return _json_hint(exc)
+    if isinstance(exc, RuntimeError) and re.fullmatch(r"(?:coroutine|generator|async generator) raised StopIteration", message):
+        # A cell is a coroutine: PEP 479 turns a top-level next() that found nothing into this RuntimeError, without the cell line.
+        cause = exc.__cause__
+        where = _cell_line(cause.__traceback__) if isinstance(cause, StopIteration) else None
+        return (("A `next(...)` with no default found no item" + (f" ({where})" if where else ""))
+                + "; inside a cell Python reports that StopIteration as this RuntimeError. "
+                "Write `next(iterator, None)` and check for None.\n")
+    if isinstance(exc, OSError) and message in ("could not get source code", "source code not available"):
+        # 2026-11-08..13: 7 of 7 were functions restored from the snapshot after a kernel restart.
+        return ("inspect cannot find this function's source. A function restored from the snapshot after the kernel was replaced "
+                "keeps working but not its source, because the cell that defined it belongs to the old kernel. "
+                "`await repl.describe(\"name\")` gives its signature and where it was defined; to read or change the code, define it again.\n")
+    return None
+
+
 def _exception_hint(exc: BaseException) -> str | None:
     import ast
 
     message = str(exc)
+    early = _early_hint(exc, message)
+    if early is not None:
+        return early
     if isinstance(exc, ImportError) and not isinstance(exc, ModuleNotFoundError) and exc.name == "skills":
         wanted = getattr(exc, "name_from", None) or (re.search(r"cannot import name '(\w+)'", message) or [None, None])[1]
         use = f"skills.{wanted}" if wanted else "skills.<name>"
@@ -525,6 +589,22 @@ def _exception_hint(exc: BaseException) -> str | None:
         except (TypeError, ValueError):
             return None
         return f"`{_code(node.func)}` takes {getattr(function, '__name__', 'it')}{signature}: pass only these parameters.\n"
+
+    if isinstance(exc, KeyError) and len(exc.args) == 1 and isinstance(exc.args[0], slice) and isinstance(node, ast.Subscript):
+        # 2026-11-07..12: `d = await skills.describe(...)` then `d[:4000]`, 11 times; the bare `KeyError: slice(None, 4000, None)` said nothing.
+        value = _lookup(node.value, frame)
+        if not isinstance(value, dict) or type(value).__module__ not in ("builtins", "dsh_kernel"):
+            return None
+        name = _code(node.value)
+        items = dict.get(value, "items")
+        first = list.__getitem__(items, 0) if isinstance(items, list) and items else None
+        if isinstance(first, dict) and isinstance(dict.get(first, "instructions"), str):
+            example = f"`{name}['items'][0]['instructions'][:N]`"
+        else:
+            keys = list(dict.keys(value))
+            example = f"`{name}[{keys[0]!r}]`" if keys else f"`{name}[key]`"
+        return (f"`{name}` is a dict, not text or a list, so it cannot be sliced; its keys are {_keys(value)}. "
+                f"Take a value first ({example}), or slice the text form: `json.dumps({name}, ensure_ascii=False)[:N]`.\n")
 
     if isinstance(exc, KeyError) and len(exc.args) == 1 and isinstance(exc.args[0], str) and isinstance(node, ast.Subscript):
         value = _lookup(node.value, frame)

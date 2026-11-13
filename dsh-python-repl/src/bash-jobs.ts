@@ -33,6 +33,8 @@ export interface JobsService {
   wait(id: string, timeoutMs: number, caller: string, signal?: AbortSignal): Promise<JobView>
   read(id: string, caller: string): { chunks: Array<{ channel?: string; text: string }>; lossy: boolean; job: JobView }
   remove(id: string, caller: string): unknown
+  /** Jobs visible to `caller` (dsh-jobs-local `list`); used to see when a job slot is free again. */
+  list?(caller: string): JobView[]
   kill(id: string, caller: string, reason?: string): unknown
   start(spec: {
     kind: string
@@ -88,6 +90,59 @@ function abortError(): Error {
   return error
 }
 
+const LIMIT_REACHED = /background job limit reached.*\(limit: (\d+)\)/
+const SLOT_POLL_MS = 100
+/** Callers waiting for a job slot, per owner, in arrival order: siblings of one gather do not race for the same freed slot. */
+const slotQueues = new Map<string, Promise<void>>()
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * Start the job; refused at DSH's per-owner cap, wait for a slot until `deadline` and start it then.
+ *
+ * Every command here becomes a job, so gathering more than the cap used to
+ * get the rest refused although DSH's own foreground bash (one at a time)
+ * never would: 2026-11-05..11, 8 refusals in 7 sessions, and in each a slot
+ * freed within 2.7 s. The count is read from `list`, not by waiting on other
+ * jobs: a wait on a job someone else started makes DSH skip its notice.
+ */
+async function startInSlot(start: () => Promise<unknown>, jobs: JobsService, owner: string, deadline: number, signal: AbortSignal | undefined): Promise<unknown> {
+  try {
+    return await start()
+  } catch (error) {
+    const cap = LIMIT_REACHED.exec(messageOf(error))
+    if (cap === null || jobs.list === undefined) throw error
+    const limit = Number(cap[1])
+    const previous = slotQueues.get(owner) ?? Promise.resolve()
+    let release!: () => void
+    const tail = previous.then(() => new Promise<void>((resolve) => { release = resolve }))
+    slotQueues.set(owner, tail)
+    await previous
+    let last: unknown = error
+    try {
+      for (;;) {
+        if (signal?.aborted === true) throw abortError()
+        if (Date.now() >= deadline) throw last
+        const live = jobs.list(owner).filter((job) => LIVE.has(job.status)).length
+        if (live < limit) {
+          try {
+            return await start()
+          } catch (again) {
+            if (!LIMIT_REACHED.test(messageOf(again))) throw again
+            last = again
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, SLOT_POLL_MS))
+      }
+    } finally {
+      release()
+      if (slotQueues.get(owner) === tail) slotQueues.delete(owner)
+    }
+  }
+}
+
 function startsBackground(schema: ToolSchemaLike | undefined): boolean {
   const properties = (schema?.parameters as { properties?: Record<string, unknown> } | undefined)?.properties
   return properties !== undefined && 'run_in_background' in properties
@@ -113,7 +168,8 @@ export function withJobBash(fn: BoundTool, schema: ToolSchemaLike | undefined, c
     }
     const wanted = typeof request['timeoutMs'] === 'number' && request['timeoutMs'] > 0 ? Math.min(request['timeoutMs'], capMs) : capMs
     const { timeoutMs: _drop, ...rest } = request
-    const receipt = await fn({ ...rest, run_in_background: true }) as Record<string, unknown>
+    // A queued command waits for a slot at most `wanted`, then gets its own full wait once started.
+    const receipt = await startInSlot(() => fn({ ...rest, run_in_background: true }), jobs, owner, Date.now() + wanted, signal) as Record<string, unknown>
     const id = receipt?.['jobId']
     if (receipt?.['kind'] !== 'background' || typeof id !== 'string') return receipt
     let view: JobView
