@@ -111,7 +111,7 @@
   `rlm` 是 PEP 420 命名空间包，跨这两个目录，**两边都不要放 `__init__.py`**（放了就塌成普通包，另一边的模块会消失）。PYTHONPATH 顺序 `vendor/prime` → `python/compat` → `python`，上游永远不会被遮蔽。
   `vendor/PROVENANCE.md` 记录哈希，`test/python/test_vendor_integration.py` 每次跑测试都校验哈希、校验 vendor 目录里除上游文件外空无一物。细节见 `python/compat/README.md`。
 - Python 测试放 `test/python/`，和 TS 测试同级；`python/` 只放运行时源码。
-- `python/` 和 `vendor/` 是运行中的 DSH 每开一个新内核都直接读的，宿主的 `lib/` 却要重启才换：在这个目录里直接改，旧宿主会配上新 Python 文件。2026-10-15 删掉 `revive.py` 后所有 `run_code` 都报 `KeyError: 'revived'`。改这两处要在 git worktree 里做和测，部署交给 `dsh-control restart --detach --before '<打补丁并构建>'`。
+- 内核不直接读源码里的 `python/` 和 `vendor/`：宿主启动时按内容复制一份到 `DSH_HOME/plugins/python-repl/kernel-sources/<哈希>/`，内核只从副本加载（`src/kernel-sources.ts`，保留当前加最近两份）。这样内核的 Python 总和正在跑的 `lib/` 配套，源码目录被挪走、删掉或改了都不影响已在跑的 DSH。以前直接读源码，出过两次事：2026-10-15 删掉 `revive.py` 后所有 `run_code` 都报 `KeyError: 'revived'`；2026-11-13 搬仓库目录后内核起不来，模型连重启 DSH 都做不了。改这两处照常重启生效；复制失败时宿主记一条 warn，退回读源码。
 - 内核跑在宿主建的专用 venv 里，照 Prime 的 kernel-venv：`DSH_HOME/plugins/python-repl/kernel-venv/<小版本>`，用配置的 Python 建，建时一次装好 Prime 的 12 个预装包、快照要的 `dill`，再加 matplotlib 和 openpyxl（`KERNEL_PACKAGES`；实测缺这两个时，数据任务跑去技能自带的解释器、在内核外做完全部分析），提示词照 Prime 写明预装了哪些。venv 里的标记记着用哪个 Python、装了哪份清单：一致就什么都不做、不联网；换了 Python 重建，换了清单只补装；建或装失败，这一格报错带原因，下一格重试。`repl.install` 用 `uv pip install --python <内核的 python>` 装进同一个 venv；内核不在 venv 里就拒绝，免得装进本机共用的 Python。不按每个工作区分环境：分析用的库各工作区一样，项目自己的依赖走项目环境。
 - 仓库里只导入 `projectSkillRoots` 指定的目录，不扫整个工作区；除上面的固定清单外不自动装包（装库只走模型显式调用的 `repl.install`）、不静默吞导入失败。
 - 运行状态归 DSH_HOME，不写源码树；文档中的本机路径是证据，不得硬编码进发布代码。
