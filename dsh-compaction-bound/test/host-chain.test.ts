@@ -25,21 +25,35 @@ interface Request { purpose?: string; messages: Array<{ role: string; source?: {
 interface Message { role: string; source?: { kind?: string }; content: Array<{ type: string; text?: string }> }
 type Reply = (request: Request) => string | undefined
 
-async function chain(reply: Reply, config: Record<string, unknown> = {}) {
+/** 假模型登记的窗口，以及请求超窗时照哪种真实形状失败。token 按序列化后每 2 个字符算 1 个。 */
+interface Window { contextWindow: number; overflow: 'pi-ai' | 'provider' }
+const fakeTokens = (request: { messages: unknown[]; tools?: unknown }) => Math.ceil((JSON.stringify(request.messages).length + (request.tools === undefined ? 0 : JSON.stringify(request.tools).length)) / 2)
+
+async function chain(reply: Reply, config: Record<string, unknown> = {}, window?: Window) {
   const [{ SessionQueryEngine }, { SessionStore }, { SessionProjectionRegistry }, { TokenMeter }, llm, { BasicCompactionEngine }] = await Promise.all([
     host('@deepseek-ai/dsh-session-query'), host('@deepseek-ai/dsh-session'), host('@deepseek-ai/dsh-session-projection'), host('@deepseek-ai/dsh-token-meter'), host('@deepseek-ai/dsh-llm'), host('@deepseek-ai/dsh-compaction-basic'),
   ])
   const requests: Request[] = []
   class FakeModel extends llm.LlmAdapter {
+    resolveModel(provider: string, model: string) {
+      return Promise.resolve({ provider, id: model, name: model, ...(window === undefined ? {} : { context: { contextWindow: window.contextWindow } }) })
+    }
     async *stream(options: Request): AsyncGenerator<unknown> {
       requests.push(options)
+      const tokens = fakeTokens(options)
+      if (window !== undefined && tokens > window.contextWindow && window.overflow === 'provider') {
+        yield { type: 'finish', reason: { kind: 'error', failure: { message: 'Your input exceeds the context window of this model. Please adjust your input and try again.', code: 'CONTEXT_WINDOW_EXCEEDED' } } }
+        return
+      }
       const text = reply(options)
       if (text === undefined) { yield { type: 'finish', reason: { kind: 'error', failure: { message: 'fake failure', code: 'FAKE' } } }; return }
       yield { type: 'block-start', index: 0, blockType: 'text' }
       yield { type: 'text-delta', index: 0, text }
       yield { type: 'block-end', index: 0, block: { type: 'text', text } }
-      yield { type: 'usage', usage: { inputTokens: 10, outputTokens: 5 } }
-      yield { type: 'finish', reason: { kind: 'stop' } }
+      yield { type: 'usage', usage: { inputTokens: window === undefined ? 10 : tokens, outputTokens: 5 } }
+      // pi-ai 的静默溢出：模型照常写完，回报的输入超过登记窗口，整次判 CONTEXT_WINDOW_EXCEEDED
+      if (window !== undefined && tokens > window.contextWindow) yield { type: 'finish', reason: { kind: 'error', failure: { message: 'pi-ai detected context overflow for model "m"', code: 'CONTEXT_WINDOW_EXCEEDED' } } }
+      else yield { type: 'finish', reason: { kind: 'stop' } }
     }
   }
   const ctx = new Context()
@@ -218,4 +232,82 @@ test('真实宿主链：historyReaderHint 设置进入检查点，空值保留�
     }
     assert.ok(carriedFromCheckpoint(cp).length > 0, '提示不影响原文附录')
   }
+})
+
+/** 照会话记录里的真实故障：会话已经超过模型登记的窗口，写摘要请求把整段对话重放给模型。 */
+const overflowWindow = (overflow: Window['overflow']): Window => ({ contextWindow: 30000, overflow })
+const longTurns = (turn: (m: Array<{ kind: string; texts: readonly string[] }>, a: string) => void, from: number, n: number) => {
+  const typed: string[] = []
+  for (let i = 0; i < n; i++) {
+    const text = `第 ${from + i} 轮的要求：保持示例行为 ${from + i}`
+    typed.push(text)
+    turn([{ kind: 'user', texts: [text] }], filler(3000))
+  }
+  return typed
+}
+
+test('超窗故障复现：关掉 fitWindow 时，写摘要请求和对话一起超窗，压缩失败（pi-ai 判溢出）', async () => {
+  const { session, turn, compact, requests } = await chain(() => summary, { fitWindow: false }, overflowWindow('pi-ai'))
+  longTurns(turn, 1, 6)
+  await assert.rejects(compact(), (error: Error & { cause?: { code?: string; message?: string } }) => error.cause?.code === 'CONTEXT_WINDOW_EXCEEDED' && /pi-ai detected context overflow/.test(error.cause.message ?? ''))
+  assert.equal(requests.length, 1)
+  assert.ok(fakeTokens(requests[0]!) > 30000, '写摘要请求本身超窗')
+  assert.equal(session.deriveMessages().filter((m) => m.source?.kind === CHECKPOINT_KIND).length, 0, '没写回检查点')
+})
+
+test('真实宿主链：pi-ai 判写摘要请求超窗后，按回报的用量压进窗口重发一次，压缩成功；拿掉的用户原话仍逐字进附录', async () => {
+  const { session, turn, compact, requests } = await chain(() => summary, {}, overflowWindow('pi-ai'))
+  const typed = longTurns(turn, 1, 6)
+  await compact()
+  assert.equal(requests.length, 2, '超窗那次加一次重发')
+  assert.ok(fakeTokens(requests[0]!) > 30000)
+  const retry = requests[1]!
+  assert.ok(fakeTokens(retry) <= 30000, '重发的请求在窗口内')
+  assert.equal(retry.purpose, 'compaction')
+  assert.ok((retry.messages.at(-1)!.content[0]!.text ?? '').includes('Active User Requirements'), '有界指令还在最后')
+  assert.ok(retry.messages.some((m) => m.content.some((b) => (b.text ?? '').includes('earlier messages of this span were left out'))), '告诉模型前面拿掉了')
+  const cp = session.deriveMessages().find((m) => m.source?.kind === CHECKPOINT_KIND)!
+  assert.equal(cp.content[1]!.text, summary, '宿主收到的是重发那次的正文，失败那次的输出没交出去')
+  const carried = carriedFromCheckpoint(cp).map((i) => (i.kind === 'full' ? i.text[0] : undefined))
+  assert.deepEqual(carried, typed.slice(0, carried.length), '附录按原样带上被压掉的每条用户原话，包括没进重发请求的')
+  assert.ok(carried.length >= 5)
+  const fit = status().lastSummary['fit'] as Record<string, unknown>
+  assert.equal(fit['overflows'], 1)
+  assert.equal(fit['basis'], 'reported-usage')
+  assert.equal(fit['outcome'], 'stop')
+  assert.ok((fit['droppedMessages'] as number) > 0)
+
+  // 同一模型学到了字符和 token 的比例，下次发之前就压好，不再白发一次超窗请求
+  const more = longTurns(turn, 7, 6)
+  const before = requests.length
+  await compact()
+  assert.equal(requests.length, before + 1, '只发一次')
+  assert.ok(fakeTokens(requests[before]!) <= 30000)
+  assert.equal(requests[before]!.messages.filter((m) => m.source?.kind === CHECKPOINT_KIND).length, 1, '上一份检查点在拿掉的部分里也保留')
+  const second = status().lastSummary['fit'] as Record<string, unknown>
+  assert.equal(second['basis'], 'estimate')
+  assert.equal(second['overflows'], 0)
+  const cp2 = session.deriveMessages().find((m) => m.source?.kind === CHECKPOINT_KIND)!
+  const carried2 = carriedFromCheckpoint(cp2).map((i) => (i.kind === 'full' ? i.text[0] : undefined))
+  assert.deepEqual(carried2, [...typed, ...more].slice(0, carried2.length), '两次压缩后用户原话仍按顺序逐字保留')
+})
+
+test('真实宿主链：服务商直接拒收（没有正文和用量）时，砍半重发，压缩成功', async () => {
+  const { session, turn, compact, requests } = await chain(() => summary, {}, overflowWindow('provider'))
+  longTurns(turn, 1, 6)
+  await compact()
+  assert.equal(requests.length, 2)
+  assert.ok(fakeTokens(requests[1]!) <= 30000)
+  assert.equal(session.deriveMessages().filter((m) => m.source?.kind === CHECKPOINT_KIND).length, 1)
+  const fit = status().lastSummary['fit'] as Record<string, unknown>
+  assert.equal(fit['basis'], 'halve')
+  assert.equal(fit['outcome'], 'stop')
+})
+
+test('真实宿主链：没超窗时写摘要请求原样发，不多发也不记压窗', async () => {
+  const { turn, compact, requests } = await chain(() => summary, {}, { contextWindow: 1_000_000, overflow: 'pi-ai' })
+  longTurns(turn, 1, 3)
+  await compact()
+  assert.equal(requests.length, 1)
+  assert.equal(status().lastSummary['fit'], undefined)
 })
