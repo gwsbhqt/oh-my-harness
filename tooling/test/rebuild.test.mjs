@@ -130,3 +130,16 @@ test('只检查 CLI：全部一致退出 0，有要处理的退出 1 且 JSON �
   await assert.rejects(fs.stat(path.join(f.dir('dsh-first'),'lib/dsh-build.json')),{code:'ENOENT'});
   const invalid=await run(process.execPath,[path.join(checkout,'tooling/rebuild.mjs'),'--check','--profile','.']);assert.equal(invalid.code,2);assert.match(invalid.stderr,/绝对/);
 });
+
+test('插件嵌在单体仓库深处时按仓库根构建，插件目录自身没 .git 也能向上找到',async()=>{
+  const f=await fixture('nested',['dsh-first']);
+  const plugin=path.join(f.repository,'packages/dsh/.agents/dsh-plugins','dsh-first');
+  await fs.mkdir(path.dirname(plugin),{recursive:true});await fs.rename(f.dir('dsh-first'),plugin);
+  const builder=await fs.readFile(path.join(plugin,'scripts/build.mjs'),'utf8');
+  await put(plugin,'scripts/build.mjs',builder.replace("'../../tooling/build.mjs'","'../../../../../../tooling/build.mjs'"));
+  f.manifest.dependencies['dsh-first']='link:'+plugin;
+  await put(f.profile,'package.json',JSON.stringify(f.manifest));
+  await fs.rm(path.join(f.profile,'node_modules/dsh-first'));await fs.symlink(plugin,path.join(f.profile,'node_modules/dsh-first'));
+  const report=await f.build();assert.equal(report.ok,true,JSON.stringify(report));assert.equal(report.summary.built,1);
+  const scoped=await checkLinkedPlugins({repository:path.dirname(plugin),profile:f.profile});assert.equal(scoped.ok,true,JSON.stringify(scoped));
+});
