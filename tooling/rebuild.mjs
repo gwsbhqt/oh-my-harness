@@ -27,11 +27,19 @@ async function packageState(dir,name) {
   return {pkg,inspection:await inspectBuild(dir,pkg.dsh?.build,outputs)};
 }
 
+async function findGitMarker(start) {
+  for(let dir=start;;dir=path.dirname(dir)) {
+    const marker=await fs.lstat(path.join(dir,'.git')).catch(()=>undefined);
+    if(marker)return marker;
+    if(path.dirname(dir)===dir)return undefined;
+  }
+}
+
 async function scanLinkedPlugins({repository,profile}) {
   if(!path.isAbsolute(repository??'')||!path.isAbsolute(profile??''))throw new Error('repository 和 profile 必须显式提供绝对目录');
   repository=await fs.realpath(repository);profile=await fs.realpath(profile);
-  const marker=await fs.lstat(path.join(repository,'.git'));
-  if(marker.isSymbolicLink()||(!marker.isFile()&&!marker.isDirectory()))throw new Error('repository 必须有真实 .git 标记');
+  const marker=await findGitMarker(repository);
+  if(!marker||marker.isSymbolicLink()||(!marker.isFile()&&!marker.isDirectory()))throw new Error('repository 必须有真实 .git 标记');
   const manifestFile=path.join(profile,'package.json'),original=await fs.readFile(manifestFile,'utf8'),manifest=JSON.parse(original);
   const report={schemaVersion:1,ok:false,repository,profile,plugins:[],skipped:[],errors:[],summary:{}};
   const registered=new Map();
@@ -52,14 +60,15 @@ async function scanLinkedPlugins({repository,profile}) {
       row.dir=await fs.realpath(wanted).catch(async e=>{
         if(e.code!=='ENOENT')throw e;
         // 新插件已登记但目录还没拉下来时，只有父目录是本仓库才算本仓库缺插件；别的仓库的断链由那个仓库报。
-        if(await fs.realpath(path.dirname(wanted)).catch(()=>undefined)!==repository)return undefined;
+        const parent=await fs.realpath(path.dirname(wanted)).catch(()=>undefined);
+        if(!parent||(parent!==repository&&!parent.startsWith(repository+path.sep)))return undefined;
         row.missing=true;row.dir=wanted;throw new Error('插件目录不存在: '+wanted);
       });
       if(!row.dir) {
         report.skipped.push({name,specifier,dir:wanted,reason:'链接目标不存在且不在指定仓库'});continue;
       }
-      if(path.dirname(row.dir)!==repository) {
-        report.skipped.push({name,specifier,dir:row.dir,reason:'真实路径不是指定仓库的直接插件目录'});continue;
+      if(row.dir!==repository&&!row.dir.startsWith(repository+path.sep)) {
+        report.skipped.push({name,specifier,dir:row.dir,reason:'真实路径不在指定仓库内'});continue;
       }
       const {pkg,inspection}=await packageState(row.dir,name);
       row.before=inspection;
@@ -134,7 +143,7 @@ const invoked=process.argv[1]?await fs.realpath(process.argv[1]).catch(()=>undef
 if(invoked===await fs.realpath(fileURLToPath(import.meta.url))) {
   try {
     const {values}=parseArgs({options:{repository:{type:'string'},profile:{type:'string'},json:{type:'boolean'},check:{type:'boolean'},'timeout-ms':{type:'string'},help:{type:'boolean',short:'h'}}});
-    if(values.help)console.log('node tooling/rebuild.mjs --repository <插件仓库绝对目录> --profile <实际 profile 绝对目录> [--json] [--check] [--timeout-ms 120000]\n只构建明确登记的自有 link 插件中未 verified 的项；最后全体复验。不执行 doctor 或重启。\n--check 只检查不构建：列出过期、缺失、缺依赖的插件和原因；全部一致退出 0，有要处理的退出 1。');
+    if(values.help)console.log('node tooling/rebuild.mjs --repository <插件目录绝对路径，自身或上级要有 .git> --profile <实际 profile 绝对目录> [--json] [--check] [--timeout-ms 120000]\n只构建明确登记的自有 link 插件中未 verified 的项；最后全体复验。不执行 doctor 或重启。\n--check 只检查不构建：列出过期、缺失、缺依赖的插件和原因；全部一致退出 0，有要处理的退出 1。');
     else if(values.check) {
       const report=await checkLinkedPlugins({repository:values.repository,profile:values.profile});
       const pending=report.plugins.filter(p=>p.action!=='skip');

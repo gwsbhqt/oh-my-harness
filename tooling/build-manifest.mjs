@@ -39,6 +39,23 @@ async function safeStat(dir,name) {
   }
   return stat;
 }
+async function findRepositoryRoot(start) {
+  for(let dir=start;;dir=path.dirname(dir)) {
+    const marker=await fs.lstat(path.join(dir,'.git')).catch(()=>undefined);
+    if(marker) {
+      if(marker.isSymbolicLink())throw new Error('构建清单不跟随符号链接: .git');
+      return {dir,marker};
+    }
+    if(path.dirname(dir)===dir)return undefined;
+  }
+}
+async function findToolingRoot(start) {
+  for(let dir=start;;dir=path.dirname(dir)) {
+    const entry=await fs.lstat(path.join(dir,'tooling')).catch(()=>undefined);
+    if(entry)return dir;
+    if(path.dirname(dir)===dir)return undefined;
+  }
+}
 async function repositoryInput(repository,name) {
   if(!name.startsWith('tooling/'))return {file:path.join(repository,name),stat:await safeStat(repository,name)};
   const linked=path.join(repository,'tooling'),entry=await fs.lstat(linked);
@@ -79,9 +96,10 @@ async function snapshot(dir,value,kinds=['inputs','outputs']) {
     if(!Object.keys(result[kind]).length)throw new Error(kind+' 未包含任何文件');
   }
   if(declaration.repositoryInputs.length) {
-    // Only the direct repository parent is trusted; installed packages cannot invent a root.
-    const repository=path.dirname(dir),marker=await safeStat(repository,'.git');
-    if(!marker.isFile()&&!marker.isDirectory())throw new Error('repositoryInputs 无法确认源码仓库 root');
+    // 插件可以嵌在单体仓库深处；往上找最近的 .git 边界，不能凭空造仓库根。
+    const found=await findRepositoryRoot(path.dirname(dir));
+    if(!found||(!found.marker.isFile()&&!found.marker.isDirectory()))throw new Error('repositoryInputs 无法确认源码仓库 root');
+    const repository=(await findToolingRoot(dir))??found.dir;
     for(const name of declaration.repositoryInputs) {
       const {file,stat}=await repositoryInput(repository,name);
       if(!stat.isFile())throw new Error('repositoryInputs 只支持普通文件: '+name);
