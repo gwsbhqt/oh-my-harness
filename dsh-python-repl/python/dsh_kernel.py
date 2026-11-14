@@ -1057,7 +1057,7 @@ class BashJob:
                     exitCode=int(match.group(1)) if match else None,
                     text="".join(self._text),
                     detail=job.get("detail"),
-                    **_streams("".join(self._text)),
+                    **_wrap_nested(_streams("".join(self._text))),
                 )
                 # The result now holds the text; a second copy would double the memory every job keeps.
                 self._text = []
