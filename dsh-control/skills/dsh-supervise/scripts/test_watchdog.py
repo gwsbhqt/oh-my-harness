@@ -4,7 +4,7 @@
 只替换 dsh-control 调用，不连网、不发真实通知；真实只读检查在
 `python3 -I watchdog.py --once ...` 里单独跑。
 
-运行：`python3 test_watchdog.py`，或仓库根目录 `mise run test:skills`。
+运行：`python3 test_watchdog.py`，或 dsh-control 组件目录 `pnpm run test`（随 `CI=true pnpm run check` 一起执行）。
 """
 import contextlib
 import importlib.util

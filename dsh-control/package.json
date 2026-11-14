@@ -95,7 +95,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "node --test 'test/*.test.ts' && python3 -m unittest discover -s test/python -v",
+    "test": "node --test 'test/*.test.ts' && python3 -m unittest discover -s test/python -v && python3 -m unittest discover -s skills/dsh-supervise/scripts -p 'test_*.py' -v",
     "check": "pnpm run typecheck && pnpm run build && pnpm run test"
   },
   "peerDependencies": {

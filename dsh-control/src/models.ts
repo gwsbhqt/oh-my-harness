@@ -1,7 +1,7 @@
 /**
  * 两档模型挑选：档里有哪些模型、每家看哪几个额度窗口、保留线，都来自 模型额度服务 的档位文件
- * （`$DSH_HOME/preferences.json` 的 `modelTiers` 段，设置里「默认模型与档位」一页可改）。本文件只做挑选计算，
- * 规则和 模型额度服务 的 `src/tiers/shared/tiers.ts` 是同一套（插件之间不能互相导入代码，所以这里留一份计算）。
+ * （`$DSH_HOME/preferences.json` 的 `modelTiers` 段，设置里「默认模型与档位」一页可改）。
+ * 装有模型额度服务时直接调用它的挑选和判断接口；这里的计算只供未安装该服务的独立公开安装使用。
  * 只挑模型，不碰推理等级——切模型后等级由 模型额度服务 按这个模型上次用的值自动带上。
  *
  * 命令行的档位名沿用 `normal`（主力档）和 `fast`（轻量档）。
@@ -132,7 +132,7 @@ export interface WindowView {
 export interface Verdict {
   provider: string
   model: string
-  quota: string
+  quota?: string
   tier: Tier
   rank: number
   /** 在模型目录里有没有（没配凭据、服务商挂了就没有）。 */
@@ -146,6 +146,8 @@ export interface Verdict {
   score?: number
   /** 额度紧：某个窗口照现在的速度撑不到重置，而且剩余不到一半。可用，但排到不紧的后面。 */
   tight?: boolean
+  routingGroup?: boolean
+  renamedFrom?: string
   windows: WindowView[]
 }
 
@@ -157,6 +159,40 @@ export interface PickResult {
   earliestReset?: number
   quotaFetchedAt?: number
   quotaStale?: boolean
+  ordered?: Verdict[]
+  renamed?: { from: string; to: string }[]
+}
+
+export type SharedTier = 'main' | 'light'
+export type SharedVerdict = Omit<Verdict, 'tier'> & { tier: SharedTier }
+export type SharedPickResult = Omit<PickResult, 'tier' | 'chosen' | 'candidates' | 'ordered'> & {
+  tier: SharedTier
+  chosen?: SharedVerdict
+  candidates: SharedVerdict[]
+  ordered: SharedVerdict[]
+}
+export interface ModelJudgement { tier: Tier; verdict: Verdict; exhausted: boolean }
+
+/** 可选 modelTiers 服务已有接口的公开结构描述，不依赖它的实现或安装。 */
+export interface ModelTiersLike {
+  pick(tier: SharedTier): Promise<SharedPickResult>
+  judgeModel(provider: string, model: string): Promise<{ tier: SharedTier; verdict: SharedVerdict; exhausted: boolean } | undefined>
+}
+
+export function publicTier(tier: SharedTier): Tier { return tier === 'main' ? 'normal' : 'fast' }
+
+export function fromSharedPick(result: SharedPickResult): PickResult {
+  const { chosen, ...rest } = result
+  const converted = new Map<SharedVerdict, Verdict>()
+  const verdict = (v: SharedVerdict): Verdict => {
+    let found = converted.get(v)
+    if (found === undefined) { found = { ...v, tier: publicTier(v.tier) }; converted.set(v, found) }
+    return found
+  }
+  return {
+    ...rest, tier: publicTier(result.tier), candidates: result.candidates.map(verdict), ordered: result.ordered.map(verdict),
+    ...(chosen === undefined ? {} : { chosen: verdict(chosen) }),
+  }
 }
 
 export interface PickOptions {

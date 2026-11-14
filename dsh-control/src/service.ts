@@ -10,7 +10,7 @@ import { isAbsolute, join } from 'node:path'
 import { pendingRestart, type PendingRestart } from '../../tooling/runtime/restart-state.mjs'
 import { CommandFailure, errorPayload, UsageError, splitEndpoint, describeEndpoint, parameterSchemas, collectStream, type GatewayLike, type TypertLocalLike } from './gateway.ts'
 import { buildTranscript, clock, oneLine, renderTurn, turnLine, type RawEvent, type Transcript } from './transcript.ts'
-import { pick, routeKey, tierOf, verdictLine, clock as shortClock, type Tier, type TierTable, type UsageReportLike } from './models.ts'
+import { pick, routeKey, tierOf, verdictLine, publicTier, fromSharedPick, clock as shortClock, type Tier, type TierTable, type UsageReportLike, type ModelTiersLike, type ModelJudgement, type PickResult } from './models.ts'
 import { findInterruptedUser, scanLostMessages } from './lost-messages.ts'
 import type { PendingQuestions } from './questions.ts'
 import type { QueuedDetail } from './quit-blockers.ts'
@@ -73,6 +73,7 @@ export interface Deps {
   query: SessionQueryLike
   /** 读 模型额度服务 的额度报告；没装 模型额度服务 时返回 undefined。 */
   usage: (force?: boolean) => Promise<UsageReportLike | undefined>
+  modelTiers?: () => ModelTiersLike | undefined
   /** 订阅 agent 状态变化（会话从在跑变空闲时唤醒等待）。返回取消函数。 */
   onStatus: (listener: (sessionId: string, running: boolean) => void) => () => void
   config: () => RuntimeConfig
@@ -1345,13 +1346,19 @@ export class RemoteService {
     return { text: lines.join('\n'), data: report }
   }
 
+  private async pickTier(tier: Tier, config: RuntimeConfig, report: UsageReportLike | undefined, catalog: ReadonlySet<string>): Promise<PickResult> {
+    const shared = this.deps.modelTiers?.()
+    if (shared !== undefined) return fromSharedPick(await shared.pick(tier === 'normal' ? 'main' : 'light'))
+    return pick(tier, config.tiers, report, { reservePercent: config.reservePercent, now: this.now(), catalog, ...(config.paused === undefined ? {} : { skip: config.paused }) })
+  }
+
   async models(): Promise<CommandResult> {
     const config = this.deps.config()
     const [report, catalog] = await Promise.all([this.deps.usage(false), this.catalog()])
     const lines: string[] = []
     const data: Record<string, unknown> = {}
     for (const tier of ['normal', 'fast'] as const) {
-      const result = pick(tier, config.tiers, report, { reservePercent: config.reservePercent, now: this.now(), catalog: catalog.set, ...(config.paused === undefined ? {} : { skip: config.paused }) })
+      const result = await this.pickTier(tier, config, report, catalog.set)
       data[tier] = result
       lines.push(`${tier} 档（${TIER_LABEL[tier]}）${result.chosen === undefined ? '：没有可用模型' : `：现在选 ${routeKey(result.chosen.provider, result.chosen.model)}`}`)
       for (const v of result.candidates) lines.push(`  ${v === result.chosen ? '→' : v.usable ? '·' : '✗'} ${verdictLine(v)}`)
@@ -1366,7 +1373,7 @@ export class RemoteService {
   async pickModel(tier: Tier): Promise<CommandResult> {
     const config = this.deps.config()
     const [report, catalog] = await Promise.all([this.deps.usage(false), this.catalog()])
-    const result = pick(tier, config.tiers, report, { reservePercent: config.reservePercent, now: this.now(), catalog: catalog.set, ...(config.paused === undefined ? {} : { skip: config.paused }) })
+    const result = await this.pickTier(tier, config, report, catalog.set)
     const lines = result.chosen === undefined
       ? [`${tier} 档（${TIER_LABEL[tier]}）现在没有可用模型。`, ...(config.tiersError === undefined ? [] : [`档位读不到：${config.tiersError}`]), ...result.candidates.map((v) => `  ✗ ${verdictLine(v)}`), ...(result.earliestReset === undefined ? [] : [`最早 ${shortClock(result.earliestReset)} 有额度重置。`]), ...quotaFixLines(report, { ...config.tiers, [tier === 'normal' ? 'fast' : 'normal']: [] }), tier === 'fast' ? '可以改用 normal 档。' : '可以问用户要不要改用 fast 档，或等重置。']
       : [`选 ${routeKey(result.chosen.provider, result.chosen.model)}`, ...result.candidates.map((v) => `  ${v === result.chosen ? '→' : v.usable ? '·' : '✗'} ${verdictLine(v)}`), ...quotaFixLines(report, { ...config.tiers, [tier === 'normal' ? 'fast' : 'normal']: [] })]
@@ -1462,18 +1469,28 @@ export class RemoteService {
     return t.model === undefined ? undefined : { provider: t.model.provider, model: t.model.model }
   }
 
-  /** 这个模型看的窗口里有没有已经用光的。 */
-  private async isExhausted(route: { provider: string; model: string }): Promise<boolean> {
+  private async judgeRoute(route: { provider: string; model: string }): Promise<ModelJudgement | undefined> {
+    const shared = this.deps.modelTiers?.()
+    if (shared !== undefined) {
+      const judged = await shared.judgeModel(route.provider, route.model)
+      return judged === undefined ? undefined : { ...judged, tier: publicTier(judged.tier), verdict: { ...judged.verdict, tier: publicTier(judged.verdict.tier) } }
+    }
     const config = this.deps.config()
     const hit = tierOf(config.tiers, route.provider, route.model)
-    if (hit === undefined) return false
+    if (hit === undefined) return undefined
     const report = await this.deps.usage(false)
+    const result = pick(hit.tier, { ...config.tiers, [hit.tier]: [hit.candidate] }, report, { reservePercent: config.reservePercent, now: this.now() })
     const p = report?.providers.find((x) => x.id === hit.candidate.quota)
-    if (p === undefined || !p.ok) return false
-    return Object.keys(hit.candidate.windows).some((label) => {
+    const exhausted = p !== undefined && p.ok && Object.keys(hit.candidate.windows).some((label) => {
       const w = p.windows.find((x) => x.label === label && x.scope !== 'model')
       return w !== undefined && w.left <= 0 && (w.resetsAt === undefined || w.resetsAt > this.now())
     })
+    return { tier: hit.tier, verdict: result.candidates[0]!, exhausted }
+  }
+
+  /** 这个模型看的窗口里有没有已经用光的。 */
+  private async isExhausted(route: { provider: string; model: string }): Promise<boolean> {
+    return (await this.judgeRoute(route))?.exhausted ?? false
   }
 
   /** 发消息前看一眼当前模型的额度，快用完时提醒（不自动换）。 */
@@ -1483,16 +1500,12 @@ export class RemoteService {
       const selection = obj(values.modelSelection)
       const r = obj(selection.next).provider !== undefined ? obj(selection.next) : obj(selection.lastUsed)
       if (typeof r.provider !== 'string' || typeof r.model !== 'string') return undefined
-      const config = this.deps.config()
-      const hit = tierOf(config.tiers, r.provider, r.model)
-      if (hit === undefined) return undefined
-      const report = await this.deps.usage(false)
-      const result = pick(hit.tier, { ...config.tiers, [hit.tier]: [hit.candidate] }, report, { reservePercent: config.reservePercent, now: this.now() })
-      const v = result.candidates[0]
-      if (v === undefined) return undefined
+      const judged = await this.judgeRoute({ provider: r.provider, model: r.model })
+      if (judged === undefined) return undefined
+      const v = judged.verdict
       if (v.usable) return v.warnings.length === 0 ? undefined : `提醒：当前模型 ${r.provider}/${r.model} ${v.warnings.join('；')}。先照常发了。`
-      if (await this.isExhausted({ provider: r.provider, model: r.model })) {
-        return `提醒：当前模型 ${r.provider}/${r.model} 额度已用光（${v.reasons.join('；')}），会话可能停住。可以用 dsh-control model ${short(id)} --tier ${hit.tier} 换同档模型。`
+      if (judged.exhausted) {
+        return `提醒：当前模型 ${r.provider}/${r.model} 额度已用光（${v.reasons.join('；')}），会话可能停住。可以用 dsh-control model ${short(id)} --tier ${judged.tier} 换同档模型。`
       }
       return `提醒：当前模型 ${r.provider}/${r.model} ${v.reasons.join('；')}。先照常发了；真卡住再换模型。`
     } catch {

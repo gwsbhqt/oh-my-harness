@@ -12,7 +12,7 @@ import { createCli, parseCommand, spawnDetachedCli, type AppControl } from '../s
 import { UsageError } from '../src/gateway.ts'
 import { startServer } from '../src/server.ts'
 import { COMMANDS } from '../src/commands.ts'
-import { fromShared, type UsageReportLike } from '../src/models.ts'
+import { fromShared, type UsageReportLike, type ModelTiersLike, type SharedVerdict, type SharedTier, type PickResult } from '../src/models.ts'
 
 /** 测试用档位，和 模型额度服务 的共用档位文件同形状。 */
 const DEFAULT_TIERS = fromShared({
@@ -992,6 +992,130 @@ test('status：会话在等回答时带 waiting-input（命令行给 10）', asy
   const s = service(makeFake())
   assert.equal((await run(s, 'status', ['cccc3333'])).status, 'waiting-input')
   assert.notEqual((await run(s, 'status', ['aaaa1111'])).status, 'waiting-input')
+})
+
+function sharedModelFixture(fake: Fake) {
+  const resetsAt = NOW + 3_600_000
+  fake.report = { fetchedAt: NOW - 60_000, providers: report.providers.map((p) => p.id === 'claude'
+    ? { ...p, ok: false, error: 'quota request failed', windows: p.windows.map((w) => ({ ...w, left: 0, resetsAt })) } : p) }
+  const blocked: SharedVerdict = {
+    provider: 'claude', model: 'claude-opus-5-5', quota: 'claude', tier: 'main', rank: 1, inCatalog: true, usable: false,
+    reasons: ['7d 已用光'], warnings: ['额度查询失败，使用新鲜缓存'], windows: [{ label: '7d', weight: 1, left: 0, resetsAt }],
+  }
+  const chosen: SharedVerdict = {
+    provider: 'codex', model: 'gpt-6.1-sol', quota: 'codex', tier: 'main', rank: 2, inCatalog: true, usable: true,
+    reasons: [], warnings: [], windows: [], renamedFrom: 'codex/previous-model',
+  }
+  const light: SharedVerdict = {
+    provider: 'opencode-go', model: 'deepseek-v4.1-flash', tier: 'light', rank: 1, inCatalog: true, usable: true,
+    reasons: [], warnings: [], windows: [], routingGroup: true,
+  }
+  const picks: SharedTier[] = []
+  const judgements: { provider: string; model: string }[] = []
+  const api: ModelTiersLike = {
+    async pick(tier) {
+      picks.push(tier)
+      return tier === 'main'
+        ? { tier, chosen, candidates: [blocked, chosen], ordered: [chosen, blocked], quotaFetchedAt: fake.report!.fetchedAt, quotaStale: false, renamed: [{ from: chosen.renamedFrom!, to: `${chosen.provider}/${chosen.model}` }] }
+        : { tier, chosen: light, candidates: [light], ordered: [light] }
+    },
+    async judgeModel(provider, model) {
+      judgements.push({ provider, model })
+      return { tier: 'main', verdict: blocked, exhausted: true }
+    },
+  }
+  return { api, blocked, chosen, light, resetsAt, picks, judgements }
+}
+
+test('pick / models：额度查询失败但缓存新鲜时使用共享服务结果，保留改名和排序，不在本地重算', async () => {
+  const fake = makeFake()
+  const shared = sharedModelFixture(fake)
+  const s = service(fake, undefined, undefined, undefined, { modelTiers: () => shared.api })
+  const picked = await run(s, 'pick', ['normal'])
+  const value = picked.data as PickResult
+  assert.equal(value.tier, 'normal')
+  assert.equal(value.chosen, value.candidates[1])
+  assert.equal(value.chosen?.model, shared.chosen.model)
+  assert.equal(value.candidates[0]?.usable, false)
+  assert.equal(value.candidates[0]?.windows[0]?.left, 0)
+  assert.equal(value.quotaFetchedAt, NOW - 60_000)
+  assert.equal(value.quotaStale, false)
+  assert.equal(value.ordered?.[0], value.chosen)
+  assert.equal(value.chosen?.renamedFrom, shared.chosen.renamedFrom)
+  assert.deepEqual(value.renamed, [{ from: shared.chosen.renamedFrom, to: 'codex/gpt-6.1-sol' }])
+  assert.match(picked.text, /→ codex\/gpt-6.1-sol/)
+  const fast = (await run(s, 'pick', ['fast'])).data as PickResult
+  assert.equal(fast.tier, 'fast')
+  assert.equal(fast.chosen?.tier, 'fast')
+  assert.equal(fast.chosen?.routingGroup, true)
+  const models = (await run(s, 'models')).data as { normal: PickResult; fast: PickResult }
+  assert.equal(models.normal.chosen?.model, shared.chosen.model)
+  assert.equal(models.fast.chosen?.model, shared.light.model)
+  assert.deepEqual(shared.picks, ['main', 'light', 'main', 'light'])
+  assert.equal(shared.chosen.tier, 'main')
+})
+
+test('new / model / send：创建、换模放行和发送提醒均复用服务，失败查询的缓存用光也不会被忽略', async () => {
+  const fake = makeFake()
+  const shared = sharedModelFixture(fake)
+  const s = service(fake, undefined, undefined, undefined, { modelTiers: () => shared.api })
+  const sent = await run(s, 'send', ['aaaa1111', '继续'])
+  assert.match(sent.text, /额度已用光/)
+  assert.match(sent.text, /--tier normal/)
+  assert.equal(fake.calls.some((c) => c.endpoint === 'session/selectModel'), false)
+  fake.sessions[0]!.running = false
+  await run(s, 'model', ['aaaa1111'], { tier: 'normal' })
+  assert.deepEqual(fake.calls.find((c) => c.endpoint === 'session/selectModel')?.args['request'], {
+    sessionId: 'session-aaaa1111-0000', provider: shared.chosen.provider, model: shared.chosen.model,
+  })
+  await run(s, 'new', ['repo-a', '做点小事'], { tier: 'normal' })
+  assert.deepEqual(fake.calls.filter((c) => c.endpoint === 'session/selectModel').at(-1)?.args['request'], {
+    sessionId: 'session-eeee5555-0000', provider: shared.chosen.provider, model: shared.chosen.model,
+  })
+  assert.deepEqual(shared.judgements, [
+    { provider: 'claude', model: 'claude-opus-5-5' }, { provider: 'claude', model: 'claude-opus-5-5' },
+  ])
+})
+
+test('共享服务整档不可用时 pick / new 失败并保留重置时间，不留下空会话', async () => {
+  const fake = makeFake()
+  const shared = sharedModelFixture(fake)
+  shared.api.pick = async (tier) => ({ tier, candidates: [{ ...shared.blocked, tier }], ordered: [{ ...shared.blocked, tier }], earliestReset: shared.resetsAt })
+  const s = service(fake, undefined, undefined, undefined, { modelTiers: () => shared.api })
+  await assert.rejects(run(s, 'pick', ['normal']), (e: { code?: string; message: string }) => e.code === 'no-model' && /额度重置/.test(e.message))
+  await assert.rejects(run(s, 'new', ['repo-a', '做点小事']), code('no-model'))
+  const listed = (await run(s, 'models')).data as { normal: PickResult }
+  assert.equal(listed.normal.earliestReset, shared.resetsAt)
+  assert.equal(listed.normal.chosen, undefined)
+  assert.equal(fake.calls.some((c) => c.endpoint === 'session/create' || c.endpoint === 'session/prompt'), false)
+})
+
+test('共享服务读取失败时报告原错误，不把服务当成未安装或使用本地结果写入', async () => {
+  const fake = makeFake()
+  const shared = sharedModelFixture(fake)
+  const failure = new Error('shared tiers document failed')
+  shared.api.pick = async () => { throw failure }
+  shared.api.judgeModel = async () => { throw failure }
+  const s = service(fake, undefined, undefined, undefined, { modelTiers: () => shared.api })
+  for (const operation of [
+    () => run(s, 'pick', ['normal']), () => run(s, 'models'),
+    () => run(s, 'new', ['repo-a', '做点小事']),
+    () => run(s, 'model', ['aaaa1111'], { model: 'codex/gpt-6.1-sol' }),
+  ]) await assert.rejects(operation(), (e) => e === failure)
+  assert.equal(fake.calls.some((c) => ['session/create', 'session/selectModel', 'session/prompt'].includes(c.endpoint)), false)
+})
+
+test('共享服务按次解析：未安装时保留独立挑选，出现后立即使用服务，移除后仍可独立使用', async () => {
+  const fake = makeFake()
+  const shared = sharedModelFixture(fake)
+  let available: ModelTiersLike | undefined
+  const s = service(fake, undefined, undefined, undefined, { modelTiers: () => available })
+  assert.equal(((await run(s, 'pick', ['normal'])).data as PickResult).chosen?.provider, 'claude')
+  available = shared.api
+  assert.equal(((await run(s, 'pick', ['normal'])).data as PickResult).chosen?.provider, 'codex')
+  available = undefined
+  assert.equal(((await run(s, 'pick', ['normal'])).data as PickResult).chosen?.provider, 'claude')
+  assert.deepEqual(shared.picks, ['main'])
 })
 
 test('pick：整档没有可用模型是失败（no-model），不是成功', async () => {
