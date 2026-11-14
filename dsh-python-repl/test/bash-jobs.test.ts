@@ -197,7 +197,7 @@ describe('a still-running bash result in the kernel', () => {
         ? { text: '', job: { id: 'job-9', kind: 'bash', label: 'x', status: 'running', startedAt: 1 } }
         : { text: 'late\n[stderr]\noops\n', job: { id: 'job-9', kind: 'bash', label: 'x', status: 'completed', detail: 'exit code: 3', startedAt: 1 } } }],
     ])
-    const cell = await session.runCell('r = await bash("make", "build")\nfirst = r["kind"]\ndone = await r\n(first, done["exitCode"], done["stdout"]["text"], done["stderr"]["text"])', tools)
+    const cell = await session.runCell('r = await bash("make", "build")\nfirst = r["kind"]\ndone = await r\nassert done.stdout is done["stdout"]\nassert done.stderr is done["stderr"]\n(first, done.exitCode, done.stdout.text, done.stderr.text)', tools)
     assert.equal(cell.error, undefined, JSON.stringify(cell))
     assert.match(cell.logs.join('\n'), /\('promoted', 3, 'early\\nlate\\n', 'oops\\n'\)/)
   })

@@ -9,6 +9,7 @@ because their whole point is behaviour CPython version-gates.
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -841,6 +842,13 @@ class BashJobs(unittest.IsolatedAsyncioTestCase):
         result = await job
         self.assertEqual(result["exitCode"], 2)
         self.assertEqual(result["text"], "a\nb\n[stderr]\nboom\n")
+        self.assertEqual(result.stdout.text, "a\nb\n")
+        self.assertEqual(result.stderr.text, "boom\n")
+        self.assertFalse(result.stdout.truncated)
+        self.assertFalse(result.stderr.truncated)
+        self.assertIsInstance(result.stdout, dict)
+        self.assertIs(result.stdout, result["stdout"])
+        self.assertEqual(json.loads(json.dumps(result)), result)
         self.assertEqual([tool for tool, _ in sent], ["bash", "job_output", "job_output"])
         self.assertIs(await job, result)
         self.assertIn("exitCode=2", repr(result))
