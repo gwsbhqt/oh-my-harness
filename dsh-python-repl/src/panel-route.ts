@@ -44,8 +44,10 @@ export function previewRoute(readPreview: (request: PanelPreviewRequest) => Prom
 
 /**
  * The only route that changes anything: start/stop/restart/reset one session's
- * kernel. POST only, and the browser's Origin must be this server, so another
- * site cannot drive it from a link or form.
+ * kernel. POST only. A direct browser must send this server as its Origin so
+ * another site cannot drive it from a link or form; the desktop shell strips
+ * Origin when it forwards the page's requests, so an Origin-less POST is
+ * accepted too (a browser on another site always sends one).
  */
 export function controlRoute(control: (session: string, action: PanelControlAction) => Promise<PanelControlResult>): Parameters<PanelWebServer['register']>[0] {
   const send = (res: ServerResponse, status: number, body: unknown): void => {
@@ -54,17 +56,7 @@ export function controlRoute(control: (session: string, action: PanelControlActi
     res.end(JSON.stringify(body))
   }
   return { kind: 'exact', path: PANEL_CONTROL_PATH, handler: (req, res) => {
-    const raw = req.headers['sec-fetch-site']
-    const site = Array.isArray(raw) ? raw[0] : raw
-    const origin = req.headers.origin
-    let sameOrigin = false
-    if (origin !== undefined) {
-      try {
-        const protocol = (req.socket as { encrypted?: boolean }).encrypted === true ? 'https:' : 'http:'
-        sameOrigin = new URL(origin).origin === `${protocol}//${req.headers.host}`
-      } catch { sameOrigin = false }
-    }
-    if (req.method !== 'POST' || !sameOrigin || ![undefined, '', 'same-origin'].includes(site)) {
+    if (!sameOriginPost(req)) {
       send(res, 403, { error: 'forbidden' }); return
     }
     const params = new URL(req.url ?? '/', 'http://local').searchParams
@@ -102,12 +94,19 @@ export function nameRoute(act: (session: string, action: PanelNameAction, name: 
   } }
 }
 
-/** POST from this very page: same-origin Origin header and no cross-site Fetch Metadata. */
+/**
+ * POST from this page: a direct same-origin browser (Origin equals Host) or the desktop
+ * shell, which authenticates the renderer then forwards through its proxy after stripping
+ * Origin, Host and Sec-Fetch-Site. A missing Origin is therefore trusted, but any Origin
+ * that is present must still equal this server, and cross-site Fetch Metadata is refused,
+ * so a browser on another site cannot drive the route.
+ */
 function sameOriginPost(req: IncomingMessage): boolean {
   const raw = req.headers['sec-fetch-site']
   const site = Array.isArray(raw) ? raw[0] : raw
+  if (req.method !== 'POST' || ![undefined, '', 'same-origin'].includes(site)) return false
   const origin = req.headers.origin
-  if (req.method !== 'POST' || origin === undefined || ![undefined, '', 'same-origin'].includes(site)) return false
+  if (origin === undefined) return true
   try {
     const protocol = (req.socket as { encrypted?: boolean }).encrypted === true ? 'https:' : 'http:'
     return new URL(origin).origin === `${protocol}//${req.headers.host}`

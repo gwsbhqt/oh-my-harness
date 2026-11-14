@@ -107,7 +107,7 @@ describe('kernel tab control', () => {
 })
 
 describe('control route', () => {
-  it('accepts only same-origin POST with a known action', async () => {
+  it('accepts same-origin POST and the desktop proxy Origin-less POST, with a known action', async () => {
     const calls: string[] = []
     const route = controlRoute(async (session, action) => { calls.push(`${session}:${action}`); return { action, ok: true, epoch: 1 } })
     const server = createServer((req, res) => route.handler(req, res))
@@ -121,11 +121,13 @@ describe('control route', () => {
     try {
       assert.equal(await send('POST', '/dsh-python-repl/control?session=s&action=stop', { origin: self, 'sec-fetch-site': 'same-origin' }), 200)
       assert.equal(await send('GET', '/dsh-python-repl/control?session=s&action=stop', { origin: self }), 403)
-      assert.equal(await send('POST', '/dsh-python-repl/control?session=s&action=stop', {}), 403, 'no Origin')
+      // 桌面端外壳经自己的代理转发页面请求，转发前删掉 Origin/Host/Sec-Fetch-Site；
+      // 这种缺 Origin 的 POST 是可信的本页操作，必须放行，否则启动/重置按钮一律 403。
+      assert.equal(await send('POST', '/dsh-python-repl/control?session=s&action=stop', {}), 200, 'desktop proxy drops Origin')
       assert.equal(await send('POST', '/dsh-python-repl/control?session=s&action=stop', { origin: 'http://evil.example' }), 403)
       assert.equal(await send('POST', '/dsh-python-repl/control?session=s&action=stop', { origin: self, 'sec-fetch-site': 'cross-site' }), 403)
       assert.equal(await send('POST', '/dsh-python-repl/control?session=s&action=exec', { origin: self }), 400)
-      assert.deepEqual(calls, ['s:stop'])
+      assert.deepEqual(calls, ['s:stop', 's:stop'])
     } finally { server.close() }
   })
 })

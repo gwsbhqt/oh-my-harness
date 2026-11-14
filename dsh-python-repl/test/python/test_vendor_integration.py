@@ -59,7 +59,7 @@ class UpstreamCoordinates(unittest.TestCase):
 
     def test_records_a_full_length_commit_sha(self) -> None:
         # A tag can be moved; a commit cannot. A short sha can collide.
-        self.assertRegex(self.text, r"`ea9d9602ec0938d9e454e8963107cd85af1565c6`")
+        self.assertRegex(self.text, r"`efb25e2be62507f8a13a157545d031da213abac9`")
 
     def test_records_the_repository_url(self) -> None:
         self.assertIn("https://github.com/PrimeIntellect-ai/prime-agent", self.text)
@@ -74,7 +74,7 @@ class UpstreamCoordinates(unittest.TestCase):
                 continue
             with self.subTest(link=link):
                 self.assertIn(
-                    "ea9d9602ec0938d9e454e8963107cd85af1565c6",
+                    "efb25e2be62507f8a13a157545d031da213abac9",
                     link,
                     "a link to /main or /v0.10.0 would silently drift from what we vendored",
                 )
