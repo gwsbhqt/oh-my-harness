@@ -1,0 +1,78 @@
+{
+  "name": "dsh-doctor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "DSH 启动前离线检查与隔离试启动",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "doctor",
+    "startup-check"
+  ],
+  "license": "MIT",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "bin": {
+    "dsh-doctor": "./bin/doctor.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "build": {
+      "manifest": "./lib/dsh-build.json",
+      "inputs": [
+        "src",
+        "bin",
+        "scripts",
+        "package.json",
+        "cordis.patch.yml",
+        "pnpm-lock.yaml"
+      ],
+      "outputs": [
+        "lib"
+      ],
+      "repositoryInputs": [
+        "tooling/build.mjs",
+        "tooling/build-manifest.mjs",
+        "tooling/build-manifest.d.mts",
+        "tooling/doctor.mjs",
+        "tooling/doctor-cli.mjs",
+        "tooling/app-probe.mjs",
+        "tooling/ready-probe.mjs",
+        "tooling/preset-drift.mjs"
+      ]
+    }
+  },
+  "files": [
+    "lib",
+    "bin",
+    "cordis.patch.yml",
+    "AGENTS.md",
+    "README.md",
+    "README.en.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "syntax-check": "node --check ../tooling/doctor.mjs && node --check ../tooling/build-manifest.mjs && node --check ../tooling/app-probe.mjs && node --check ../tooling/ready-probe.mjs && node --check ../tooling/preset-drift.mjs && node --check ../tooling/doctor-cli.mjs && node --check src/index.js && node --check bin/doctor.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "pnpm run syntax-check && pnpm run build && pnpm run test"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.1",
+    "@deepseek-ai/dsh-tools": ">=0.2.0-rc.1",
+    "@deepseek-ai/dsh-typert-registry": ">=0.2.0-rc.1",
+    "@deepseek-ai/dsh-typert-protocol": ">=0.2.0-rc.2"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}

@@ -22,7 +22,7 @@
 | 操作电脑 | [browser-use](skills/browser-use/README.md) · [computer-use](skills/computer-use/README.md) · [remote-host](skills/remote-host/README.md) | 操作网页、Mac 桌面应用、另一台机器。 |
 | 配套插件 | [dsh-monitor](dsh-monitor/README.md) · [dsh-guard](dsh-guard/README.md) · [dsh-compaction-bound](dsh-compaction-bound/README.md) · [dsh-message-tidy](dsh-message-tidy/README.md) · [dsh-image-cap](dsh-image-cap/README.md) · [dsh-history-cap](dsh-history-cap/README.md) | 后台事件叫醒、拦住失控输出、让模型自己收口、让长对话不被撑爆。[详见下文](#其他部件) |
 
-部件分两种：**插件**装进 DSH 本身，仓库根目录下 `dsh-` 开头的 8 个文件夹都是；**工具**是助手可以调用的独立程序，放在 `skills/` 下，也能在终端里单独用。每个部件的说明里都放了它的真实演示，点部件名就能看到。
+部件分两种：**插件**装进 DSH 本身，放在仓库根目录下 `dsh-` 开头的文件夹中；**工具**是助手可以调用的独立程序，放在 `skills/` 下，也能在终端里单独用。每个部件的说明里都放了它的真实演示，点部件名就能看到。
 
 ## 核心一：dsh-python-repl，让助手写程序做事
 
@@ -89,6 +89,13 @@
 | --- | --- | --- |
 | [dsh-monitor](dsh-monitor/README.md) | 盯着一个一直在跑的程序，它每打出一行，就送进会话叫醒助手。 | 等构建、盯日志、等某个文件出现，不想让助手一遍遍去查。[教程](docs/dsh-monitor.md) |
 | [dsh-guard](dsh-guard/README.md) | 发现模型开始复读、刷空行、什么都没答就结束时及时拦下、可以重试一次；还能让模型自己暂停、完成目标，空转时自动刹车。 | 长任务跑着跑着输出失控，或模型该收口时停不下来。[教程](docs/dsh-output-guard.md) |
+
+**运行维护**
+
+| 部件 | 它做什么 | 什么时候用 |
+| --- | --- | --- |
+| [dsh-runtime](dsh-runtime/README.md) | 启动时补全登录环境，保存时顺着软链接写，并归一化补丁层的 YAML。 | 从桌面启动时命令找不到，或用软链接管理 DSH 配置。 |
+| [dsh-doctor](dsh-doctor/README.md) | 检查 profile、依赖、构建产物和实际试启动结果，提供工具、远程接口与命令行。 | 改插件或配置后，重启前确认能正常启动。 |
 
 **动手操作电脑**
 

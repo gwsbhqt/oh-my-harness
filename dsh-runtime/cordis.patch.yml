@@ -1,0 +1,5 @@
+# dsh-runtime bundle 补丁层。关掉它：在 profile 的 cordis.patch.yml 写
+# `- id: runtime` 加 `disabled: true`（禁用后既不再读登录环境，也不再顺链接写）。
+- insert:
+    - id: runtime
+      name: dsh-runtime

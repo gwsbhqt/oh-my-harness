@@ -26,6 +26,9 @@ The Chinese README is the primary, default documentation; the paired English doc
 - [Computer control](docs/computer-use.en.md): Native macOS targets, input, and result inspection.
 - [Remote host](docs/remote-host.en.md): Real SSH destinations and content verification.
 
+- [Runtime maintenance](dsh-runtime/README.en.md): Login environment, symlink-preserving saves, and profile YAML normalization.
+- [Startup diagnostics](dsh-doctor/README.en.md): CLI, tool, and remote checks with actual App startup auditing.
+
 ## Design and evidence
 
 - [Data locality](docs/design/python-data-locality.en.md): Values, displays, persistence, and recovery.
