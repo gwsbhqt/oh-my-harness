@@ -18,8 +18,8 @@ This repository is **not a standalone app**. It is a set of components that add 
 | Kind | Component | In one line |
 | --- | --- | --- |
 | **Core** | [dsh-python-repl](dsh-python-repl/README.en.md) | Lets the assistant do its work in Python. Large data stays in the program; only the conclusion goes into the chat. [Details below](#core-1-dsh-python-repl-let-the-assistant-write-programs) |
-| **Core** | [dsh-control](dsh-control/README.en.md) | Remote-controls a running DSH so one assistant can lead several others. [Details below](#core-2-dsh-control-one-assistant-leads-several-others) |
-| Operate the computer | [browser-control](skills/browser-control/README.en.md) · [computer-control](skills/computer-control/README.en.md) · [remote-host](skills/remote-host/README.en.md) | Operate web pages, Mac desktop apps, and another machine. |
+| **Core** | [dsh-use](dsh-use/README.en.md) | Remote-controls a running DSH so one assistant can lead several others. [Details below](#core-2-dsh-use-one-assistant-leads-several-others) |
+| Operate the computer | [browser-use](skills/browser-use/README.en.md) · [computer-use](skills/computer-use/README.en.md) · [remote-host](skills/remote-host/README.en.md) | Operate web pages, Mac desktop apps, and another machine. |
 | Supporting plugins | [dsh-monitor](dsh-monitor/README.en.md) · [dsh-output-guard](dsh-output-guard/README.en.md) · [dsh-compaction-bound](dsh-compaction-bound/README.en.md) · [dsh-message-tidy](dsh-message-tidy/README.en.md) · [dsh-image-cap](dsh-image-cap/README.en.md) · [dsh-history-cap](dsh-history-cap/README.en.md) | Wake on background events, stop runaway output, and keep long chats from overflowing. [Details below](#other-components) |
 
 There are two kinds: **plugins** load into DSH itself (the 8 root folders that start with `dsh-`); **tools** are separate programs the assistant can call, under `skills/`, and also work on their own from a terminal. Each component's README has its real demo; click a name to see it.
@@ -58,7 +58,7 @@ Estimates use **ceil(UTF-16 code units / 4)** on returned payload text, not a mo
 
 [README and demo](dsh-python-repl/README.en.md) · [Guide](docs/dsh-python-repl.en.md) · [Design article: keep data in the program](docs/design/python-data-locality.en.md)
 
-## Core 2: dsh-control, one assistant leads several others
+## Core 2: dsh-use, one assistant leads several others
 
 **Without it.** DSH sessions can only be opened and messaged by hand in the window. Outside scripts and other AI assistants cannot reach the running DSH. A long task needs one expensive model watching it from start to finish.
 
@@ -66,9 +66,9 @@ Estimates use **ceil(UTF-16 code units / 4)** on returned payload text, not a mo
 
 1. A session on an expensive model acts as the **lead**. It writes the task as a brief, opens another session on a cheaper model as the **worker**, and sends the brief.
 2. The lead then stops. It does not keep asking "done yet?".
-3. The worker does the job. Only when it is really done does dsh-control wake the lead with a notice. "Really done" is judged by actual state: no running turn, no queued message, no background job, stable for a short while; not by whether the reply says "finished" ([completion source](dsh-control/src/service.ts)).
+3. The worker does the job. Only when it is really done does dsh-use wake the lead with a notice. "Really done" is judged by actual state: no running turn, no queued message, no background job, stable for a short while; not by whether the reply says "finished" ([completion source](dsh-use/src/service.ts)).
 4. The lead wakes up and checks the result itself. If it passes, the lead sends the next batch; if not, it says exactly what is wrong and sends it back.
-5. If DSH restarts midway, interrupted sessions resume on their own, and messages swallowed while queued are put back ([recovery source](dsh-control/src/cli/core.ts)).
+5. If DSH restarts midway, interrupted sessions resume on their own, and messages swallowed while queued are put back ([recovery source](dsh-use/src/cli/core.ts)).
 
 **It also:**
 
@@ -77,7 +77,7 @@ Estimates use **ceil(UTF-16 code units / 4)** on returned payload text, not a mo
 - **Picks models by remaining quota.** Two tiers, main and light; models close to their limit move to the back, and it never switches tiers silently.
 - **Works across machines.** It controls DSH on another Mac over SSH without opening a network port.
 
-[README and demo](dsh-control/README.en.md) · [Guide](docs/dsh-control.en.md) · [Design article: lead and worker](docs/design/controller-worker.en.md)
+[README and demo](dsh-use/README.en.md) · [Guide](docs/dsh-use.en.md) · [Design article: lead and worker](docs/design/controller-worker.en.md)
 
 ## Other components
 
@@ -94,8 +94,8 @@ Click a name to open that component's own README with setup, configuration, limi
 
 | Component | What it does | Use it when |
 | --- | --- | --- |
-| [browser-control](skills/browser-control/README.en.md) | Operates chosen pages in Chrome or Arc: read, click, type, screenshot. Each task gets its own window and re-reads the page after acting. | The assistant should do something on a website for you. [Guide](docs/browser-control.en.md) |
-| [computer-control](skills/computer-control/README.en.md) | Operates ordinary Mac app windows: read the interface, click, type, screenshot. Keystrokes go only to the chosen window. | The target is a desktop app, not a web page. [Guide](docs/computer-control.en.md) |
+| [browser-use](skills/browser-use/README.en.md) | Operates chosen pages in Chrome or Arc: read, click, type, screenshot. Each task gets its own window and re-reads the page after acting. | The assistant should do something on a website for you. [Guide](docs/browser-use.en.md) |
+| [computer-use](skills/computer-use/README.en.md) | Operates ordinary Mac app windows: read the interface, click, type, screenshot. Keystrokes go only to the chosen window. | The target is a desktop app, not a web page. [Guide](docs/computer-use.en.md) |
 | [remote-host](skills/remote-host/README.en.md) | Runs commands, copies files, and manages background jobs on another machine over SSH. If the other side lacks a tool, it fails instead of quietly running locally. | The work happens on another computer or server. [Guide](docs/remote-host.en.md) |
 
 The three tools share a small library, [`skills/_shared`](skills/_shared/README.en.md), that handles connections and target machines. It is not used on its own.
@@ -122,7 +122,7 @@ You ──task──▶ the assistant in DSH
                   │     ├─ operates web pages, desktop apps, remote machines (3 tools)
                   │     └─ keeps large data in the program, returns only conclusions
                   │
-                  ├─ hands tasks to other sessions and waits for them (dsh-control)
+                  ├─ hands tasks to other sessions and waits for them (dsh-use)
                   ├─ wakes up when a background event arrives (dsh-monitor)
                   └─ stays within limits however long the chat gets (4 context plugins + dsh-output-guard)
 ```
@@ -141,8 +141,8 @@ You ──task──▶ the assistant in DSH
 ## More engineering highlights
 
 - **Your words skip the model.** Compaction copies your messages into an appendix by source. When space runs out, older ones become a "which turn said what" index, and the oldest ranges merge first. [Appendix implementation](dsh-compaction-bound/src/summary.ts).
-- **Every action has a definite target.** Browser tasks get their own windows. Desktop actions remember the exact app and window, and keystrokes go only there. [Browser targets](skills/browser-control/src/browser_control/engine.py) · [Desktop routing](skills/computer-control/bin/computer-control.swift).
-- **Uncertain results are reported as uncertain.** A remote machine missing a tool is rejected before running. A browser action whose reply is lost is reported as "outcome unknown" and is not clicked again. [Remote preflight](skills/_shared/agentkit/remote/target.py) · [Browser RPC](skills/browser-control/src/browser_control/client.py).
+- **Every action has a definite target.** Browser tasks get their own windows. Desktop actions remember the exact app and window, and keystrokes go only there. [Browser targets](skills/browser-use/src/browser_use/engine.py) · [Desktop routing](skills/computer-use/bin/computer-use.swift).
+- **Uncertain results are reported as uncertain.** A remote machine missing a tool is rejected before running. A browser action whose reply is lost is reported as "outcome unknown" and is not clicked again. [Remote preflight](skills/_shared/agentkit/remote/target.py) · [Browser RPC](skills/browser-use/src/browser_use/client.py).
 
 ## Start with one plugin
 
@@ -233,7 +233,7 @@ Choose by the workflow you need. Scope below comes from each project's documenta
 | [OmO][omo] | Coding-agent system with multi-model orchestration and memory workflow. | Adopt its integrated workflow for your coding agent. |
 | Direct MCP tools: [integration examples][browser-harness] · [protocol architecture][mcp] | Client/server interface for tools and other capabilities. | Existing clients and servers supply your required tools, state, and permissions. |
 
-Python plus CDP is shared ground. This collection adds DSH runtime control and context helpers. `dsh-control` also exposes MCP; each client decides how results enter its transcript.
+Python plus CDP is shared ground. This collection adds DSH runtime control and context helpers. `dsh-use` also exposes MCP; each client decides how results enter its transcript.
 
 ## Design choices worth inspecting
 

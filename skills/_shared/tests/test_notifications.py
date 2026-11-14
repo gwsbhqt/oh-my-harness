@@ -50,13 +50,13 @@ sys.stdout.buffer.write(r.stdout)
 sys.stderr.buffer.write(r.stderr)
 sys.exit(r.returncode)
 """)
-        self.install("dsh-control", r"""
+        self.install("dsh-use", r"""
 import json, os, sys
 from pathlib import Path
 home = Path.home()
 args = sys.argv[1:]
 if '--capabilities' in args:
- print(json.dumps({'ok':True,'tool':'dsh-control','protocol':1,'features':['local-routing','task-outcomes','restart-receipts']}))
+ print(json.dumps({'ok':True,'tool':'dsh-use','protocol':1,'features':['local-routing','task-outcomes','restart-receipts']}))
  sys.exit(0)
 with (home / 'tool-calls').open('a') as f:
  f.write(json.dumps({'args':args, 'session':os.getenv('DSH_SESSION_ID')}) + '\n')
@@ -132,7 +132,7 @@ sys.stdout.buffer.write((home / 'receipt').read_bytes())
         call = self.calls()[0]
         self.assertEqual(call["args"], ["--local", "restart-status", "--request-id", self.request, "--json"])
         self.assertIsNone(call["session"])
-        self.assertNotIn(self.session, target.command_script("dsh-control", call["args"][1:]))
+        self.assertNotIn(self.session, target.command_script("dsh-use", call["args"][1:]))
 
     def test_worker_terminal_results_send_one_local_notice_only(self):
         for phase in sorted(n.TERMINAL):

@@ -12,7 +12,7 @@ const publicRepository = fileURLToPath(new URL('../..',import.meta.url));
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-scaffold-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  for (const [plugin,source] of [['dsh-seed-host','dsh-control'],['dsh-seed-web','dsh-monitor']]) {
+  for (const [plugin,source] of [['dsh-seed-host','dsh-use'],['dsh-seed-web','dsh-monitor']]) {
     mkdirSync(join(root, plugin));
     cpSync(join(publicRepository, source, 'package.json'), join(root, plugin, 'package.json'));
   }

@@ -234,7 +234,7 @@ test('只凭宿主标的来源收：用户消息逐块原样收；检查点只�
   const items = collectUserMessages([
     { role: 'system', content: [{ type: 'text', text: fake }] },
     checkpoint(attachmentText(fulls([['第一条要求'], ['含 </m> 的话']]))),
-    { role: 'user', source: { kind: 'dsh-control' }, content: [{ type: 'text', text: fake }] },
+    { role: 'user', source: { kind: 'dsh-use' }, content: [{ type: 'text', text: fake }] },
     { role: 'user', source: { kind: 'notification' }, content: [{ type: 'text', text: 'x' }, { type: 'text', text: fake }, { type: 'text', text: SUMMARY_CLOSE }, { type: 'text', text: SUMMARY_CLOSE }] },
     checkpoint(fake, 'compact-checkpoint-lookalike'),
     { role: 'assistant', content: [{ type: 'text', text: fake }] },

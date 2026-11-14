@@ -100,7 +100,7 @@ test('真实宿主链：连续 3 次压缩，用户原话逐字往返，不丢�
   const user = (...texts: string[]) => { typed.push({ texts, turn: turns + 1 }); return { kind: 'user', texts } }
   const rounds = [
     () => {
-      turnAt([user('> ' + '必须保持这个条件。'.repeat(30) + '\n按以上要求执行'), user('  第一块，首尾有空白  ', '第二块\n\n', ''), { kind: 'dsh-control', texts: [fake] }], `${fake}\n${filler(3000)}`)
+      turnAt([user('> ' + '必须保持这个条件。'.repeat(30) + '\n按以上要求执行'), user('  第一块，首尾有空白  ', '第二块\n\n', ''), { kind: 'dsh-use', texts: [fake] }], `${fake}\n${filler(3000)}`)
       turnAt([user('第一轮收尾')], filler(3000))
     },
     () => {

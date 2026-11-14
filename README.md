@@ -18,8 +18,8 @@
 | 类别 | 部件 | 一句话 |
 | --- | --- | --- |
 | **核心** | [dsh-python-repl](dsh-python-repl/README.md) | 让助手写 Python 来做事，大块数据留在程序里，只把结论放进对话。[详见下文](#核心一dsh-python-repl让助手写程序做事) |
-| **核心** | [dsh-control](dsh-control/README.md) | 从外面遥控正在运行的 DSH，让一个助手当主控，带着几个助手分头干活。[详见下文](#核心二dsh-control让一个助手带着几个助手干活) |
-| 操作电脑 | [browser-control](skills/browser-control/README.md) · [computer-control](skills/computer-control/README.md) · [remote-host](skills/remote-host/README.md) | 操作网页、Mac 桌面应用、另一台机器。 |
+| **核心** | [dsh-use](dsh-use/README.md) | 从外面遥控正在运行的 DSH，让一个助手当主控，带着几个助手分头干活。[详见下文](#核心二dsh-use让一个助手带着几个助手干活) |
+| 操作电脑 | [browser-use](skills/browser-use/README.md) · [computer-use](skills/computer-use/README.md) · [remote-host](skills/remote-host/README.md) | 操作网页、Mac 桌面应用、另一台机器。 |
 | 配套插件 | [dsh-monitor](dsh-monitor/README.md) · [dsh-output-guard](dsh-output-guard/README.md) · [dsh-compaction-bound](dsh-compaction-bound/README.md) · [dsh-message-tidy](dsh-message-tidy/README.md) · [dsh-image-cap](dsh-image-cap/README.md) · [dsh-history-cap](dsh-history-cap/README.md) | 后台事件叫醒、拦住失控输出、让长对话不被撑爆。[详见下文](#其他部件) |
 
 部件分两种：**插件**装进 DSH 本身，仓库根目录下 `dsh-` 开头的 8 个文件夹都是；**工具**是助手可以调用的独立程序，放在 `skills/` 下，也能在终端里单独用。每个部件的说明里都放了它的真实演示，点部件名就能看到。
@@ -58,7 +58,7 @@
 
 [部件说明和演示](dsh-python-repl/README.md) · [教程](docs/dsh-python-repl.md) · [设计文章：数据留在程序里](docs/design/python-data-locality.md)
 
-## 核心二：dsh-control，让一个助手带着几个助手干活
+## 核心二：dsh-use，让一个助手带着几个助手干活
 
 **没有它时。** DSH 里的会话只能在窗口里一个个手动开、手动发消息。外面的脚本和别的 AI 助手接不上正在运行的这个 DSH。长任务只能让一个贵的模型从头盯到尾。
 
@@ -66,9 +66,9 @@
 
 1. 一个用贵模型的会话当**主控**。它把任务写成一份任务书，另开一个用便宜模型的会话当**长工**，把任务书发过去；
 2. 发完主控就停下，不反复去问「好了没」；
-3. 长工干活。等它真的做完，dsh-control 才给主控送一条通知把它叫醒。「真的做完」看的是实际状态：没有在跑的回合、没有排队的消息、没有后台任务，并且稳定一小段时间，而不是看长工回复里写没写「已完成」（[完成判据源码](dsh-control/src/service.ts)）；
+3. 长工干活。等它真的做完，dsh-use 才给主控送一条通知把它叫醒。「真的做完」看的是实际状态：没有在跑的回合、没有排队的消息、没有后台任务，并且稳定一小段时间，而不是看长工回复里写没写「已完成」（[完成判据源码](dsh-use/src/service.ts)）；
 4. 主控醒来，自己核对结果，通过就派下一批，不通过就写清哪里不对再发回去；
-5. 中途 DSH 重启了，被打断的会话会自动接着做，排队中被吞掉的消息也会放回去（[重启恢复源码](dsh-control/src/cli/core.ts)）。
+5. 中途 DSH 重启了，被打断的会话会自动接着做，排队中被吞掉的消息也会放回去（[重启恢复源码](dsh-use/src/cli/core.ts)）。
 
 **它还做了这些：**
 
@@ -77,7 +77,7 @@
 - **按额度挑模型。** 分「主力」「轻量」两档，额度快用光的模型自动往后排，不会悄悄换档。
 - **跨机器也能用。** 通过 SSH 遥控另一台 Mac 上的 DSH，不另开网络端口。
 
-[部件说明和演示](dsh-control/README.md) · [教程](docs/dsh-control.md) · [设计文章：主控与长工](docs/design/controller-worker.md)
+[部件说明和演示](dsh-use/README.md) · [教程](docs/dsh-use.md) · [设计文章：主控与长工](docs/design/controller-worker.md)
 
 ## 其他部件
 
@@ -94,8 +94,8 @@
 
 | 部件 | 它做什么 | 什么时候用 |
 | --- | --- | --- |
-| [browser-control](skills/browser-control/README.md) | 操作 Chrome 或 Arc 里指定的网页：看、点、填、截图。每个任务用自己的窗口，做完重读页面核对。 | 要助手替你在网页上操作。[教程](docs/browser-control.md) |
-| [computer-control](skills/computer-control/README.md) | 操作 Mac 上的普通应用窗口：读界面、点按钮、打字、截图，输入只发给指定的那个窗口。 | 要操作的不是网页，而是桌面应用。[教程](docs/computer-control.md) |
+| [browser-use](skills/browser-use/README.md) | 操作 Chrome 或 Arc 里指定的网页：看、点、填、截图。每个任务用自己的窗口，做完重读页面核对。 | 要助手替你在网页上操作。[教程](docs/browser-use.md) |
+| [computer-use](skills/computer-use/README.md) | 操作 Mac 上的普通应用窗口：读界面、点按钮、打字、截图，输入只发给指定的那个窗口。 | 要操作的不是网页，而是桌面应用。[教程](docs/computer-use.md) |
 | [remote-host](skills/remote-host/README.md) | 通过 SSH 在另一台机器上执行命令、传文件、跑后台任务。对面缺工具就直接报错，不会悄悄改在本机执行。 | 要助手去另一台电脑或服务器上干活。[教程](docs/remote-host.md) |
 
 上面三个工具共用一个底层库 [`skills/_shared`](skills/_shared/README.md)，负责连接和目标机器的判断，它本身不单独使用。
@@ -122,7 +122,7 @@
                     │     ├─ 操作网页、桌面应用、远程机器（3 个工具）
                     │     └─ 大块数据留在程序里，只把结论放回对话
                     │
-                    ├─ 派活给别的会话、等它们做完（dsh-control）
+                    ├─ 派活给别的会话、等它们做完（dsh-use）
                     ├─ 后台有新消息时被叫醒（dsh-monitor）
                     └─ 对话再长也有上限（4 个上下文插件 + dsh-output-guard）
 ```
@@ -141,8 +141,8 @@
 ## 其他工程亮点
 
 - **你的原话不经模型转述。** 压缩聊天记录时，按来源把你发的消息原文收进附录；长度放不下时，先缩成「第几轮说了什么」的清单，再合并最早的部分。[附录实现](dsh-compaction-bound/src/summary.ts)。
-- **每个操作认准具体目标。** 浏览器任务各开各的窗口；桌面操作记住具体是哪个应用的哪个窗口，键盘输入只发给它，不会打进别的窗口。[浏览器目标](skills/browser-control/src/browser_control/engine.py) · [桌面投递](skills/computer-control/bin/computer-control.swift)。
-- **结果不确定就直说。** 远程机器缺工具时，执行前就拒绝；浏览器动作发出去却没收到回应，就报「结果未知」，不擅自再点一次。[远端预检](skills/_shared/agentkit/remote/target.py) · [浏览器调用](skills/browser-control/src/browser_control/client.py)。
+- **每个操作认准具体目标。** 浏览器任务各开各的窗口；桌面操作记住具体是哪个应用的哪个窗口，键盘输入只发给它，不会打进别的窗口。[浏览器目标](skills/browser-use/src/browser_use/engine.py) · [桌面投递](skills/computer-use/bin/computer-use.swift)。
+- **结果不确定就直说。** 远程机器缺工具时，执行前就拒绝；浏览器动作发出去却没收到回应，就报「结果未知」，不擅自再点一次。[远端预检](skills/_shared/agentkit/remote/target.py) · [浏览器调用](skills/browser-use/src/browser_use/client.py)。
 
 ## 从一个插件开始
 
@@ -232,7 +232,7 @@ flowchart TD
 | [OmO][omo] | 多模型编程 agent 编排和记忆工作流。 | 希望采用它提供的一整套编程协作方式。 |
 | 直接调用 MCP：[集成示例][browser-harness] · [协议架构][mcp] | 连接客户端和服务端，提供工具及其他能力。 | 现有客户端和服务端已能提供需要的工具、状态及权限。 |
 
-Python 加 CDP 是共同基础。这套扩展另外提供 DSH 实例控制和上下文处理；`dsh-control` 也支持 MCP。结果如何进入对话，取决于具体客户端。
+Python 加 CDP 是共同基础。这套扩展另外提供 DSH 实例控制和上下文处理；`dsh-use` 也支持 MCP。结果如何进入对话，取决于具体客户端。
 
 ## 值得看的设计取舍
 

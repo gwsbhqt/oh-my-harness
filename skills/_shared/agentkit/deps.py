@@ -1,7 +1,7 @@
-"""加载 browser-control、computer-control 的规范 Python 包。
+"""加载 browser-use、computer-use 的规范 Python 包。
 
 默认查找共享库旁的技能源码，按真实路径计算；独立安装时导入已安装的规范包。
-BROWSER_CONTROL_SKILL、COMPUTER_CONTROL_SKILL 可显式指定技能根目录；缺失时抛 ImportError。
+BROWSER_USE_SKILL、COMPUTER_USE_SKILL 可显式指定技能根目录；缺失时抛 ImportError。
 """
 from __future__ import annotations
 
@@ -31,11 +31,11 @@ def _control(name):
         raise ImportError(f"缺少 {skill}：请部署源码技能或安装 {skill} 包") from exc
 
 
-def computer_control():
-    """加载 computer-control 的规范 computer_control 包。"""
-    return _control("computer_control")
+def computer_use():
+    """加载 computer-use 的规范 computer_use 包。"""
+    return _control("computer_use")
 
 
-def browser_control():
-    """加载 browser-control 的规范 browser_control 包。"""
-    return _control("browser_control")
+def browser_use():
+    """加载 browser-use 的规范 browser_use 包。"""
+    return _control("browser_use")

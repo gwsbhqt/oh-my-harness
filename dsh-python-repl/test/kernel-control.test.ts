@@ -22,7 +22,7 @@ let venvPython = ''
 before(async () => {
   venvPython = await testKernelPython()
 })
-const scratch = mkdtempSync(join(tmpdir(), 'dsh-control-'))
+const scratch = mkdtempSync(join(tmpdir(), 'dsh-use-'))
 const sessions: ReplSession[] = []
 let counter = 0
 function newSession(): { session: ReplSession; state: string } {

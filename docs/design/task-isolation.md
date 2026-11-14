@@ -6,7 +6,7 @@
 
 因此设计把几个问题分开：哪台机器接收操作，哪个任务拥有浏览器绑定，具体操作哪个页面或原生窗口，以及结束后能清理什么。任何标识都不授予发布、删除或修改账号的权限。实现提供协作边界，授权和验证仍是独立责任。
 
-本文描述有源码依据的行为，不是新一轮真实环境验收。[浏览器说明](../../skills/browser-control/README.md)、[桌面说明](../../skills/computer-control/README.md)和[远程说明](../../skills/remote-host/README.md)规定支持的平台与前提条件。
+本文描述有源码依据的行为，不是新一轮真实环境验收。[浏览器说明](../../skills/browser-use/README.md)、[桌面说明](../../skills/computer-use/README.md)和[远程说明](../../skills/remote-host/README.md)规定支持的平台与前提条件。
 
 ## DSH 提供什么，技能补充什么
 
@@ -16,31 +16,31 @@ DSH 提供对话、工具执行能力和环境中可用的会话标识。浏览�
 
 ## 浏览器会话明确各自的责任
 
-浏览器任务范围按明确顺序选择：调用时指定的 scope，其次 `BROWSER_CONTROL_CONTEXT_ID`，最后 `DSH_SESSION_ID`。明确指定浏览器 session 会覆盖自动选择。没有任务环境时，Python 接口可以使用进程专属默认值。普通命令行资源操作要求指定 scope 或 session，防止无关命令悄悄共用一个全局任务。
+浏览器任务范围按明确顺序选择：调用时指定的 scope，其次 `BROWSER_USE_CONTEXT_ID`，最后 `DSH_SESSION_ID`。明确指定浏览器 session 会覆盖自动选择。没有任务环境时，Python 接口可以使用进程专属默认值。普通命令行资源操作要求指定 scope 或 session，防止无关命令悄悄共用一个全局任务。
 
-[contexts.py](../../skills/browser-control/src/browser_control/contexts.py)为每个 scope 保存稳定的自动 session。修改选择不会检查或释放浏览器资源。[上下文测试](../../skills/browser-control/tests/test_contexts.py)检查优先级、稳定复用、独立任务、并发进程，以及对不安全或损坏信息的拒绝。存储使用锁和替换检查，不假设只有一个 Agent 进程。
+[contexts.py](../../skills/browser-use/src/browser_use/contexts.py)为每个 scope 保存稳定的自动 session。修改选择不会检查或释放浏览器资源。[上下文测试](../../skills/browser-use/tests/test_contexts.py)检查优先级、稳定复用、独立任务、并发进程，以及对不安全或损坏信息的拒绝。存储使用锁和替换检查，不假设只有一个 Agent 进程。
 
 对话分支应使用不同任务范围，保留自己返回的对象。任务范围取决于调用时选择的身份，不会自动检测 Git 分支。有意复用相同 scope 或 session，就表示共享责任。复制对话文字不能安全交接活的浏览器对象。分支应获取自己的绑定或完成明确交接，而不是粘贴过期目标标识就假设已经拥有它。
 
-Page 对象固定机器、浏览器会话、浏览器和确切目标标识。后来改选默认机器，不会重定向已有 Page。[路由约定测试](../../skills/browser-control/tests/test_routing_contract.py)验证这一点，并确认明确的远程失败会报错，而不连接本地 socket。标题、网址片段、列表位置或当前活动标签页，都不能替代实际返回的目标标识。
+Page 对象固定机器、浏览器会话、浏览器和确切目标标识。后来改选默认机器，不会重定向已有 Page。[路由约定测试](../../skills/browser-use/tests/test_routing_contract.py)验证这一点，并确认明确的远程失败会报错，而不连接本地 socket。标题、网址片段、列表位置或当前活动标签页，都不能替代实际返回的目标标识。
 
 ## 任务专用窗口仍共享账号状态
 
-普通协作模式在已授权浏览器实例中创建任务窗口。长工能通过后台 CDP 输入操作不同页面，无需每次移动真鼠标或切换可见标签页。但窗口仍使用同一份配置和登录状态。退出登录或修改网站设置可能影响其他窗口。新建窗口本身也可能让它出现在最前面。[操作规则](../../skills/browser-control/references/common.md)明确记录了这个限制。
+普通协作模式在已授权浏览器实例中创建任务窗口。长工能通过后台 CDP 输入操作不同页面，无需每次移动真鼠标或切换可见标签页。但窗口仍使用同一份配置和登录状态。退出登录或修改网站设置可能影响其他窗口。新建窗口本身也可能让它出现在最前面。[操作规则](../../skills/browser-use/references/common.md)明确记录了这个限制。
 
 Chrome 还支持独立配置和克隆配置。克隆属于任务，改动不会写回源配置。Arc 支持连接已有浏览器，而不支持这些启动模式。使用独立配置时，要放弃复用已有登录状态的便利，换取更强的存储隔离。克隆则会复制可能敏感的已认证状态。这些是可选择的设计，不是证明某模式普遍最优的对比实验。
 
-清理时区分任务创建的页面和借用的页面。释放会关闭任务自己创建的页面。对借用页面，只移除绑定。关闭借用页面需要明确授权。[资源记录](../../skills/browser-control/src/browser_control/resources.py)按浏览器真实实例 UUID 保存最少归属信息。它不会根据网址恢复操作绑定，也不会把复用的调试端口当成同一浏览器。断连和释放含义不同：停止连接，不一定放弃资源。
+清理时区分任务创建的页面和借用的页面。释放会关闭任务自己创建的页面。对借用页面，只移除绑定。关闭借用页面需要明确授权。[资源记录](../../skills/browser-use/src/browser_use/resources.py)按浏览器真实实例 UUID 保存最少归属信息。它不会根据网址恢复操作绑定，也不会把复用的调试端口当成同一浏览器。断连和释放含义不同：停止连接，不一定放弃资源。
 
 ## 原生窗口不能变成独立桌面
 
 桌面工具面对不同问题。有的操作直接作用于辅助功能元素，有的依赖事件投递与焦点。真实前台仍只有一个，人可以在两次检查之间改变它。
 
-稳定窗口引用包含窗口标识、进程标识、进程启动时间和应用身份。[Swift 执行程序](../../skills/computer-control/bin/computer-control.swift)检查原进程代次和确切窗口是否仍有效，拒绝用相似标题或位置替代。元素检查也会确认其属于绑定窗口。
+稳定窗口引用包含窗口标识、进程标识、进程启动时间和应用身份。[Swift 执行程序](../../skills/computer-use/bin/computer-use.swift)检查原进程代次和确切窗口是否仍有效，拒绝用相似标题或位置替代。元素检查也会确认其属于绑定窗口。
 
 对非浏览器应用，工具记录任务归属和会变化的授权凭证。交接和释放会使旧凭证失效。浏览器应用则使用任务窗口和短操作锁，允许不同窗口协作，而不占有整份共享浏览器。键盘、粘贴、菜单和基于事件的鼠标操作使用共享桌面输入锁。浏览器输入还检查前台应用、准确焦点窗口，以及相关场景中的焦点元素。
 
-这些措施减少协作调用方之间的争抢，但不能阻止人或同账号其他程序在检查后立刻切焦点。长输入会复查焦点，变化时停止。如果输入可能已经发出，结果就是未知。[桌面规则](../../skills/computer-control/references/common.md)明确说明仍然存在的争抢风险。[引用约定测试](../../skills/computer-control/tests/test_contract.py)检查是否拒绝其他任务、其他窗口和旧凭证。
+这些措施减少协作调用方之间的争抢，但不能阻止人或同账号其他程序在检查后立刻切焦点。长输入会复查焦点，变化时停止。如果输入可能已经发出，结果就是未知。[桌面规则](../../skills/computer-use/references/common.md)明确说明仍然存在的争抢风险。[引用约定测试](../../skills/computer-use/tests/test_contract.py)检查是否拒绝其他任务、其他窗口和旧凭证。
 
 辅助功能和屏幕录制权限属于目标上的实际进程。版本探测成功，既不证明权限，也不证明应用可控。部分定向输入还使用私有 macOS 接口，因此系统变化可能使其失效。不支持的定向操作会失败，不会悄悄改为全局输入。系统身份确认和敏感应用限制是额外边界，不能靠任务名绕过。
 
@@ -63,8 +63,8 @@ SSH 不会把脚本放进沙箱。它使用已认证账号的真实访问权。�
 仓库中的测试提供可重复的接口约定证据，使用样例，不声称验证过用户真实桌面或 SSH 目标。从公开仓库根目录可以运行针对性的浏览器检查：
 
 ```sh
-uv run --project skills/browser-control --extra test python -m unittest discover -s skills/browser-control/tests -p 'test_contexts.py' -q
-uv run --project skills/browser-control --extra test python -m unittest discover -s skills/browser-control/tests -p 'test_routing_contract.py' -q
+uv run --project skills/browser-use --extra test python -m unittest discover -s skills/browser-use/tests -p 'test_contexts.py' -q
+uv run --project skills/browser-use --extra test python -m unittest discover -s skills/browser-use/tests -p 'test_routing_contract.py' -q
 ```
 
 受控的真实环境评估，应使用可丢弃的示例页面和两个虚构任务范围。记录错误目标拒绝、意外焦点变化、结果未知的操作，以及释放后残留资源。用相同操作比较共享窗口和独立配置，记录浏览器、操作系统版本、权限和是否有人切换焦点。样例中的拒绝率不是真实环境隔离保证。

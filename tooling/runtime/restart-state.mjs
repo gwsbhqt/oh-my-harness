@@ -6,7 +6,7 @@ const active = new Set(['queued', 'checking', 'waiting', 'updating', 'quitting',
 
 /** 只把尚未结束且执行进程真实存活的重启当作待处理；无法核实时拒绝自动维护。 */
 export function pendingRestart(home) {
-  const path = join(home, 'dsh-control', 'restart-state.json')
+  const path = join(home, 'dsh-use', 'restart-state.json')
   try {
     let state
     try { state = JSON.parse(readFileSync(path, 'utf8')) }

@@ -7,9 +7,9 @@
 | 文件 | 需要录制的真实操作和证据 | 用在哪里 |
 | --- | --- | --- |
 | `python-data-locality.gif` | 把真实终端输出节选与真实 DSH 会话回放放在一起。两边筛选同一份虚构日志，会话中复用内存变量。标明节选，并展示 [results.json](../../benchmarks/results.json) 中两项可重复的文本量估算。 | [dsh-python-repl 部件说明](../../dsh-python-repl/README.md)。 |
-| `controller-worker.gif` | 使用两个已授权的测试会话。主控发送明确任务，记录回执后停止轮询。长工执行任务。展示通知送达、主控检查，以及实际的纠正或验收。不要编造用量或耗时计数。 | [dsh-control 部件说明](../../dsh-control/README.md)。 |
-| `browser-control.gif` | 使用本地虚构页面或示例页面，不登录账号。绑定任务窗口和确切页面，做一个看得见的改动，再检查结果。 | [browser-control 部件说明](../../skills/browser-control/README.md)。 |
-| `computer-control.gif` | 已录制并审查：绑定 macOS 文本编辑窗口，使用虚构清单，修改两项，并通过原生文字读回核对。16 秒动图展示八个标有节选说明的截图步骤。 | [computer-control 部件说明](../../skills/computer-control/README.md)。 |
+| `controller-worker.gif` | 使用两个已授权的测试会话。主控发送明确任务，记录回执后停止轮询。长工执行任务。展示通知送达、主控检查，以及实际的纠正或验收。不要编造用量或耗时计数。 | [dsh-use 部件说明](../../dsh-use/README.md)。 |
+| `browser-use.gif` | 使用本地虚构页面或示例页面，不登录账号。绑定任务窗口和确切页面，做一个看得见的改动，再检查结果。 | [browser-use 部件说明](../../skills/browser-use/README.md)。 |
+| `computer-use.gif` | 已录制并审查：绑定 macOS 文本编辑窗口，使用虚构清单，修改两项，并通过原生文字读回核对。16 秒动图展示八个标有节选说明的截图步骤。 | [computer-use 部件说明](../../skills/computer-use/README.md)。 |
 | `monitor.gif` | 跟随一个本地事件来源，产生已知示例事件。结束 Agent 当前轮次，再发出事件，展示会话被唤醒并采取行动。说明使用哪种投递模式。不能让模型轮询、重复启动监控器或伪造事件到达。 | [dsh-monitor 部件说明](../../dsh-monitor/README.md)。 |
 | `bounded-display.png` | 录下真实的大段虚构输出，包含实际显示的开头、结尾和完整文本保存位置。核对保存内容与保留的 Python 值。它演示交互执行环境 REPL 的输出预算，不是模型输出流防护。 | [dsh-python-repl 部件说明](../../dsh-python-repl/README.md)。 |
 | `remote-host.png` | 使用明确授权的测试目标，进行只读检查或复制虚构样例。展示实际选中的机器和内容核对结果。隐藏账号与网络信息。 | [remote-host 部件说明](../../skills/remote-host/README.md)。 |

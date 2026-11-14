@@ -20,7 +20,7 @@ result = await skills.remote_host.run(
 )
 ```
 
-Inspect `result.code`, `result.out`, and `result.err`. A zero exit code establishes success for that command, not every later operation on the destination. Host pins can retain a default destination, interpreter, and working directory, but each tool keeps its own machine selection. Selecting a destination here does not select it for browser-control or computer-control.
+Inspect `result.code`, `result.out`, and `result.err`. A zero exit code establishes success for that command, not every later operation on the destination. Host pins can retain a default destination, interpreter, and working directory, but each tool keeps its own machine selection. Selecting a destination here does not select it for browser-use or computer-use.
 
 ## Choose the right execution shape
 
