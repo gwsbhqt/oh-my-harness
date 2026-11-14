@@ -991,9 +991,11 @@ def _keep_job_text(args: Any, result: Any) -> None:
 class BashJob:
     """A bash command running as a DSH background job; `await job` collects it.
 
-    Ordinary bash calls run one at a time (DSH runs a tool that may change
-    things alone), so `asyncio.gather` over them is serial. A background job
-    returns at once, and waiting on several jobs does overlap. The job's
+    A foreground `bash(...)` in a cell is started as a background job and
+    awaited, so `await bash(...)` in sequence stays serial while
+    `await asyncio.gather(bash(a), bash(b))` runs the commands side by side
+    (a plain non-concurrency-safe tool would be forced serial; routing through
+    jobs is what lets independent calls overlap). The job's
     stdout and stderr arrive as one text, stderr after a `[stderr]` line,
     which is how DSH reports a job; the exit code is read from the job's
     `detail` and stays None when the job did not report one.
