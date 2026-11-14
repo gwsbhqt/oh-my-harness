@@ -64,6 +64,26 @@ test('list 展示实际脚本，损坏包与符号链接会报错', t => {
   assert.equal(record.calls.length, 0);
 });
 
+test('仓库内公开插件软链可以参与聚合检查，仓库外链接拒绝执行', t => {
+  const { root, add } = fixture(t);
+  mkdirSync(join(root, '.git'));
+  mkdirSync(join(root, 'public', 'dsh-public'), { recursive: true });
+  writeFileSync(join(root, 'public', 'dsh-public', 'package.json'), JSON.stringify({ name: 'dsh-public', scripts: { check: 'check' } }));
+  symlinkSync('public/dsh-public', join(root, 'dsh-public'));
+  add('dsh-private');
+  const record = recorder();
+  assert.equal(runCommand('check', [], { root, ...record }), 0);
+  assert.deepEqual(record.calls.map(c => c.cwd), ['dsh-private', 'dsh-public'].map(n => join(root, n)));
+
+  const external = fixture(t);
+  external.add('dsh-external');
+  symlinkSync(join(external.root, 'dsh-external'), join(root, 'dsh-external'));
+  const blocked = recorder();
+  assert.equal(runCommand('check', ['dsh-external'], { root, ...blocked }), 1);
+  assert.equal(blocked.calls.length, 0);
+  assert(blocked.logs.some(line => line.includes('Git 工作区外')));
+});
+
 test('找不到 pnpm 时逐项汇总失败，不吞错误', t => {
   const { root, add } = fixture(t); add('dsh-a'); add('dsh-b');
   const logs = [];
