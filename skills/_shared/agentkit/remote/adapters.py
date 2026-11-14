@@ -1,4 +1,4 @@
-"""Remote results that need more than passing stdout through: computer-control screenshots fetched back, dsh-control restart receipts watched locally."""
+"""Remote results that need more than passing stdout through: computer-use screenshots fetched back, dsh-use restart receipts watched locally."""
 import json
 import os
 import subprocess
@@ -11,7 +11,7 @@ from . import ssh
 
 def _fetch_shot(host, remote):
     if not isinstance(remote, str) or not remote or "\x00" in remote:
-        raise ValueError("computer-control: screenshot path must be a non-empty string")
+        raise ValueError("computer-use: screenshot path must be a non-empty string")
     cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "remote-host" / "shots"
     cache.mkdir(parents=True, exist_ok=True)
     os.chmod(cache, 0o700)
@@ -79,14 +79,14 @@ def _remote_restart(host, args, local_session):
     except ValueError:
         watchable = False
     selected_ssh = capture_ssh_target(host)
-    requested_json = _wants_json(args, "dsh-control")
+    requested_json = _wants_json(args, "dsh-use")
     routed = args if requested_json else [*args, "--json"]
-    done = ssh.run_remote(host, command_script("dsh-control", routed), capture="stdout")
+    done = ssh.run_remote(host, command_script("dsh-use", routed), capture="stdout")
     if done.returncode:
         if requested_json and done.stdout:
             _write_stdout(done.stdout)
         else:
-            _error("dsh-control", "远端重启未成功安排；未启动结果通知", done.returncode, requested_json)
+            _error("dsh-use", "远端重启未成功安排；未启动结果通知", done.returncode, requested_json)
         return done.returncode
     try:
         receipt = json.loads(done.stdout)
@@ -96,10 +96,10 @@ def _remote_restart(host, args, local_session):
         request_id = data["requestId"]
         uuid.UUID(request_id)
     except (ValueError, KeyError, TypeError, UnicodeDecodeError) as exc:
-        _error("dsh-control", "重启回执无法确认；未自动重试，需查询远端重启状态：" + str(exc), 1, requested_json)
+        _error("dsh-use", "重启回执无法确认；未自动重试，需查询远端重启状态：" + str(exc), 1, requested_json)
         return 1
     if not watchable:
-        query = f"dsh-control -H {host} restart-status --request-id {request_id} --json"
+        query = f"dsh-use -H {host} restart-status --request-id {request_id} --json"
         receipt["watchStarted"] = False
         receipt["watchSkipped"] = f"发起者 {local_session} 不是会话（子代理），不会收到完成通知；用 {query} 查结果"
         if requested_json:
@@ -124,7 +124,7 @@ def _remote_restart(host, args, local_session):
         print(json.dumps(receipt, ensure_ascii=False))
     else:
         print(f"远端 {host} 重启请求 {request_id} 已安排，尚未完成。")
-        print(f"结果将通知本机发起会话；用 dsh-control restart-watch {watch['watchId']} --json 查看回执。")
+        print(f"结果将通知本机发起会话；用 dsh-use restart-watch {watch['watchId']} --json 查看回执。")
     return 0
 
 
@@ -155,27 +155,27 @@ def _remote_notify(host, args, local_session):
     from .target import command_script, _error, _wants_json
     from .notifications import capture_ssh_target, _session
     from .done_watch import start_done_watch
-    requested_json = _wants_json(args, "dsh-control")
+    requested_json = _wants_json(args, "dsh-use")
     command = next(x for x in args if not x.startswith("-"))
     # 这些检查都在发消息之前：发出去以后就撤不回
     if command == "chat":
-        _error("dsh-control", "跨机器 chat 不支持 --notify self；改用 send --notify self，或 chat --settled 当场等", 2, requested_json)
+        _error("dsh-use", "跨机器 chat 不支持 --notify self；改用 send --notify self，或 chat --settled 当场等", 2, requested_json)
         return 2
     try:
         _session(local_session)
     except ValueError:
-        _error("dsh-control", "--notify self 要在 DSH 会话里用（子代理或会话外没有可通知的会话）；没有发送", 2, requested_json)
+        _error("dsh-use", "--notify self 要在 DSH 会话里用（子代理或会话外没有可通知的会话）；没有发送", 2, requested_json)
         return 2
     selected_ssh = capture_ssh_target(host)
     routed = _strip_notify(args)
     if "--json" not in routed:
         routed = [*routed, "--json"]
-    done = ssh.run_remote(host, command_script("dsh-control", routed, require=("settled-wait",)), capture="stdout")
+    done = ssh.run_remote(host, command_script("dsh-use", routed, require=("settled-wait",)), capture="stdout")
     if done.returncode:
         if requested_json and done.stdout:
             _write_stdout(done.stdout)
         else:
-            _error("dsh-control", f"远端 {command} 没成功（exit {done.returncode}）；未登记做完通知", done.returncode, requested_json)
+            _error("dsh-use", f"远端 {command} 没成功（exit {done.returncode}）；未登记做完通知", done.returncode, requested_json)
         return done.returncode
     try:
         receipt = json.loads(done.stdout)
@@ -185,7 +185,7 @@ def _remote_notify(host, args, local_session):
         if receipt.get("ok") is not True or type(since) is not int:
             raise ValueError("回执缺少会话编号或起点")
     except (ValueError, KeyError, TypeError, UnicodeDecodeError) as exc:
-        _error("dsh-control", "远端已执行但回执无法确认，未登记做完通知；不要重发，先查远端状态：" + str(exc), 1, requested_json)
+        _error("dsh-use", "远端已执行但回执无法确认，未登记做完通知；不要重发，先查远端状态：" + str(exc), 1, requested_json)
         return 1
     try:
         watch = start_done_watch(host, target, since, local_session, title=data.get("title"), ssh_snapshot=selected_ssh)
@@ -204,44 +204,44 @@ def _remote_notify(host, args, local_session):
     return 0
 
 
-def _computer_control_capture(host, args):
+def _computer_use_capture(host, args):
     from .target import command_script, _error
     action = next(word for word in args if word in ("snap", "shot"))
     requested_json = "--json" in args[:args.index("--")] if "--" in args else "--json" in args
     remote_args = args if requested_json else ["--json", *args]
-    done = ssh.run_remote(host, command_script("computer-control", remote_args), capture="stdout")
+    done = ssh.run_remote(host, command_script("computer-use", remote_args), capture="stdout")
     if done.returncode:
         if requested_json and done.stdout:
             try:
                 json.loads(done.stdout)
             except (ValueError, UnicodeDecodeError):
-                _error("computer-control", "remote command failed without valid JSON", done.returncode, True)
+                _error("computer-use", "remote command failed without valid JSON", done.returncode, True)
             else:
                 _write_stdout(done.stdout)
         elif requested_json:
-            _error("computer-control", "remote command failed", done.returncode, True)
+            _error("computer-use", "remote command failed", done.returncode, True)
         else:
-            print(f"computer-control: remote {action} failed (exit {done.returncode})", file=sys.stderr)
+            print(f"computer-use: remote {action} failed (exit {done.returncode})", file=sys.stderr)
         return done.returncode
     try:
         data = json.loads(done.stdout)
     except (ValueError, UnicodeDecodeError) as exc:
-        raise ValueError("computer-control: remote --json output is not valid JSON") from exc
+        raise ValueError("computer-use: remote --json output is not valid JSON") from exc
     if not isinstance(data, dict):
-        raise ValueError("computer-control: remote --json output must be an object")
+        raise ValueError("computer-use: remote --json output must be an object")
     if data.get("ok") is False:
-        _error("computer-control", str(data.get("error") or "remote snapshot failed"), data.get("code") or 1, requested_json)
+        _error("computer-use", str(data.get("error") or "remote snapshot failed"), data.get("code") or 1, requested_json)
         return data.get("code") or 1
     key = "shot" if action == "snap" else "path"
     remote = data.get(key)
     if remote:
         path, code = _fetch_shot(host, remote)
         if code:
-            _error("computer-control", "screenshot download failed", code, requested_json)
+            _error("computer-use", "screenshot download failed", code, requested_json)
             return code
         data["remotePath"], data[key], data["path"] = remote, path, path
     elif action == "shot":
-        raise ValueError("computer-control: remote shot JSON has no path")
+        raise ValueError("computer-use: remote shot JSON has no path")
     if requested_json:
         print(json.dumps(data, ensure_ascii=False))
     elif action == "shot":

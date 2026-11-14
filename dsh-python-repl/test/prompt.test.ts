@@ -73,10 +73,10 @@ describe('renderSkillCatalog', () => {
 
   it('maps each Python skill to its kernel name and repeats a description only when the Python one differs', () => {
     const text = renderSkillCatalog([
-      { skill: 'browser-control', description: 'Drive a browser.', path: '/s/browser-control', instructions_file: 'PYSKILL.md', import_name: 'browser_control', src: '/s/browser-control/src', status: 'discovered' },
+      { skill: 'browser-use', description: 'Drive a browser.', path: '/s/browser-use', instructions_file: 'PYSKILL.md', import_name: 'browser_use', src: '/s/browser-use/src', status: 'discovered' },
       { skill: 'word-count', description: 'Count words in the kernel.', standard_description: 'Count words.', path: '/s/word-count', instructions_file: 'PYSKILL.md', import_name: 'word_count', src: '/s/word-count/src', status: 'discovered' },
     ])
-    assert.match(text, /`skills\.browser_control` — browser-control \(PYSKILL\.md\)/)
+    assert.match(text, /`skills\.browser_use` — browser-use \(PYSKILL\.md\)/)
     assert.doesNotMatch(text, /Drive a browser/, 'the host skill list already carries the same description')
     assert.match(text, /`skills\.word_count` — word-count: Count words in the kernel\. \(PYSKILL\.md\)/)
   })

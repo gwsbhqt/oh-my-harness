@@ -81,7 +81,7 @@ describe('kernel owner and inherited agent environment', () => {
     })
   })
 
-  it('passes the session id to the kernel as DSH_SESSION_ID (dsh-control 的会话标记)', async () => {
+  it('passes the session id to the kernel as DSH_SESSION_ID (dsh-use 的会话标记)', async () => {
     const session = new ReplSession({
       python: PYTHON,
       vendorRoot: join(root, 'vendor', 'prime'),

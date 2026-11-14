@@ -62,7 +62,7 @@ export interface SessionOptions {
   subagentWaitMs?: number
   /**
    * The session this kernel belongs to. Passed to the kernel as
-   * DSH_SESSION_ID so subprocesses (for example, dsh-control restart)
+   * DSH_SESSION_ID so subprocesses (for example, dsh-use restart)
    * detach and notify the originating session exactly like a bash tool call.
    */
   sessionId?: string
@@ -1240,8 +1240,8 @@ export class ReplSession {
         // cell never has to guess where a relative path lands.
         env: {
           // bash 工具的子进程由宿主带上 DSH_SESSION_ID；内核子进程此前没有，
-          // 从 Python 里跑 dsh-control restart 不会自动转后台，也不知道
-          // 该通知谁（dsh-control 只认这个标记，全仓库无其他读者）。
+          // 从 Python 里跑 dsh-use restart 不会自动转后台，也不知道
+          // 该通知谁（dsh-use 只认这个标记，全仓库无其他读者）。
           ...(this.#options.sessionId === undefined ? {} : { DSH_SESSION_ID: this.#options.sessionId }),
           ...(cwd === undefined ? {} : { DSH_PYTHON_REPL_WORKSPACE: cwd }),
           // python/lifecycle.py keeps its records and archive next to the snapshot; without it the lifecycle is off.

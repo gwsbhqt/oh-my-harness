@@ -1,4 +1,4 @@
-"""跨机器做完通知：隔离家目录里用假的 ssh 与 dsh-control 真跑观察进程，分发入口用替身核对参数与回执。"""
+"""跨机器做完通知：隔离家目录里用假的 ssh 与 dsh-use 真跑观察进程，分发入口用替身核对参数与回执。"""
 
 import concurrent.futures
 import contextlib
@@ -26,7 +26,7 @@ home = Path.home()
 args = sys.argv[1:]
 if '--capabilities' in args:
  feats = ['local-routing','task-outcomes'] + ([] if (home / 'old-remote').exists() else ['settled-wait'])
- print(json.dumps({'ok':True,'tool':'dsh-control','protocol':1,'features':feats}))
+ print(json.dumps({'ok':True,'tool':'dsh-use','protocol':1,'features':feats}))
  sys.exit(0)
 with (home / 'tool-calls').open('a') as f:
  f.write(json.dumps({'args':args, 'session':os.getenv('DSH_SESSION_ID')}) + '\n')
@@ -57,7 +57,7 @@ class DoneWatchCase(unittest.TestCase):
 
     def setUp(self):
         base.WatchCase.setUp(self)
-        self.install("dsh-control", FAKE_DSH)
+        self.install("dsh-use", FAKE_DSH)
         self.target = "session-" + str(uuid.uuid4())
 
     def script(self, *steps):
@@ -99,7 +99,7 @@ class DoneWatchCase(unittest.TestCase):
         self.assertEqual(notice[2], self.session)
         self.assertIn("已经真正做完", notice[3])
         self.assertIn("「测试长工」", notice[3])
-        self.assertIn(f"dsh-control -H fixture last {self.target}", notice[3])
+        self.assertIn(f"dsh-use -H fixture last {self.target}", notice[3])
         self.assertIn("全部完成", notice[3])
 
     def test_question_is_reported_once_then_final_notice(self):
@@ -174,7 +174,7 @@ class DispatchCase(unittest.TestCase):
              mock.patch("agentkit.remote.done_watch.start_done_watch", **({"side_effect": start} if isinstance(start, Exception) else {"return_value": {"watchId": "w", "pid": 1, "statePath": "/fixture"}})) as watch, \
              mock.patch("agentkit.remote.notifications.capture_ssh_target", return_value={"fixture": "original"}), \
              contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            _, code = target.dispatch("dsh-control", ["-H", "alpha", *args])
+            _, code = target.dispatch("dsh-use", ["-H", "alpha", *args])
         return code, out.getvalue(), run, watch
 
     def test_send_strips_notify_requires_settled_wait_and_watches_locally(self):

@@ -20,7 +20,7 @@ result = await skills.remote_host.run(
 )
 ```
 
-检查 `result.code`、`result.out` 和 `result.err`。退出码为零只证明这条命令成功，不证明目标上的后续操作。机器固定设置可以保留默认目标、解释器和工作目录，但每个工具独立保存选机结果。这里选中目标，不会替 browser-control 或 computer-control 选目标。
+检查 `result.code`、`result.out` 和 `result.err`。退出码为零只证明这条命令成功，不证明目标上的后续操作。机器固定设置可以保留默认目标、解释器和工作目录，但每个工具独立保存选机结果。这里选中目标，不会替 browser-use 或 computer-use 选目标。
 
 ## 选择合适的执行方式
 

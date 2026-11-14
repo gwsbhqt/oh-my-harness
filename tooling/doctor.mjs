@@ -154,7 +154,7 @@ export async function doctor(options={}) {
       checks.push(check('credentials-mode',stat.isFile()&&mode===0o600,`凭据权限 ${mode.toString(8)}${options.repairCredentials?'（已获显式修复授权）':''}`,'显式传 --repair-credentials 只修成 600；不改内容'));
     }else checks.push(check('credentials-mode',true,'未配置凭据文件'));
     const risk=process.env.ELECTRON_RUN_AS_NODE==='1';
-    checks.push(check('electron-run-as-node',!risk||!!options.sanitizeEnv,risk?(options.sanitizeEnv?'检测到 ELECTRON_RUN_AS_NODE=1；隔离子进程环境已清理，CLI包装器仅为内部Node执行重新设置':'ELECTRON_RUN_AS_NODE=1 会使 App 以 Node 而不是 GUI 启动'):'未继承 ELECTRON_RUN_AS_NODE=1','启动 GUI 前 unset ELECTRON_RUN_AS_NODE；dsh-control sanitized 入口可用 --sanitize-env'));
+    checks.push(check('electron-run-as-node',!risk||!!options.sanitizeEnv,risk?(options.sanitizeEnv?'检测到 ELECTRON_RUN_AS_NODE=1；隔离子进程环境已清理，CLI包装器仅为内部Node执行重新设置':'ELECTRON_RUN_AS_NODE=1 会使 App 以 Node 而不是 GUI 启动'):'未继承 ELECTRON_RUN_AS_NODE=1','启动 GUI 前 unset ELECTRON_RUN_AS_NODE；dsh-use sanitized 入口可用 --sanitize-env'));
     checks.push(check('profiles-node-modules',!await exists(path.join(home,'profiles/node_modules')),'profiles 父目录不应安装 node_modules','在具体 profiles/<profile> 中安装；确认误装目录后清理'));
     checks.push(await singletonCheck(home,userHome));
     checks.push(await profilePatchCheck(original));
@@ -207,7 +207,7 @@ export async function doctor(options={}) {
       const patch=startupOverlay(data.entries,path.join(here,'ready-probe.mjs'));
       await fs.writeFile(overlay,patch);
       const startup=await execute(cli,['--profile','probe','--patch',overlay]);
-      checks.push(check('isolated-startup',startup.ok&&startup.stdout.includes('DSH_DOCTOR_READY:'),startup.ok&&startup.stdout.includes('DSH_DOCTOR_READY:')?'实际 App CLI 已完成宿主挂载与启动审计；未调用模型':failureText(startup,timeoutMs,'试启动'),startup.timedOut?'试启动超过时限被停掉，输出里的警告多半不是原因：先用 dsh-control doctor --timeout-ms 300000 重查；放宽后通过就是启动变慢，查是哪个插件拖慢了启动':'修复启动日志中的根因；显式 disabled 条目不当成静默禁用',{exitCode:startup.code,timedOut:startup.timedOut}));
+      checks.push(check('isolated-startup',startup.ok&&startup.stdout.includes('DSH_DOCTOR_READY:'),startup.ok&&startup.stdout.includes('DSH_DOCTOR_READY:')?'实际 App CLI 已完成宿主挂载与启动审计；未调用模型':failureText(startup,timeoutMs,'试启动'),startup.timedOut?'试启动超过时限被停掉，输出里的警告多半不是原因：先用 dsh-use doctor --timeout-ms 300000 重查；放宽后通过就是启动变慢，查是哪个插件拖慢了启动':'修复启动日志中的根因；显式 disabled 条目不当成静默禁用',{exitCode:startup.code,timedOut:startup.timedOut}));
       if(options.full){
         const fullManifest=structuredClone(manifest);fullManifest.dsh.profile.bundles=fullManifest.dsh.profile.bundles.filter(n=>n!=='@deepseek-ai/dsh-desktop-app'&&n!=='@deepseek-ai/dsh-web-app');fullManifest.dsh.profile.bundles.push('@deepseek-ai/dsh-headless');await fs.writeFile(path.join(copy,'package.json'),JSON.stringify(fullManifest));
         const fullOverlay=path.join(temp,'model.patch.yml');await fs.writeFile(fullOverlay,patch.split('- insert:')[0]);

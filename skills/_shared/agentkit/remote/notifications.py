@@ -49,7 +49,7 @@ def _session(value):
 
 
 def _state_dir():
-    return Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "dsh-control/restart-watches"
+    return Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "dsh-use/restart-watches"
 
 
 def _private_dir(path):
@@ -247,7 +247,7 @@ def _poll(state):
         return {"kind": "config-changed", "error": "SSH 配置已改变；没有继续访问其他目标"}
     ssh.PROXY["on"] = False
     args = ["restart-status", "--request-id", state["requestId"], "--json"]
-    return _receipt(ssh.run_remote(state["host"], command_script("dsh-control", args), capture=True), state["requestId"])
+    return _receipt(ssh.run_remote(state["host"], command_script("dsh-use", args), capture=True), state["requestId"])
 
 
 def _invoke(mode, watch_id, directory):
@@ -294,7 +294,7 @@ def _notify(state):
     if state.get("remote", {}).get("log"):
         text += f'\n远端日志：{state["remote"]["log"]}'
     text += f'\n本机观察编号：{state["watchId"]}'
-    argv = [str(Path.home() / ".local/bin/dsh-control"), "--local", "notice", state["localSession"],
+    argv = [str(Path.home() / ".local/bin/dsh-use"), "--local", "notice", state["localSession"],
             text, "--summary", summary, "--json"]
     try:
         done = _bounded_command(argv, 30)

@@ -32,7 +32,7 @@ it('derives the import name as Prime does, never guessing between packages and n
   }
   try {
     add('word-count', '---\nname: word-count\ndescription: "quoted: summary"\n---\nbody', ['_vendor', 'word_count'])
-    add('browser-control', '---\nname: browser-control\ndescription: >\n  Drive a\n  browser.\n---\n', ['browser_control', '_helper'])
+    add('browser-use', '---\nname: browser-use\ndescription: >\n  Drive a\n  browser.\n---\n', ['browser_use', '_helper'])
     add('demo-skill', '---\nname: demo-skill\ndescription: Generic alternate package\n---\n', ['demo'])
     add('two', '---\nname: two\ndescription: two packages\n---\n', ['a_pkg', 'b_pkg'])
     add('guide', '---\nname: guide\ndescription: instructions only\n---\n')
@@ -42,8 +42,8 @@ it('derives the import name as Prime does, never guessing between packages and n
     const by = Object.fromEntries(found.skills.map((s) => [s.skill, s]))
     assert.equal(by['word-count']?.import_name, 'word_count', 'the package named after the skill wins over a helper package')
     assert.equal(by['word-count']?.description, 'quoted: summary', 'YAML quotes are not part of the value')
-    assert.equal(by['browser-control']?.import_name, 'browser_control', 'the full skill package wins over helpers')
-    assert.equal(by['browser-control']?.description, 'Drive a browser.', 'a folded YAML block is read whole')
+    assert.equal(by['browser-use']?.import_name, 'browser_use', 'the full skill package wins over helpers')
+    assert.equal(by['browser-use']?.description, 'Drive a browser.', 'a folded YAML block is read whole')
     assert.equal(by['demo-skill']?.import_name, 'demo', 'the generic single-package fallback remains available')
     assert.equal(by['two']?.status, 'docs-only')
     assert.match(by['two']?.reason ?? '', /several packages \(a_pkg, b_pkg\)/)

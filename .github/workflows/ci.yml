@@ -49,7 +49,7 @@ jobs:
           ci_failures=()
           plugins=(
             dsh-python-repl
-            dsh-control
+            dsh-use
             dsh-monitor
             dsh-output-guard
             dsh-compaction-bound
@@ -106,7 +106,7 @@ jobs:
         run: |
           set -euo pipefail
           ci_failures=()
-          for component in browser-control computer-control remote-host _shared; do
+          for component in browser-use computer-use remote-host _shared; do
             echo "::group::$component"
             if [[ "$component" == "_shared" ]]; then
               if uv run --no-project --python 3.12 python -m unittest discover -s _shared/tests -v; then

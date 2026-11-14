@@ -60,7 +60,7 @@ export function createPresentationGuard(ctx: Context): (assembly: AssemblyLike, 
     const sid = stringId(agent.session?.id) ?? stringId(agent.sessionId) ?? stringId(agent.id)
     if (sid === undefined) return
     const text = `ERROR [dsh-python-repl] sid=${JSON.stringify(sid)}: 本会话公开模式记录为 ptc，但本次实际工具清单缺少 run_code。`
-      + '工具呈现已损坏，不能执行 Python 工具编排。停止其他工具操作，用 bash 工具跑 `dsh-control doctor`，通过后跑 `dsh-control restart --detach` 直接重启（它中止在跑的会话，重启后让它们自动接着做），告诉用户已经在重启并结束这一轮；只有重启被拒或检查失败才把原因交给用户。'
+      + '工具呈现已损坏，不能执行 Python 工具编排。停止其他工具操作，用 bash 工具跑 `dsh-use doctor`，通过后跑 `dsh-use restart --detach` 直接重启（它中止在跑的会话，重启后让它们自动接着做），告诉用户已经在重启并结束这一轮；只有重启被拒或检查失败才把原因交给用户。'
       + '不要调用 monitor、原生工具或其他入口替代 run_code；不要自动重放此前可能已发生的外部动作。此检测不会自动修复或恢复内核数据。'
     assembly.contexts.push({ name: PRESENTATION_ERROR_CONTEXT, text })
     const identity = agent.session ?? scope as object

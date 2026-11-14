@@ -1,4 +1,4 @@
-"""Machine selection shared by remote-host, computer-control, dsh-control, browser-control and clash-control, and forwarding computer-control/dsh-control/clash-control commands to the same tool on that machine."""
+"""Machine selection shared by remote-host, computer-use, dsh-use, browser-use and clash-use, and forwarding computer-use/dsh-use/clash-use commands to the same tool on that machine."""
 
 import argparse
 import contextlib
@@ -10,8 +10,8 @@ import sys
 
 from . import pins, ssh
 
-TOOLS = ("remote-host", "computer-control", "dsh-control", "browser-control", "clash-control")
-BROWSER_CONTROL_VALUE_OPTIONS = {"--session", "--browser", "--socket", "--tab", "--rpc-timeout"}
+TOOLS = ("remote-host", "computer-use", "dsh-use", "browser-use", "clash-use")
+BROWSER_USE_VALUE_OPTIONS = {"--session", "--browser", "--socket", "--tab", "--rpc-timeout"}
 
 
 def resolve_target(tool: str, host: str | None = None) -> str:
@@ -73,7 +73,7 @@ def _extract(argv, tool="remote-host"):
             local = True
         else:
             args.append(word)
-            if (tool == "remote-host" and word in value_options or tool == "browser-control" and word in BROWSER_CONTROL_VALUE_OPTIONS) and i + 1 < len(argv):
+            if (tool == "remote-host" and word in value_options or tool == "browser-use" and word in BROWSER_USE_VALUE_OPTIONS) and i + 1 < len(argv):
                 i += 1
                 args.append(argv[i])
                 i += 1
@@ -82,7 +82,7 @@ def _extract(argv, tool="remote-host"):
                 command = word
                 if tool != "remote-host":
                     args.extend(argv[i + 1:])
-                    if tool != "browser-control":
+                    if tool != "browser-use":
                         _reject_misplaced_route(args, tool)
                     break
                 if command in ("job", "proxy-run"):
@@ -101,7 +101,7 @@ def _reject_misplaced_route(args, tool):
     command = words[command_at]
     # Only actual text positions may contain literal routing words; no global rescan of payload.
     text_slots = ({"send": (2,), "chat": (2,), "notice": (2,), "new": (2,), "rename": (2,), "answer": (2,)}
-                  if tool == "dsh-control" else {"type": (2,), "paste": (2,), "clip": (1,), "set": (3,), "selecttext": (3,)})
+                  if tool == "dsh-use" else {"type": (2,), "paste": (2,), "clip": (1,), "set": (3,), "selecttext": (3,)})
     positional = 0
     i = command_at + 1
     booleans = {"--json", "--now", "--steer", "--interrupt", "--force", "--all", "--tools", "--running", "--ungrouped", "--include-blank", "--when-idle", "--detach", "--kill", "--refresh", "--full", "--shot", "--diff", "--coord", "--gone", "--front", "--off", "--selected", "--no-settle", "--no-webmode", "--allow-newline", "--request", "--help", "-h",
@@ -163,12 +163,12 @@ def _route(tool, argv, *, json_output=False):
         if local and host is not None and host != "local":
             raise ValueError(f"{tool}: --local conflicts with -H/--host {host!r}")
         command_at = 0
-        if tool == "browser-control":
+        if tool == "browser-use":
             while command_at < len(args) and args[command_at].startswith("-"):
                 word = args[command_at]
                 if word == "--":
                     break
-                command_at += 2 if word in BROWSER_CONTROL_VALUE_OPTIONS else 1
+                command_at += 2 if word in BROWSER_USE_VALUE_OPTIONS else 1
         controls = args[command_at:]
         if controls and controls[0] in ("use", "pin", "hosts"):
             if "--json" in args[:command_at]:
@@ -228,7 +228,7 @@ def control_target(tool: str, argv: list[str]) -> dict:
 def command_script(tool, args, require=()):
     """Stage a quoted argv payload that runs the same tool on the remote machine after a capability handshake; ``require`` adds capabilities the remote entry must declare."""
     body = ssh.path_line() + "\n"
-    if tool == "dsh-control":
+    if tool == "dsh-use":
         body += "unset DSH_SESSION_ID\n"
         source = os.environ.get("DSH_SHELL") or ("1" if os.environ.get("DSH_SESSION_ID") else None)
         if source:
@@ -236,7 +236,7 @@ def command_script(tool, args, require=()):
     body += (f'__remote_host_tool="$HOME/.local/bin/{tool}"\n'
              + f'[ -x "$__remote_host_tool" ] || {{ echo "{tool}: remote tool missing: $__remote_host_tool" >&2; exit 127; }}\n'
              + '__remote_host_cap=$("$__remote_host_tool" --capabilities --json) || { echo "远端工具不支持能力检查，未执行命令" >&2; exit 78; }\n'
-             + 'printf "%s" "$__remote_host_cap" | python3 -c ' + shlex.quote('import json, sys\ntry:\n d=json.load(sys.stdin)\n required={"local-routing"}\n if sys.argv[1]=="dsh-control": required.add("task-outcomes")\n if len(sys.argv)>2 and sys.argv[2]=="restart": required.add("restart-receipts")\n required.update(sys.argv[3:])\n if sys.argv[1]=="computer-control": required.update(("snapshot-token","snapshot-status"))\n if not isinstance(d,dict) or d.get("ok") is not True or d.get("tool")!=sys.argv[1] or d.get("protocol")!=1:\n  raise ValueError("protocol mismatch")\n features=d.get("features",[])\n if not isinstance(features,list) or not all(isinstance(x,str) for x in features) or not required.issubset(features):\n  raise ValueError("missing capabilities")\nexcept Exception:\n print("远端工具入口过旧或能力协议不匹配，请更新入口和共用连接代码；未执行命令",file=sys.stderr)\n sys.exit(78)\n') + ' ' + shlex.quote(tool) + ' ' + shlex.quote("restart" if tool == "dsh-control" and args and args[0] == "restart" else "command") + ''.join(' ' + shlex.quote(f) for f in require) + ' || exit $?\n'
+             + 'printf "%s" "$__remote_host_cap" | python3 -c ' + shlex.quote('import json, sys\ntry:\n d=json.load(sys.stdin)\n required={"local-routing"}\n if sys.argv[1]=="dsh-use": required.add("task-outcomes")\n if len(sys.argv)>2 and sys.argv[2]=="restart": required.add("restart-receipts")\n required.update(sys.argv[3:])\n if sys.argv[1]=="computer-use": required.update(("snapshot-token","snapshot-status"))\n if not isinstance(d,dict) or d.get("ok") is not True or d.get("tool")!=sys.argv[1] or d.get("protocol")!=1:\n  raise ValueError("protocol mismatch")\n features=d.get("features",[])\n if not isinstance(features,list) or not all(isinstance(x,str) for x in features) or not required.issubset(features):\n  raise ValueError("missing capabilities")\nexcept Exception:\n print("远端工具入口过旧或能力协议不匹配，请更新入口和共用连接代码；未执行命令",file=sys.stderr)\n sys.exit(78)\n') + ' ' + shlex.quote(tool) + ' ' + shlex.quote("restart" if tool == "dsh-use" and args and args[0] == "restart" else "command") + ''.join(' ' + shlex.quote(f) for f in require) + ' || exit $?\n'
              + 'exec "$__remote_host_tool" ' + shlex.join(["--local", *args]))
     path = "~/.cache/remote-host/tool.$$.sh"
     return (ssh.PRELUDE + "mkdir -p ~/.cache/remote-host || exit $?\n"
@@ -244,12 +244,12 @@ def command_script(tool, args, require=()):
             + f"sh {path} < /dev/null\n__remote_host_rc=$?\nrm -f {path}\nexit $__remote_host_rc\n")
 
 
-from .adapters import _computer_control_capture, _fetch_shot, _write_stdout, _remote_restart, _remote_notify, notify_self
+from .adapters import _computer_use_capture, _fetch_shot, _write_stdout, _remote_restart, _remote_notify, notify_self
 
 
-def _wants_json(args, tool="computer-control"):
+def _wants_json(args, tool="computer-use"):
     words = args[:args.index("--")] if "--" in args else args
-    if tool != "dsh-control" or not words or words[0] != "answer":
+    if tool != "dsh-use" or not words or words[0] != "answer":
         return "--json" in words
     for i, word in enumerate(words):
         if word != "--json":
@@ -263,7 +263,7 @@ def _wants_json(args, tool="computer-control"):
 def _error(tool, message, code, as_json):
     if as_json:
         error = ({"ok": False, "error": {"code": str(code), "message": message}}
-                 if tool in ("dsh-control", "clash-control") else {"ok": False, "error": message, "code": code})
+                 if tool in ("dsh-use", "clash-use") else {"ok": False, "error": message, "code": code})
         print(json.dumps(error, ensure_ascii=False))
     print(f"{tool}: {message}", file=sys.stderr)
 
@@ -272,15 +272,15 @@ def dispatch(tool: str, argv: list[str]) -> tuple[list[str], int | None]:
     """Consume target controls; None means local, otherwise the completed exit code."""
     args = list(argv)
     try:
-        if tool not in ("computer-control", "dsh-control", "browser-control", "clash-control"):
+        if tool not in ("computer-use", "dsh-use", "browser-use", "clash-use"):
             raise ValueError(f"unsupported tool {tool!r}; remote-host routes through route()")
         args, host, local = _extract(argv, tool)
         if local and host is not None and host != "local":
             raise ValueError(f"{tool}: --local conflicts with -H/--host {host!r}")
         if args and args[0] in ("use", "pin", "hosts"):
             return args, _control(tool, args, host)
-        if tool == "dsh-control" and args and args[0] == "restart-watch":
-            parser = argparse.ArgumentParser(prog="dsh-control restart-watch")
+        if tool == "dsh-use" and args and args[0] == "restart-watch":
+            parser = argparse.ArgumentParser(prog="dsh-use restart-watch")
             parser.add_argument("watch_id")
             parser.add_argument("--json", action="store_true")
             parsed = parser.parse_args(args[1:])
@@ -294,26 +294,26 @@ def dispatch(tool: str, argv: list[str]) -> tuple[list[str], int | None]:
         target = "local" if local else resolve_target(tool, host)
         if target == "local":
             return args, None
-        if tool == "browser-control":
-            raise ValueError("browser-control business commands require select_target and the browser-control RPC client")
+        if tool == "browser-use":
+            raise ValueError("browser-use business commands require select_target and the browser-use RPC client")
         print(f"{tool}: target {target}", file=sys.stderr, flush=True)
         previous_proxy = ssh.PROXY["on"]
         ssh.PROXY["on"] = False
         try:
-            computer_control_command = next((x for x in args if not x.startswith("-")), None)
-            if tool == "computer-control" and computer_control_command == "serve":
-                raise ValueError("remote computer-control serve does not support a bidirectional stdin stream; use one-shot commands")
-            if tool == "dsh-control" and computer_control_command == "restart" and "--detach" in args and os.environ.get("DSH_SESSION_ID"):
+            computer_use_command = next((x for x in args if not x.startswith("-")), None)
+            if tool == "computer-use" and computer_use_command == "serve":
+                raise ValueError("remote computer-use serve does not support a bidirectional stdin stream; use one-shot commands")
+            if tool == "dsh-use" and computer_use_command == "restart" and "--detach" in args and os.environ.get("DSH_SESSION_ID"):
                 code = _remote_restart(target, args, os.environ["DSH_SESSION_ID"])
-            elif tool == "dsh-control" and computer_control_command in ("send", "new", "chat") and notify_self(args):
+            elif tool == "dsh-use" and computer_use_command in ("send", "new", "chat") and notify_self(args):
                 code = _remote_notify(target, args, os.environ.get("DSH_SESSION_ID"))
-            elif tool == "computer-control" and computer_control_command in ("snap", "shot") and not any(x in args for x in ("-h", "--help")):
-                code = _computer_control_capture(target, args)
+            elif tool == "computer-use" and computer_use_command in ("snap", "shot") and not any(x in args for x in ("-h", "--help")):
+                code = _computer_use_capture(target, args)
             else:
                 if _wants_json(args, tool):
                     done = ssh.run_remote(target, command_script(tool, args), capture="stdout")
                     code = done.returncode
-                    if done.stdout and tool == "dsh-control":
+                    if done.stdout and tool == "dsh-use":
                         _write_stdout(done.stdout)
                     elif done.stdout:
                         try:
@@ -323,7 +323,7 @@ def dispatch(tool: str, argv: list[str]) -> tuple[list[str], int | None]:
                             _error(tool, "remote --json output is not valid JSON", code, True)
                         else:
                             _write_stdout(done.stdout)
-                    elif code or tool != "dsh-control":
+                    elif code or tool != "dsh-use":
                         code = code or 2
                         _error(tool, "remote command failed" if done.returncode else "remote --json output is empty", code, True)
                 else:

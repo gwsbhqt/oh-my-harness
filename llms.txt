@@ -15,15 +15,15 @@ The Chinese README is the primary, default documentation; the paired English doc
 ## Capability guides
 
 - [Python kernel](docs/dsh-python-repl.en.md): Persistent cells, complete values, snapshots, and limits.
-- [Control and supervision](docs/dsh-control.en.md): Existing-instance access, receipts, settled state, and controller/worker workflow.
+- [Control and supervision](docs/dsh-use.en.md): Existing-instance access, receipts, settled state, and controller/worker workflow.
 - [Monitor](docs/dsh-monitor.en.md): Producer events, delivery modes, lifecycle, and gaps.
 - [Output guard](docs/dsh-output-guard.en.md): Model-stream detection and bounded retry.
 - [Compaction](docs/dsh-compaction-bound.en.md): Retention, exact-user-text indexing, and history-reader guidance.
 - [Message tidy](docs/dsh-message-tidy.en.md): Instruction diffs and provenance-aware notices.
 - [Image cap](docs/dsh-image-cap.en.md): Request image limits and resizing constraints.
 - [History cap](docs/dsh-history-cap.en.md): UI history pagination, not model token limits.
-- [Browser control](docs/browser-control.en.md): Explicit CDP pages and cooperative task ownership.
-- [Computer control](docs/computer-control.en.md): Native macOS targets, input, and result inspection.
+- [Browser control](docs/browser-use.en.md): Explicit CDP pages and cooperative task ownership.
+- [Computer control](docs/computer-use.en.md): Native macOS targets, input, and result inspection.
 - [Remote host](docs/remote-host.en.md): Real SSH destinations and content verification.
 
 ## Design and evidence

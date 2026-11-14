@@ -15,13 +15,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Compile computer-control
+      - name: Compile computer-use
         shell: bash
         run: |
           set -euo pipefail
           sdk_path="$(xcrun --sdk macosx --show-sdk-path)"
-          xcrun swiftc -sdk "$sdk_path" -O skills/computer-control/bin/computer-control.swift -o "$RUNNER_TEMP/computer-control"
-          file "$RUNNER_TEMP/computer-control"
+          xcrun swiftc -sdk "$sdk_path" -O skills/computer-use/bin/computer-use.swift -o "$RUNNER_TEMP/computer-use"
+          file "$RUNNER_TEMP/computer-use"
       - uses: actions/setup-node@v4
         with:
           node-version: '26.13.0'
@@ -29,7 +29,7 @@ jobs:
         with:
           version: '12.18.0'
       - name: Test macOS app install and rollback
-        working-directory: dsh-control
+        working-directory: dsh-use
         run: |
           pnpm install --frozen-lockfile
           node --test --test-name-pattern='restart --install-app|upgrade：安装包' test/restart.test.ts

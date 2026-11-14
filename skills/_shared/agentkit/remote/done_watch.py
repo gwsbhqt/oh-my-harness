@@ -27,7 +27,7 @@ RETRY_CODES = {124, 255, 69}
 
 
 def _state_dir():
-    return Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "dsh-control/remote-done-watches"
+    return Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "dsh-use/remote-done-watches"
 
 
 def _load(path, watch_id):
@@ -98,7 +98,7 @@ def _poll(state):
     ssh.PROXY["on"] = False
     args = ["wait", state["target"], "--since", str(state["since"]), "--settled",
             "--timeout", str(WAIT_SLICE), "--json"]
-    return _classify(ssh.run_remote(state["host"], command_script("dsh-control", args), capture=True))
+    return _classify(ssh.run_remote(state["host"], command_script("dsh-use", args), capture=True))
 
 
 def _invoke(mode, watch_id, directory):
@@ -135,9 +135,9 @@ def final_notice(state, result):
                   "expired": "到观察期限还没做完，本机停止观察，没确认结果",
                   "error": "查询一直出错，本机停止观察，没确认结果"}.get(kind, "结果未知")
         detail = result.get("error") or state.get("message") or ""
-        return (f"dsh-control：{label} {'不见了' if kind == 'gone' else '未确认'}",
-                "\n".join(x for x in (f"dsh-control 派单结果：{_name(state)}{reason}。", detail,
-                                      f"查状态：dsh-control -H {host} status {target}", footer) if x))
+        return (f"dsh-use：{label} {'不见了' if kind == 'gone' else '未确认'}",
+                "\n".join(x for x in (f"dsh-use 派单结果：{_name(state)}{reason}。", detail,
+                                      f"查状态：dsh-use -H {host} status {target}", footer) if x))
     data = result.get("data") or {}
     turns = data.get("turns") if isinstance(data.get("turns"), list) else []
     last = turns[-1] if turns and isinstance(turns[-1], dict) else None
@@ -148,19 +148,19 @@ def final_notice(state, result):
                 "failed": "停下了，但最后一轮没有成功结束",
                 "idle": "停着，但派单之后没有新的一轮结束（消息可能被撤回或删掉了）"}[kind]
     word = {"ok": "已做完", "aborted": "被中止", "failed": "失败", "idle": "没有新结果"}[kind]
-    lines = [f"dsh-control 派单结果：{_name(state)}{headline}。",
+    lines = [f"dsh-use 派单结果：{_name(state)}{headline}。",
              f"结束原因：{reason}。判定口径：这一轮已结束，没在跑、没有排队消息，名下没有在跑的后台任务和子代理，持续目标不会自动续跑。"]
     lines += ["最后没有文字回复。"] if reply is None else ["最后回复的开头：", _cut(reply)]
-    lines += [f"读全文：dsh-control -H {host} last {target}；看目标：dsh-control -H {host} goal {target}。", footer]
-    return f"dsh-control：{label} {word}", "\n".join(lines)
+    lines += [f"读全文：dsh-use -H {host} last {target}；看目标：dsh-use -H {host} goal {target}。", footer]
+    return f"dsh-use：{label} {word}", "\n".join(lines)
 
 
 def question_notice(state, result):
     questions = (result.get("data") or {}).get("questions") or []
     shown = [str(q.get("question") or q.get("text") or q) if isinstance(q, dict) else str(q) for q in questions]
-    return (f'dsh-control：{state["host"]}：{state.get("targetTitle") or state["target"][8:16]} 在等回答',
-            "\n".join([f"dsh-control 派单进度：{_name(state)}还没做完，停下来在等回答：", *shown,
-                       f'回答：dsh-control -H {state["host"]} answer {state["target"]} …；做完时还会再通知你一次。']))
+    return (f'dsh-use：{state["host"]}：{state.get("targetTitle") or state["target"][8:16]} 在等回答',
+            "\n".join([f"dsh-use 派单进度：{_name(state)}还没做完，停下来在等回答：", *shown,
+                       f'回答：dsh-use -H {state["host"]} answer {state["target"]} …；做完时还会再通知你一次。']))
 
 
 def question_keys(result):
@@ -170,7 +170,7 @@ def question_keys(result):
 
 def _deliver(state, summary, text, retry_seconds=180):
     """Notify the local session; wait out a local DSH restart, never resend after an unconfirmed attempt."""
-    argv = [str(Path.home() / ".local/bin/dsh-control"), "--local", "notice", state["localSession"],
+    argv = [str(Path.home() / ".local/bin/dsh-use"), "--local", "notice", state["localSession"],
             text, "--summary", summary, "--json"]
     deadline = time.monotonic() + retry_seconds
     while True:

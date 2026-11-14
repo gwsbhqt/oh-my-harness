@@ -1,4 +1,4 @@
-"""四个工具各自的默认机器：browser-control 选机不执行 SSH、不吞网页命令文字；真实入口互不影响。"""
+"""四个工具各自的默认机器：browser-use 选机不执行 SSH、不吞网页命令文字；真实入口互不影响。"""
 
 import contextlib
 import io
@@ -16,7 +16,7 @@ sys.path.insert(0, str(SHARED))
 from agentkit.remote import pins, ssh, target
 
 
-class BrowserControlRouting(unittest.TestCase):
+class BrowserUseRouting(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -34,13 +34,13 @@ class BrowserControlRouting(unittest.TestCase):
         self.remote = remote.start()
         self.addCleanup(remote.stop)
 
-    def select(self, *argv, tool="browser-control"):
+    def select(self, *argv, tool="browser-use"):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             result = target.select_target(tool, list(argv))
         return result, out.getvalue(), err.getvalue()
 
-    def control(self, *argv, tool="browser-control"):
+    def control(self, *argv, tool="browser-use"):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             result = target.control_target(tool, list(argv))
@@ -48,7 +48,7 @@ class BrowserControlRouting(unittest.TestCase):
         return result
 
     def test_no_pin_defaults_local_except_remote_host(self):
-        for tool in ("browser-control", "computer-control", "dsh-control"):
+        for tool in ("browser-use", "computer-use", "dsh-use"):
             self.assertEqual(target.resolve_target(tool), "local")
             self.assertEqual(self.select("status", tool=tool)[0], (["status"], "local", None))
         with self.assertRaises(ValueError):
@@ -58,30 +58,30 @@ class BrowserControlRouting(unittest.TestCase):
         self.assertFalse((self.home / ".ssh").exists())
 
     def test_use_pin_hosts_and_clear_are_independent(self):
-        defaults = {"remote-host": "alpha", "computer-control": "beta", "dsh-control": "alpha", "browser-control": "beta"}
+        defaults = {"remote-host": "alpha", "computer-use": "beta", "dsh-use": "alpha", "browser-use": "beta"}
         for tool, host in defaults.items():
             self.assertEqual(self.control("pin", host, tool=tool),
                 {"ok": True, "tool": tool, "target": host})
         before = {tool: pins.read_pin(tool) for tool in defaults}
         listed = self.control("hosts")
-        self.assertEqual(listed, {"ok": True, "tool": "browser-control", "target": "beta", "hosts": ["local", "alpha", "beta"]})
-        self.assertEqual(self.control("use", "--clear"), {"ok": True, "tool": "browser-control", "target": "local"})
-        self.assertEqual(target.resolve_target("browser-control"), "local")
-        self.assertFalse(pins.pin_file("browser-control").exists())
-        for tool in ("remote-host", "computer-control", "dsh-control"):
+        self.assertEqual(listed, {"ok": True, "tool": "browser-use", "target": "beta", "hosts": ["local", "alpha", "beta"]})
+        self.assertEqual(self.control("use", "--clear"), {"ok": True, "tool": "browser-use", "target": "local"})
+        self.assertEqual(target.resolve_target("browser-use"), "local")
+        self.assertFalse(pins.pin_file("browser-use").exists())
+        for tool in ("remote-host", "computer-use", "dsh-use"):
             self.assertEqual(pins.read_pin(tool), before[tool])
         self.control("use", "alpha")
         self.control("use", "local")
-        self.assertEqual(target.resolve_target("browser-control"), "local")
-        for tool in ("remote-host", "computer-control", "dsh-control"):
+        self.assertEqual(target.resolve_target("browser-use"), "local")
+        for tool in ("remote-host", "computer-use", "dsh-use"):
             self.assertEqual(pins.read_pin(tool), before[tool])
 
-    def test_each_other_tool_clear_does_not_change_browser_control(self):
+    def test_each_other_tool_clear_does_not_change_browser_use(self):
         self.control("use", "beta")
-        for tool in ("remote-host", "computer-control", "dsh-control"):
+        for tool in ("remote-host", "computer-use", "dsh-use"):
             self.control("use", "alpha", tool=tool)
             self.control("use", "--clear", tool=tool)
-            self.assertEqual(target.resolve_target("browser-control"), "beta")
+            self.assertEqual(target.resolve_target("browser-use"), "beta")
         self.assertEqual(self.select("run", "true", tool="remote-host")[0][2], 2)
 
     def test_explicit_override_is_one_call_only(self):
@@ -90,21 +90,21 @@ class BrowserControlRouting(unittest.TestCase):
             self.assertEqual(self.select(*flag, "status")[0], (["status"], "beta", None))
         for flag in (["--local"], ["-H", "local"]):
             self.assertEqual(self.select(*flag, "status")[0], (["status"], "local", None))
-        self.assertEqual(target.resolve_target("browser-control"), "alpha")
+        self.assertEqual(target.resolve_target("browser-use"), "alpha")
         self.remote.assert_not_called()
 
     def test_unknown_alias_and_conflicts_never_fall_back(self):
         self.control("use", "alpha")
-        before = pins.read_pin("browser-control")
+        before = pins.read_pin("browser-use")
         for argv in (["-H", "missing", "status"], ["-H", "alpha", "--local", "status"],
                      ["-Halpha", "-Hbeta", "status"], ["--host=", "status"], ["-H"]):
             result, _, _ = self.select(*argv)
             self.assertIsNone(result[1])
             self.assertEqual(result[2], 2)
         self.assertFalse(self.control("use", "missing")["ok"])
-        self.assertEqual(pins.read_pin("browser-control"), before)
+        self.assertEqual(pins.read_pin("browser-use"), before)
         with self.assertRaises(ValueError):
-            target.resolve_target("browser-control", "")
+            target.resolve_target("browser-use", "")
         self.remote.assert_not_called()
 
     def test_session_and_browser_values_are_not_commands(self):
@@ -112,7 +112,7 @@ class BrowserControlRouting(unittest.TestCase):
                 "--tab", "use", "--rpc-timeout", "3", "-H", "alpha", "snap", "target"]
         cleaned = argv[:10] + argv[12:]
         self.assertEqual(self.select(*argv)[0], (cleaned, "alpha", None))
-        self.assertEqual(pins.read_pin("browser-control"), {})
+        self.assertEqual(pins.read_pin("browser-use"), {})
 
     def test_equals_global_values_do_not_hide_later_host(self):
         argv = ["--session=pin", "--browser=Chrome", "--socket=/fixture/socket", "--tab=use", "--rpc-timeout=3", "-Hbeta", "status"]
@@ -134,32 +134,32 @@ class BrowserControlRouting(unittest.TestCase):
     def test_separator_blocks_router(self):
         argv = ["--session", "mine", "--", "--host", "alpha", "use"]
         self.assertEqual(self.select(*argv)[0], (argv, "local", None))
-        self.assertEqual(pins.read_pin("browser-control"), {})
+        self.assertEqual(pins.read_pin("browser-use"), {})
 
     def test_leading_browser_options_do_not_hide_control(self):
         result, out, _ = self.select("--session", "snap", "--browser", "Chrome", "--json", "pin", "alpha")
         self.assertEqual(result[1:], (None, 0))
-        self.assertEqual(json.loads(out), {"ok": True, "tool": "browser-control", "target": "alpha"})
+        self.assertEqual(json.loads(out), {"ok": True, "tool": "browser-use", "target": "alpha"})
         self.assertEqual(self.control("--session=use", "--json", "hosts")["target"], "alpha")
 
     def test_select_controls_output_json_and_do_not_execute(self):
         for action in ("use", "pin"):
             result, out, _ = self.select(action, "alpha", "--json")
             self.assertEqual(result, ([action, "alpha", "--json"], None, 0))
-            self.assertEqual(json.loads(out), {"ok": True, "tool": "browser-control", "target": "alpha"})
+            self.assertEqual(json.loads(out), {"ok": True, "tool": "browser-use", "target": "alpha"})
         self.remote.assert_not_called()
 
     def test_control_is_structured_and_refuses_business_commands(self):
-        self.assertEqual(self.control("use"), {"ok": True, "tool": "browser-control", "target": "local"})
+        self.assertEqual(self.control("use"), {"ok": True, "tool": "browser-use", "target": "local"})
         failure = self.control("status")
         self.assertFalse(failure["ok"])
         self.assertEqual(failure["code"], 2)
         self.assertFalse(self.control("use", "alpha", "--cwd", "~/work")["ok"])
-        self.assertEqual(pins.read_pin("browser-control"), {})
+        self.assertEqual(pins.read_pin("browser-use"), {})
 
     def test_malformed_or_unreadable_pin_fails_without_local_fallback(self):
         for raw in ("{", "[]", '{"host":""}', '{"host":null}', '{"hosts":[]}'):
-            path = pins.pin_file("browser-control")
+            path = pins.pin_file("browser-use")
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(raw)
             self.assertEqual(self.select("status")[0][1:], (None, 2))
@@ -175,21 +175,21 @@ class BrowserControlRouting(unittest.TestCase):
         self.control("use", "local", tool="remote-host")
         with self.assertRaises(ValueError):
             target.resolve_target("remote-host")
-        self.assertEqual(target.resolve_target("browser-control"), "local")
+        self.assertEqual(target.resolve_target("browser-use"), "local")
 
     def test_legacy_extract_rules_remain_unchanged(self):
         argv = ["-H", "alpha", "run", "curl", "-H", "Accept: application/json", "url"]
         self.assertEqual(target._extract(argv, "remote-host"), (argv[2:], "alpha", False))
-        self.assertEqual(target._extract(["type", "Finder", "--host"], "computer-control"), (["type", "Finder", "--host"], None, False))
-        self.assertEqual(target._extract(["send", "id", "-H"], "dsh-control"), (["send", "id", "-H"], None, False))
-        for tool in ("computer-control", "dsh-control"):
+        self.assertEqual(target._extract(["type", "Finder", "--host"], "computer-use"), (["type", "Finder", "--host"], None, False))
+        self.assertEqual(target._extract(["send", "id", "-H"], "dsh-use"), (["send", "id", "-H"], None, False))
+        for tool in ("computer-use", "dsh-use"):
             with self.assertRaises(ValueError):
                 target._extract(["status", "-H", "alpha"], tool)
 
-    def test_dispatch_browser_control_remote_refuses_legacy_transport(self):
+    def test_dispatch_browser_use_remote_refuses_legacy_transport(self):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            cleaned, code = target.dispatch("browser-control", ["-H", "alpha", "status"])
+            cleaned, code = target.dispatch("browser-use", ["-H", "alpha", "status"])
         self.assertEqual(cleaned, ["status"])
         self.assertEqual(code, 2)
         self.assertIn("RPC", err.getvalue())

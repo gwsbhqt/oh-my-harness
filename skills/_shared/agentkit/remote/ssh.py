@@ -1,4 +1,4 @@
-"""Real ssh calls shared by remote-host, computer-control, dsh-control and browser-control: options, PATH prelude, payload staging, LAN proxy, failure hints."""
+"""Real ssh calls shared by remote-host, computer-use, dsh-use and browser-use: options, PATH prelude, payload staging, LAN proxy, failure hints."""
 
 import os
 import re
@@ -31,7 +31,7 @@ PRELUDE = (
 
 
 def state_dir(tool):
-    """This tool's local state directory, e.g. ~/.local/state/computer-control."""
+    """This tool's local state directory, e.g. ~/.local/state/computer-use."""
     return Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / tool
 
 

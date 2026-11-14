@@ -191,7 +191,7 @@ const TURN_END_REASON = 'non-persistent monitor stopped at turn end'
 const SUSPEND_REASON = 'suspended for DSH restart'
 
 /**
- * 重启命令（dsh-control 的 dsh-control restart）和本插件之间的约定事件。两边不互相导入，只认这三个名字：
+ * 重启命令（dsh-use 的 dsh-use restart）和本插件之间的约定事件。两边不互相导入，只认这三个名字：
  * - `dsh/restart-survivors`：传进一个 Set，本插件把「重启后能接回来」的任务 id 放进去；
  * - `dsh/restart-prepare`：要退出了，把能接回的监听记进文件、先停掉（不停的话 App 退出会弹确认框）；
  * - `dsh/restart-abort`：重启没成，按文件马上接回来。

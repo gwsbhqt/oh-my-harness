@@ -8,7 +8,7 @@ import { pendingRestart } from '../runtime/restart-state.mjs'
 
 test('维护重启状态：活执行者阻挡，终态与真实死 PID 可恢复，缺失和损坏严格区分', () => {
   const home = mkdtempSync(join(tmpdir(), 'dsh-restart-state-'))
-  const dir = join(home, 'dsh-control')
+  const dir = join(home, 'dsh-use')
   const path = join(dir, 'restart-state.json')
   mkdirSync(dir)
   try {

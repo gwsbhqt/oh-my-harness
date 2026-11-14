@@ -18,21 +18,21 @@ function notice(plugin: string, text: string): MessageLike {
 
 const human: MessageLike = { role: 'user', id: 'h', content: [{ type: 'text', text: '继续' }], source: { kind: 'user' } }
 
-test('the default list frames dsh-control notices without changing their source or authority', () => {
+test('the default list frames dsh-use notices without changing their source or authority', () => {
   const sources = resolveConfig(Config({})).noticeSources
-  const input = notice('dsh-control', 'Continue the existing task; this is not new human authorization.')
+  const input = notice('dsh-use', 'Continue the existing task; this is not new human authorization.')
   const out = labelNotice(input, sources)
   assert.match(out.content[0]!.text!, /the user did not write this/)
   assert.equal(out.source, input.source)
   assert.equal(out.role, input.role)
   assert.equal(labelNotice(human, sources), human)
-  const nonNotice = { ...input, source: { kind: 'dsh-control', form: 'context' } }
+  const nonNotice = { ...input, source: { kind: 'dsh-use', form: 'context' } }
   assert.equal(labelNotice(nonNotice, sources), nonNotice)
 })
 
-test('an explicit source list still opts out of dsh-control labels', () => {
+test('an explicit source list still opts out of dsh-use labels', () => {
   const sources = resolveConfig(Config({ noticeSources: ['tool-jobs'] })).noticeSources
-  const input = notice('dsh-control', 'Continue')
+  const input = notice('dsh-use', 'Continue')
   assert.equal(labelNotice(input, sources), input)
 })
 
