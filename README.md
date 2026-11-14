@@ -20,7 +20,7 @@
 | **核心** | [dsh-python-repl](dsh-python-repl/README.md) | 让助手写 Python 来做事，大块数据留在程序里，只把结论放进对话。[详见下文](#核心一dsh-python-repl让助手写程序做事) |
 | **核心** | [dsh-use](dsh-use/README.md) | 从外面遥控正在运行的 DSH，让一个助手当主控，带着几个助手分头干活。[详见下文](#核心二dsh-use让一个助手带着几个助手干活) |
 | 操作电脑 | [browser-use](skills/browser-use/README.md) · [computer-use](skills/computer-use/README.md) · [remote-host](skills/remote-host/README.md) | 操作网页、Mac 桌面应用、另一台机器。 |
-| 配套插件 | [dsh-monitor](dsh-monitor/README.md) · [dsh-output-guard](dsh-output-guard/README.md) · [dsh-compaction-bound](dsh-compaction-bound/README.md) · [dsh-message-tidy](dsh-message-tidy/README.md) · [dsh-image-cap](dsh-image-cap/README.md) · [dsh-history-cap](dsh-history-cap/README.md) | 后台事件叫醒、拦住失控输出、让长对话不被撑爆。[详见下文](#其他部件) |
+| 配套插件 | [dsh-monitor](dsh-monitor/README.md) · [dsh-guard](dsh-guard/README.md) · [dsh-compaction-bound](dsh-compaction-bound/README.md) · [dsh-message-tidy](dsh-message-tidy/README.md) · [dsh-image-cap](dsh-image-cap/README.md) · [dsh-history-cap](dsh-history-cap/README.md) | 后台事件叫醒、拦住失控输出、让模型自己收口、让长对话不被撑爆。[详见下文](#其他部件) |
 
 部件分两种：**插件**装进 DSH 本身，仓库根目录下 `dsh-` 开头的 8 个文件夹都是；**工具**是助手可以调用的独立程序，放在 `skills/` 下，也能在终端里单独用。每个部件的说明里都放了它的真实演示，点部件名就能看到。
 
@@ -88,7 +88,7 @@
 | 部件 | 它做什么 | 什么时候用 |
 | --- | --- | --- |
 | [dsh-monitor](dsh-monitor/README.md) | 盯着一个一直在跑的程序，它每打出一行，就送进会话叫醒助手。 | 等构建、盯日志、等某个文件出现，不想让助手一遍遍去查。[教程](docs/dsh-monitor.md) |
-| [dsh-output-guard](dsh-output-guard/README.md) | 发现模型开始复读、刷空行、什么都没答就结束时，及时拦下，可以自动重试一次。 | 长任务跑着跑着输出失控。[教程](docs/dsh-output-guard.md) |
+| [dsh-guard](dsh-guard/README.md) | 发现模型开始复读、刷空行、什么都没答就结束时及时拦下、可以重试一次；还能让模型自己暂停、完成目标，空转时自动刹车。 | 长任务跑着跑着输出失控，或模型该收口时停不下来。[教程](docs/dsh-output-guard.md) |
 
 **动手操作电脑**
 
@@ -125,7 +125,7 @@
                     │
                     ├─ 派活给别的会话、等它们做完（dsh-use）
                     ├─ 后台有新消息时被叫醒（dsh-monitor）
-                    └─ 对话再长也有上限（4 个上下文插件 + dsh-output-guard）
+                    └─ 对话再长也有上限（4 个上下文插件 + dsh-guard）
 ```
 
 ## 为什么要做这套扩展

@@ -20,7 +20,7 @@ This repository is **not a standalone app**. It is a set of components that add 
 | **Core** | [dsh-python-repl](dsh-python-repl/README.en.md) | Lets the assistant do its work in Python. Large data stays in the program; only the conclusion goes into the chat. [Details below](#core-1-dsh-python-repl-let-the-assistant-write-programs) |
 | **Core** | [dsh-use](dsh-use/README.en.md) | Remote-controls a running DSH so one assistant can lead several others. [Details below](#core-2-dsh-use-one-assistant-leads-several-others) |
 | Operate the computer | [browser-use](skills/browser-use/README.en.md) · [computer-use](skills/computer-use/README.en.md) · [remote-host](skills/remote-host/README.en.md) | Operate web pages, Mac desktop apps, and another machine. |
-| Supporting plugins | [dsh-monitor](dsh-monitor/README.en.md) · [dsh-output-guard](dsh-output-guard/README.en.md) · [dsh-compaction-bound](dsh-compaction-bound/README.en.md) · [dsh-message-tidy](dsh-message-tidy/README.en.md) · [dsh-image-cap](dsh-image-cap/README.en.md) · [dsh-history-cap](dsh-history-cap/README.en.md) | Wake on background events, stop runaway output, and keep long chats from overflowing. [Details below](#other-components) |
+| Supporting plugins | [dsh-monitor](dsh-monitor/README.en.md) · [dsh-guard](dsh-guard/README.en.md) · [dsh-compaction-bound](dsh-compaction-bound/README.en.md) · [dsh-message-tidy](dsh-message-tidy/README.en.md) · [dsh-image-cap](dsh-image-cap/README.en.md) · [dsh-history-cap](dsh-history-cap/README.en.md) | Wake on background events, stop runaway output, let the model wrap up its own goal, and keep long chats from overflowing. [Details below](#other-components) |
 
 There are two kinds: **plugins** load into DSH itself (the 8 root folders that start with `dsh-`); **tools** are separate programs the assistant can call, under `skills/`, and also work on their own from a terminal. Each component's README has its real demo; click a name to see it.
 
@@ -88,7 +88,7 @@ Click a name to open that component's own README with setup, configuration, limi
 | Component | What it does | Use it when |
 | --- | --- | --- |
 | [dsh-monitor](dsh-monitor/README.en.md) | Watches a long-running command and wakes the assistant with each new line it prints. | You wait on a build, a log, or a file, and don't want the assistant to keep checking. [Guide](docs/dsh-monitor.en.md) |
-| [dsh-output-guard](dsh-output-guard/README.en.md) | Stops the model when it starts repeating itself, printing blank lines, or ending without an answer; can retry once automatically. | Long runs sometimes produce runaway output. [Guide](docs/dsh-output-guard.en.md) |
+| [dsh-guard](dsh-guard/README.en.md) | Stops the model when it starts repeating itself, printing blank lines, or ending without an answer, and can retry once automatically; also lets the model pause and complete its own goal and brakes on stall. | Long runs sometimes produce runaway output, or the model cannot wrap up. [Guide](docs/dsh-output-guard.en.md) |
 
 **Operate the computer**
 
@@ -125,7 +125,7 @@ You ──task──▶ the assistant in DSH
                   │
                   ├─ hands tasks to other sessions and waits for them (dsh-use)
                   ├─ wakes up when a background event arrives (dsh-monitor)
-                  └─ stays within limits however long the chat gets (4 context plugins + dsh-output-guard)
+                  └─ stays within limits however long the chat gets (4 context plugins + dsh-guard)
 ```
 
 ## Why this exists

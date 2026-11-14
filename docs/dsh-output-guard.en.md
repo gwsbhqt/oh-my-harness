@@ -2,7 +2,7 @@
 
 # Recover from runaway model output
 
-`dsh-output-guard` watches agent output while it streams. It can stop repeated text, excessive blank runs, oversized tool arguments, and replies that finish without an answer or usable tool call. Use it to keep a malformed response from consuming the rest of a step and being mistaken for useful progress. It covers the main agent and subagents; non-agent model requests pass through unchanged.
+`dsh-guard` watches agent output while it streams. It can stop repeated text, excessive blank runs, oversized tool arguments, and replies that finish without an answer or usable tool call. Use it to keep a malformed response from consuming the rest of a step and being mistaken for useful progress. It covers the main agent and subagents; non-agent model requests pass through unchanged.
 
 ## What happens during a guarded step
 
@@ -30,4 +30,4 @@ The repository tests exercise synthetic text and tool payloads, stream fragmenta
 
 Legitimate repetitive output or large tool payloads can meet a heuristic limit. If this happens, compare the intended output with the active thresholds before changing them. Settings are read for new requests; configuration changes do not retroactively repair a failed step. Disabling checks removes this protection rather than proving the original output was valid.
 
-See the [plugin README](../dsh-output-guard/README.en.md) for installation, the existing `output-guard` entry, every setting and default, and disabling options. [Output guard design](design/output-guard.en.md) explains the recovery boundary. This is a stream heuristic, so it does not guarantee correct answers or detection of every loop.
+See the [plugin README](../dsh-guard/README.en.md) for installation, the existing `output-guard` entry, every setting and default, and disabling options. [Output guard design](design/output-guard.en.md) explains the recovery boundary. This is a stream heuristic, so it does not guarantee correct answers or detection of every loop.

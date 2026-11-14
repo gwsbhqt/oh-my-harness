@@ -1,4 +1,0 @@
-# 在 profile 的 cordis.patch.yml 写 `- id: output-guard` 加 `disabled: true` 可关闭。
-- insert:
-    - id: output-guard
-      name: dsh-output-guard
