@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readdirSync, lstatSync, readFileSync, realpathSync, existsSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, relative, isAbsolute, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createPlugin } from './scaffold.mjs';
@@ -17,8 +17,18 @@ export const repositoryRoot = invokedTooling && realpathSync(invokedTooling) ===
 export function discoverPlugins(root) {
   return readdirSync(root).filter(name => name.startsWith('dsh-')).sort().map(directory => {
     try {
-      if (!lstatSync(resolve(root, directory)).isDirectory()) throw new Error('不是真实目录（不接受符号链接）');
-      const pkg = JSON.parse(readFileSync(resolve(root, directory, 'package.json'), 'utf8'));
+      const entry = resolve(root, directory);
+      const stat = lstatSync(entry);
+      if (!stat.isDirectory() && !stat.isSymbolicLink()) throw new Error('不是插件目录');
+      if (stat.isSymbolicLink()) {
+        let workspace = realpathSync(root);
+        while (!existsSync(resolve(workspace, '.git')) && dirname(workspace) !== workspace) workspace = dirname(workspace);
+        if (!existsSync(resolve(workspace, '.git'))) throw new Error('符号链接必须位于 Git 工作区内');
+        const target = relative(workspace, realpathSync(entry));
+        if (target === '..' || target.startsWith(`..${sep}`) || isAbsolute(target)) throw new Error('符号链接不能指向 Git 工作区外');
+      }
+      const pkg = JSON.parse(readFileSync(resolve(entry, 'package.json'), 'utf8'));
+      if (stat.isSymbolicLink() && pkg.name !== directory) throw new Error('符号链接名称必须与插件包名一致');
       return { directory, pkg };
     } catch (error) {
       return { directory, error: error.message };
