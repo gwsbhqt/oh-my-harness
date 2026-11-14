@@ -1,0 +1,124 @@
+{
+  "name": "dsh-session-ui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "会话界面四件套：页头只显示还在跑的后台任务和子代理、回复里的真实路径可点、输入框上方说清卡在哪一步、头栏一键复制会话编号。一个条目、一个设置命名空间，四个子开关可单独关掉。",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "session-ui",
+    "jobs",
+    "subagent",
+    "markdown",
+    "file-mention",
+    "status",
+    "diagnostics"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json",
+    "./client": "./lib/client.js"
+  },
+  "files": [
+    "lib/*.js",
+    "cordis.patch.yml",
+    "AGENTS.md",
+    "README.md",
+    "README.en.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-chat",
+        "@deepseek-ai/dsh-client-ui-session",
+        "@deepseek-ai/dsh-client-ui-input-trigger",
+        "@deepseek-ai/dsh-client-ui-sidebar-right",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    },
+    "build": {
+      "manifest": "./lib/dsh-build.json",
+      "inputs": [
+        "src",
+        "package.json",
+        "scripts/build.mjs",
+        "cordis.patch.yml",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        "tsconfig.json",
+        "tsdown.config.ts"
+      ],
+      "outputs": [
+        "lib"
+      ],
+      "repositoryInputs": [
+        "tooling/build.mjs",
+        "tooling/build-manifest.mjs",
+        "tooling/build-manifest.d.mts",
+        "tooling/tsdown.mjs",
+        "tooling/tsdown.d.mts",
+        "tooling/tsconfig.base.json",
+        "tooling/tsconfig.web.json",
+        "tooling/runtime/live.d.mts",
+        "tooling/runtime/live.mjs"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test 'test/**/*.test.ts'",
+    "check": "pnpm run typecheck && pnpm run build && pnpm run test"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/dsh-agent": ">=0.2.1-rc.2",
+    "@deepseek-ai/dsh-credentials": ">=0.2.1-rc.2",
+    "@deepseek-ai/dsh-llm": ">=0.2.1-rc.2",
+    "@deepseek-ai/dsh-tools": ">=0.2.1-rc.2",
+    "@deepseek-ai/schemastery": "^3.18.4"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-api-gateway": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-client-connection": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-chat": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-client-ui-conversation": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-client-ui-input-trigger": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-client-ui-jobs": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-client-ui-open-in-app": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-client-ui-session": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-client-ui-settings": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-client-ui-subagent": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-credentials": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-host-open-in-app": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-host-webserver": "0.2.2-rc.2",
+    "@deepseek-ai/schemastery": "3.19.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsdown": "^0.22.2",
+    "typescript": "^5.9.0"
+  }
+}
