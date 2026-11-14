@@ -174,11 +174,19 @@ export function describeTool(name: string, rawArgs: unknown, inside?: string): P
 export class RunTracker {
   private readonly sessions = new Map<string, SessionState>()
   private hookSeq = 0
-  /** 记不记模型请求的分段用时；没装/没配 magpie 时整块不出现，就不是记下来再干等。 */
-  private readonly trackRequests: boolean
+  /**
+   * 记不记模型请求的分段用时。可以传一个现读函数：网关是后来才配置上的话，
+   * 下一次请求就能开始记，不用重载插件。
+   */
+  private readonly trackRequests: boolean | (() => boolean)
 
-  constructor(options: { trackRequests?: boolean } = {}) {
+  constructor(options: { trackRequests?: boolean | (() => boolean) } = {}) {
     this.trackRequests = options.trackRequests ?? true
+  }
+
+  /** 现读是否记录请求分段。 */
+  private tracking(): boolean {
+    return typeof this.trackRequests === 'function' ? this.trackRequests() : this.trackRequests
   }
 
   private state(id: string): SessionState {
@@ -347,7 +355,7 @@ export class RunTracker {
   }
 
   private request(s: SessionState, d: Record<string, unknown>, now: number): RequestTiming | undefined {
-    if (!this.trackRequests) {
+    if (!this.tracking()) {
       s.reqStart = undefined
       return undefined
     }

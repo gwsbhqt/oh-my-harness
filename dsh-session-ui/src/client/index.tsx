@@ -14,6 +14,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-connection/client'
+import { createToggler } from '../shared/toggle.ts'
 import { apply as applyCopySessionId } from './copy-session-id/index.tsx'
 import { apply as applyHideFinished } from './hide-finished/index.tsx'
 import { apply as applyPathMention } from './path-mention/index.tsx'
@@ -31,17 +32,26 @@ function enabled(form: ConfigForm<unknown>, key: string): boolean {
 
 export function apply(ctx: ClientContext): void {
   const form = ctx.configForms.get<unknown>(NS)
-  let started = false
-  const start = (): void => {
-    if (started) return
-    started = true
-    if (enabled(form, 'hideFinished')) applyHideFinished(ctx)
-    if (enabled(form, 'pathMention')) applyPathMention(ctx)
-    if (enabled(form, 'runStatus')) applyRunStatus(ctx)
-    if (enabled(form, 'copySessionId')) applyCopySessionId(ctx)
-  }
   ctx.effect(() => ctx.configForms.whileServed([NS], () => {
-    start()
-    return () => {}
+    // 每块能力挂在自己的子 fiber 上：关掉时子 fiber 整体卸载，槽位和组件里的监听一起撤销；
+    // 再开时重新挂一个。设置里改开关会通过 form.subscribe 立刻对齐，不用刷新页面。
+    const toggler = createToggler(ctx, {
+      hideFinished: (child) => applyHideFinished(child as ClientContext),
+      pathMention: (child) => applyPathMention(child as ClientContext),
+      runStatus: (child) => applyRunStatus(child as ClientContext),
+      copySessionId: (child) => applyCopySessionId(child as ClientContext),
+    })
+    const sync = (): void => toggler.sync({
+      hideFinished: enabled(form, 'hideFinished'),
+      pathMention: enabled(form, 'pathMention'),
+      runStatus: enabled(form, 'runStatus'),
+      copySessionId: enabled(form, 'copySessionId'),
+    })
+    sync()
+    const unsubscribe = form.subscribe(sync)
+    return () => {
+      unsubscribe()
+      toggler.dispose()
+    }
   }), 'session-ui: features')
 }

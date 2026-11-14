@@ -2,14 +2,18 @@
  * dsh-session-ui 宿主半：一个 loader 条目、一个设置命名空间 session-ui，串起会话界面四块能力。
  *
  * 四块：页头只显示还在跑的后台任务和子代理（纯浏览器半，宿主无动作）、回复里路径可点、
- * 输入框上方的运行状态、头栏复制会话编号。每块在自己的子开关下挂载；关掉的块这里不调用，
- * 不注册路由、不装监听。
+ * 输入框上方的运行状态、头栏复制会话编号。每块在自己的子开关下挂到一个独立子 fiber：
+ * 关掉就把那个子 fiber 整个卸掉，路由、事件监听、计时器、会话投影随之一并撤销；再开重新挂。
+ *
+ * 开关是 volatile 配置。volatile 改动不会重载插件，所以这里监听 loader 的 volatile 更新事件，
+ * 每次更新按当前值重新对齐挂载状态（见 shared/toggle.ts）。
  *
  * @module dsh-session-ui
  */
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { live } from '../../tooling/runtime/live.mjs'
+import { createToggler } from './shared/toggle.ts'
 import { applyCopySessionId } from './host/copy-session-id/index.ts'
 import { applyPathMention } from './host/path-mention/index.ts'
 import { applyRunStatus } from './host/run-status/index.ts'
@@ -38,20 +42,43 @@ function text(cell: unknown): string {
   return typeof value === 'string' ? value : ''
 }
 
+/** 监听 loader 的 volatile 配置更新；回调在配置值已写进运行中的引用之后触发。 */
+function onVolatileUpdate(ctx: Context, listener: () => void): () => void {
+  const on = (ctx as unknown as {
+    on(name: string, callback: () => void): () => void
+  }).on.bind(ctx)
+  return on('loader/volatile-update', listener)
+}
+
 export function apply(ctx: Context, config: ConfigCells): void {
   const logger = ctx.logger('session-ui')
-  const fail = (what: string, error: unknown): void => {
-    logger.warn(`${what}加载失败：${error instanceof Error ? error.message : String(error)}`)
-  }
-  if (enabled(config.pathMention)) {
-    try { applyPathMention(ctx) } catch (error) { fail('路径可点', error) }
-  }
-  if (enabled(config.runStatus)) {
-    try {
-      applyRunStatus(ctx, { magpieBaseUrl: () => text(config.magpieBaseUrl), magpieKeyRef: () => text(config.magpieKeyRef) })
-    } catch (error) { fail('运行状态', error) }
-  }
+
   // 机器代号查询是给输入框会话引用共用的工具，不随按钮开关撤销：按钮关了，粘贴识别仍要认本机。
-  try { applyCopySessionId(ctx) } catch (error) { fail('复制会话编号', error) }
+  try { applyCopySessionId(ctx) } catch (error) {
+    logger.warn(`复制会话编号加载失败：${error instanceof Error ? error.message : String(error)}`)
+  }
+
+  const toggler = createToggler(ctx, {
+    pathMention: (child) => applyPathMention(child),
+    runStatus: (child) => applyRunStatus(child, {
+      magpieBaseUrl: () => text(config.magpieBaseUrl),
+      magpieKeyRef: () => text(config.magpieKeyRef),
+    }),
+  })
+  const sync = (): void => toggler.sync({
+    pathMention: enabled(config.pathMention),
+    runStatus: enabled(config.runStatus),
+  })
+
+  ctx.effect(() => {
+    sync()
+    // volatile 更新不重载插件，靠这个事件把开关变化对到挂载状态上。
+    const off = onVolatileUpdate(ctx, sync)
+    return () => {
+      off()
+      toggler.dispose()
+    }
+  }, 'session-ui: host features')
+
   logger.info('已加载：会话界面四件套')
 }
