@@ -1,0 +1,174 @@
+{
+  "source": "2026-10-16 故障会话第11轮第46步；仅保留无正文的思考事件",
+  "requestStart": 1792091992715,
+  "frames": [
+    {
+      "type": "chunk",
+      "time": 1792091995418,
+      "chunk": {
+        "type": "block-start",
+        "index": 0,
+        "blockType": "reasoning"
+      }
+    },
+    {
+      "type": "chunk",
+      "time": 1792092011195,
+      "chunk": {
+        "type": "block-end",
+        "index": 0,
+        "block": {
+          "type": "reasoning",
+          "text": ""
+        }
+      }
+    },
+    {
+      "type": "chunk",
+      "time": 1792092011201,
+      "chunk": {
+        "type": "block-start",
+        "index": 1,
+        "blockType": "reasoning"
+      }
+    },
+    {
+      "type": "chunk",
+      "time": 1792092029209,
+      "chunk": {
+        "type": "block-end",
+        "index": 1,
+        "block": {
+          "type": "reasoning",
+          "text": ""
+        }
+      }
+    },
+    {
+      "type": "chunk",
+      "time": 1792092029333,
+      "chunk": {
+        "type": "block-start",
+        "index": 2,
+        "blockType": "reasoning"
+      }
+    },
+    {
+      "type": "chunk",
+      "time": 1792092048024,
+      "chunk": {
+        "type": "block-end",
+        "index": 2,
+        "block": {
+          "type": "reasoning",
+          "text": ""
+        }
+      }
+    },
+    {
+      "type": "chunk",
+      "time": 1792092048025,
+      "chunk": {
+        "type": "block-start",
+        "index": 3,
+        "blockType": "reasoning"
+      }
+    },
+    {
+      "type": "chunk",
+      "time": 1792092068575,
+      "chunk": {
+        "type": "block-end",
+        "index": 3,
+        "block": {
+          "type": "reasoning",
+          "text": ""
+        }
+      }
+    },
+    {
+      "type": "chunk",
+      "time": 1792092068691,
+      "chunk": {
+        "type": "block-start",
+        "index": 4,
+        "blockType": "reasoning"
+      }
+    },
+    {
+      "type": "chunk",
+      "time": 1792092084154,
+      "chunk": {
+        "type": "block-end",
+        "index": 4,
+        "block": {
+          "type": "reasoning",
+          "text": ""
+        }
+      }
+    },
+    {
+      "type": "chunk",
+      "time": 1792092084155,
+      "chunk": {
+        "type": "block-start",
+        "index": 5,
+        "blockType": "reasoning"
+      }
+    },
+    {
+      "type": "chunk",
+      "time": 1792092100500,
+      "chunk": {
+        "type": "block-end",
+        "index": 5,
+        "block": {
+          "type": "reasoning",
+          "text": ""
+        }
+      }
+    },
+    {
+      "type": "chunk",
+      "time": 1792092100785,
+      "chunk": {
+        "type": "block-start",
+        "index": 6,
+        "blockType": "reasoning"
+      }
+    },
+    {
+      "type": "chunk",
+      "time": 1792092121606,
+      "chunk": {
+        "type": "block-end",
+        "index": 6,
+        "block": {
+          "type": "reasoning",
+          "text": ""
+        }
+      }
+    },
+    {
+      "type": "chunk",
+      "time": 1792092121723,
+      "chunk": {
+        "type": "block-start",
+        "index": 7,
+        "blockType": "reasoning"
+      }
+    },
+    {
+      "type": "chunk",
+      "time": 1792092138560,
+      "chunk": {
+        "type": "block-end",
+        "index": 7,
+        "block": {
+          "type": "reasoning",
+          "text": ""
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+# dsh-session-ui bundle 补丁层：会话界面四件套。
+#
+# 一个 loader 条目、一个设置命名空间 session-ui，四个子开关默认开启：
+#   hideFinished   页头「后台任务」「子代理」只显示还在跑的
+#   pathMention    回复里本机真实存在的路径渲染成可点的提及（右键用应用打开、可拖拽）
+#   runStatus      输入框上方说清「深度求索中」此刻卡在哪、用时多久；输入框下方统计卡
+#   copySessionId  头栏「复制会话编号」按钮
+# 临时关掉某个子功能在 profile 的 cordis.patch.yml 写只带 id 的覆盖行（不带 name）：
+#   - id: session-ui
+#     config:
+#       runStatus: false
+- insert:
+    - id: session-ui
+      name: "dsh-session-ui"
