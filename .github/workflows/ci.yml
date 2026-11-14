@@ -51,7 +51,7 @@ jobs:
             dsh-python-repl
             dsh-use
             dsh-monitor
-            dsh-output-guard
+            dsh-guard
             dsh-compaction-bound
             dsh-message-tidy
             dsh-image-cap

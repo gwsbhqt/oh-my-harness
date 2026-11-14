@@ -7,7 +7,7 @@ import { reminderSummary, reminderText } from '../../tooling/runtime/notice.mjs'
 import type { LoopRules } from './detector.ts'
 import { guardOutputStream, OUTPUT_LOOP_CODE, REASONING_ONLY_CODE, TOOL_ARGS_TOO_LONG_CODE } from './guard.ts'
 
-export const name = 'dsh-output-guard'
+export const name = 'dsh-guard'
 export const inject = ['llm', 'agents']
 
 export const Config = z.object({
@@ -63,10 +63,10 @@ function noticeFor(code: string): { title: string, text: string } {
 
 function appendRetryNotice(agent: Agent, code: string): void {
   const notice = noticeFor(code)
-  const source = { kind: 'output-guard', form: 'notice', summary: reminderSummary('dsh-output-guard', notice.title) } as unknown as UserMessage['source']
+  const source = { kind: 'output-guard', form: 'notice', summary: reminderSummary('dsh-guard', notice.title) } as unknown as UserMessage['source']
   const message = createUserMessage({
     source,
-    content: [{ type: 'text', text: reminderText('dsh-output-guard', notice.title, notice.text) }],
+    content: [{ type: 'text', text: reminderText('dsh-guard', notice.title, notice.text) }],
   })
   agent.session.append('user/message', message, { surfaceOp: 'append' })
 }

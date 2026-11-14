@@ -1,0 +1,9 @@
+# dsh-guard bundle 补丁层：两个独立条目，各自一个设置命名空间与 enabled 开关。
+# 两个钩子不同（输出用 llm/stream 与 agent/request-error；目标用 systemPrompt、scoped update_goal、session/event），
+# 所以必须指向包的两个不同导出，避免一个条目把两套钩子都装一遍。
+# 关掉其一：在 profile 的 cordis.patch.yml 写 `- id: output-guard` 或 `- id: goal-guard` 加 `disabled: true`。
+- insert:
+    - id: output-guard
+      name: "dsh-guard"
+    - id: goal-guard
+      name: "dsh-guard/goal-guard"
