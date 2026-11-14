@@ -3,7 +3,7 @@ import { after, before, it } from 'node:test'
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { withPythonSkillDocument } from '../src/skill-document-binding.ts'
+import { rewritePythonSkillDispatchLog, withPythonSkillDocument } from '../src/skill-document-binding.ts'
 import { readSkillDocument } from '../src/skill-document.ts'
 import type { SkillSummary } from '../src/skill-discovery.ts'
 
@@ -193,4 +193,27 @@ it('leaves non-skill bindings and unexpected tool result shapes untouched', asyn
 it('fails explicitly rather than choosing between duplicate matching document records', async () => {
   const f = fixture()
   await assert.rejects(withPythonSkillDocument('skill', async () => f.result, [f.record, { ...f.record }])({ name: 'demo' }), /multiple Python document records/)
+})
+
+it('rewrites the durable dispatch-log copy of a skill sub-call to the Python document the cell read', () => {
+  const f = fixture()
+  const original = [{ type: 'text' as const, text: rendered('demo', f.directory, f.standard) }]
+  const out = rewritePythonSkillDispatchLog(original, [f.record])
+  assert.ok(out !== undefined)
+  assert.equal(out.length, 1)
+  assert.equal(out[0]!.type, 'text')
+  assert.equal((out[0] as { text: string }).text, rendered('demo', f.directory, f.python))
+  // The settled input is not mutated.
+  assert.equal((original[0] as { text: string }).text, rendered('demo', f.directory, f.standard))
+})
+
+it('keeps the settled log copy for no PYSKILL, no match, a directory mismatch, or a non-directory text', () => {
+  const cli = fixture('SKILL.md')
+  const f = fixture()
+  const dispatched = (dir: string) => [{ type: 'text' as const, text: rendered('demo', dir, f.standard) }]
+  assert.equal(rewritePythonSkillDispatchLog(dispatched(cli.directory), [cli.record]), undefined)
+  assert.equal(rewritePythonSkillDispatchLog(dispatched(f.directory), []), undefined)
+  assert.equal(rewritePythonSkillDispatchLog(dispatched(join(home, 'not-a-skill')), [f.record]), undefined)
+  assert.equal(rewritePythonSkillDispatchLog([{ type: 'text' as const, text: 'plain result' }], [f.record]), undefined)
+  assert.equal(rewritePythonSkillDispatchLog([], [f.record]), undefined)
 })
