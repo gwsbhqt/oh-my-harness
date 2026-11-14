@@ -74,7 +74,8 @@ export function applyRunStatus(ctx: Context, config: RunStatusHostConfig): void 
       return undefined
     }
   }
-  const tracker = new RunTracker({ trackRequests: gateway() !== undefined })
+  // 现读网关：远程地址是后来才配上的话，下一次请求就能开始记分段，不必重载插件。
+  const tracker = new RunTracker({ trackRequests: () => gateway() !== undefined })
   const now = () => Date.now()
   const resolveRef = async (name: string) => {
     const found = await ctx.get('credentials')?.resolve(credentialRef(name))
@@ -165,8 +166,24 @@ export function applyRunStatus(ctx: Context, config: RunStatusHostConfig): void 
 
   // 整段会话统计登记成宿主的会话投影：宿主负责从日志折出来、存检查点、推给网页，聊天记录压缩后数字也不变。
   ctx.inject(['sessionProjections'], async (projCtx) => {
-    const registry = (projCtx as unknown as { sessionProjections: { register: (definition: unknown) => PromiseLike<unknown> } }).sessionProjections
-    await registry.register(totalsProjection)
+    const registry = (projCtx as unknown as {
+      sessionProjections: { register: (definition: unknown) => PromiseLike<{ dispose?: () => Promise<void> } | undefined> }
+    }).sessionProjections
+    let handle: { dispose?: () => Promise<void> } | undefined
+    try {
+      handle = await registry.register(totalsProjection)
+    } catch {
+      return
+    }
+    // 投影登记在投影服务自己的 fiber 上，不随本块子 fiber 自动消失；把返回的句柄挂到本块 effect 上，
+    // 关掉 runStatus 时连同投影一起撤销，否则会一直存在、白算统计。
+    if (typeof handle?.dispose !== 'function') return
+    const dispose = handle.dispose.bind(handle)
+    try {
+      projCtx.effect(() => () => { void dispose() }, 'run-status: totals projection')
+    } catch {
+      void dispose()
+    }
   })
 
   ctx.inject(['webServer'], (webCtx) => {

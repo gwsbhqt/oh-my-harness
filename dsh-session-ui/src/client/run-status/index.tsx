@@ -18,7 +18,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { IconGaugeOutlineRegular, useDismissOnOutsidePointer } from '@deepseek-ai/dsh-client-ui-primitives'
-import { breakdown, formatDuration, formatSpeed, formatStatDuration } from '../../shared/run-status/format.ts'
+import { breakdown, formatDuration, formatSpeed, formatStatDuration, recentRequestLines } from '../../shared/run-status/format.ts'
 import { STATE_PATH, type BlockerKind, type RunSnapshot } from '../../shared/run-status/types.ts'
 import type { TotalsView } from '../../host/run-status/totals.ts'
 import { DOCK_SLOT, RUNNING_CONTENT, RUNNING_ROW, SESSION_ROOT, STATS_ENTRY_ID, STATS_ENTRY_ORDER, STATS_ENTRY_PRIORITY, STATS_SLOT, TOTALS_KEY } from './ids.ts'
@@ -226,6 +226,8 @@ interface Row {
   readonly value: string
   readonly dot?: string
   readonly title?: string
+  /** 说明较长需要折行时置真（分段用时那一栏），其余仍在右边单行显示。 */
+  readonly wrap?: boolean
 }
 
 /** 一组「左说明、右数字」，和宿主自带弹窗同一种排法；几组之间用细线隔开。 */
@@ -235,7 +237,7 @@ function Rows({ rows }: { rows: readonly Row[] }): JSX.Element {
       {rows.map((r) => (
         <div key={r.key} className="dsh-rs-pair" title={r.title}>
           <dt>{r.dot !== undefined && <span className="dsh-rs-dot" style={{ background: r.dot }} />}<span className="dsh-rs-dt-text">{r.label}</span></dt>
-          <dd>{r.value}</dd>
+          <dd style={r.wrap === true ? { whiteSpace: 'normal', textAlign: 'left' } : undefined}>{r.value}</dd>
         </div>
       ))}
     </dl>
@@ -290,6 +292,14 @@ function speedRows(totals: TotalsView, running: boolean): Row[] {
   return rows
 }
 
+/**
+ * 最近几次走 magpie 的模型请求各段用时。数据直接来自宿主快照的 requests；
+ * 网关没配时宿主根本不记请求，这里就是空的，整区不出现。
+ */
+function requestRows(snap: RunSnapshot): Row[] {
+  return recentRequestLines(snap.requests).map((r) => ({ ...r, wrap: true }))
+}
+
 function turnRows(snap: RunSnapshot, hostNow: number): Row[] {
   const head = snap.turn === undefined ? '本轮' : `第 ${snap.turn} 轮`
   const rows: Row[] = []
@@ -315,7 +325,8 @@ function StatsPill(props: Props): JSX.Element | null {
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [open])
-  const { snap, skew } = useSnapshot(props.sessionId, running && open)
+  // 面板打开就取快照：会话结束后仍要看得到最近请求的分段，不只是跑着的时候。
+  const { snap, skew } = useSnapshot(props.sessionId, open)
   const now = useTick(open)
   useEffect(ensureStyle, [])
   const steps = totals?.steps ?? host?.steps ?? 0
@@ -338,10 +349,12 @@ function StatsPill(props: Props): JSX.Element | null {
         <div ref={panelRef} className="dsh-rs-panel" role="dialog" aria-label="会话统计" style={{ positionAnchor: anchorName } as CSSProperties}>
           <div className="dsh-rs-title"><span className="dsh-rs-title-label">{icon}会话统计</span><span className="dsh-rs-num">{counts}</span></div>
           <div className="dsh-rs-rule" aria-hidden="true" />
-          {(totals === undefined
-            ? [host === undefined ? [] : hostRows(host)]
-            : [wallRows(totals, hostNow), workRows(totals), speedRows(totals, running), running && snap?.running === true ? turnRows(snap, hostNow) : []]
-          ).filter((group) => group.length > 0).map((group, i) => (
+          {[
+            ...(totals === undefined
+              ? [host === undefined ? [] : hostRows(host)]
+              : [wallRows(totals, hostNow), workRows(totals), speedRows(totals, running), running && snap?.running === true ? turnRows(snap, hostNow) : []]),
+            ...(snap === null ? [] : [requestRows(snap)]),
+          ].filter((group) => group.length > 0).map((group, i) => (
             <div key={i}>
               {i > 0 && <div className="dsh-rs-rule dsh-rs-gap-rule" aria-hidden="true" />}
               <Rows rows={group} />

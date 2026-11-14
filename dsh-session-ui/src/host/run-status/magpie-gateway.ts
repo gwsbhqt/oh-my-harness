@@ -62,8 +62,11 @@ function isLoopback(base: string): boolean {
  * 算出这次该用的网关。本机装了 Magpie 时用本机地址和本机钥匙（忽略远程配置）；没装时用显式配置的
  * 远程地址和引用名；都没有返回 undefined。
  */
-export function resolveMagpieGateway(input: MagpieGatewayInput): ResolvedMagpieGateway | undefined {
-  if (hasLocalMagpie()) return { magpieBaseUrl: LOCAL_MAGPIE_BASE_URL, magpieKeyRef: LOCAL_MAGPIE_KEY_REF }
+export function resolveMagpieGateway(
+  input: MagpieGatewayInput,
+  localMagpie: () => boolean = hasLocalMagpie,
+): ResolvedMagpieGateway | undefined {
+  if (localMagpie()) return { magpieBaseUrl: LOCAL_MAGPIE_BASE_URL, magpieKeyRef: LOCAL_MAGPIE_KEY_REF }
   const configuredBase = input.baseUrl.trim()
   if (configuredBase === '') return undefined
   const url = new URL(configuredBase)
