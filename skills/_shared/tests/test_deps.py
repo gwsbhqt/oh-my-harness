@@ -1,4 +1,4 @@
-"""agentkit/deps.py：找 computer-control 技能目录的规则和缺失时的报错。"""
+"""agentkit/deps.py：配套技能源码、显式路径和安装包的加载契约。"""
 import importlib.util
 import os
 from pathlib import Path
@@ -24,7 +24,7 @@ class Deps(unittest.TestCase):
         path.start()
         self.addCleanup(modules.stop)
         self.addCleanup(path.stop)
-        for name in [n for n in sys.modules if n.split(".")[0] == "computer_control"]:
+        for name in [n for n in sys.modules if n.split(".")[0] in {"computer_control", "browser_control"}]:
             del sys.modules[name]
 
     def test_default_follows_real_path_through_symlink(self):
@@ -34,7 +34,8 @@ class Deps(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         self.assertEqual(module.SKILLS, SHARED.parent)
-        self.assertTrue((module.SKILLS / "computer-control" / "src" / "computer_control" / "__init__.py").is_file())
+        for name in ("computer_control", "browser_control"):
+            self.assertTrue((module.SKILLS / name.replace("_", "-") / "src" / name / "__init__.py").is_file())
 
     def test_computer_control_env_override_and_missing(self):
         package = self.root / "src" / "computer_control"
@@ -46,6 +47,33 @@ class Deps(unittest.TestCase):
             with self.assertRaisesRegex(ImportError, "computer-control"):
                 deps.computer_control()
 
+
+    def test_browser_control_env_override_and_missing(self):
+        package = self.root / "src" / "browser_control"
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text("WHERE = 'override'\n")
+        with mock.patch.dict(os.environ, {"BROWSER_CONTROL_SKILL": str(self.root)}):
+            self.assertEqual(deps.browser_control().WHERE, "override")
+        with mock.patch.dict(os.environ, {"BROWSER_CONTROL_SKILL": str(self.root / "absent")}):
+            with self.assertRaisesRegex(ImportError, "browser-control"):
+                deps.browser_control()
+
+    def test_browser_control_installed_import_and_missing_nested_dependency(self):
+        with (mock.patch.object(deps, "SKILLS", self.root / "wheel-layout"),
+              mock.patch.dict(os.environ, {}, clear=True),
+              mock.patch.object(deps.importlib, "import_module", return_value="installed") as load):
+            self.assertEqual(deps.browser_control(), "installed")
+            load.assert_called_once_with("browser_control")
+        for missing, expected in ((ModuleNotFoundError("missing", name="browser_control"), ImportError),
+                                  (ModuleNotFoundError("missing", name="required_dependency"), ModuleNotFoundError)):
+            with (self.subTest(dependency=missing.name),
+                  mock.patch.object(deps, "SKILLS", self.root / "wheel-layout"),
+                  mock.patch.dict(os.environ, {}, clear=True),
+                  mock.patch.object(deps.importlib, "import_module", side_effect=missing)):
+                with self.assertRaises(expected) as failure:
+                    deps.browser_control()
+                if expected is ModuleNotFoundError:
+                    self.assertIs(failure.exception, missing)
 
     def test_installed_package_uses_the_same_canonical_import(self):
         with (mock.patch.object(deps, "SKILLS", self.root / "wheel-layout"),

@@ -76,9 +76,11 @@ dsh-control send <长工> '<任务书全文，或「读 <计划文档> 的 X 节
 
 跨机器就在每条前面加 `-H <机器>`，其余不变；跨机器不能用 `chat --notify self`。保存回执里的 `sessionId` 和 `since`，回执的 `data.notify` 有 `watchId` 才算通知登记上了，有 `error` 就别重发，改用 `wait --settled` 自己等。然后挂兜底检查（持久后台服务，DSH 重启后自动接回；`--quiet` 让它的常规输出不叫醒主控，只有它发的 notice 才叫醒）：
 
+先按加载本技能时给出的资源目录找到 `scripts/watchdog.py`，把下例的 `<本技能绝对目录>` 换成这个目录。技能可以随插件安装，不假定它在用户家目录的某个固定位置。
+
 ```bash
 dsh-control monitor "$DSH_SESSION_ID" --cwd <项目绝对路径> --label 'dsh-supervise 兜底检查' --quiet \
-  --command "python3 -I $HOME/.agents/skills/dsh-supervise/scripts/watchdog.py --lead $DSH_SESSION_ID --worker <长工编号>"
+  --command "python3 -I '<本技能绝对目录>/scripts/watchdog.py' --lead $DSH_SESSION_ID --worker <长工编号>"
 ```
 
 记下返回的任务编号。多个长工就重复 `--worker`，一个兜底检查盯全部；长工在另一台机器就在命令里加 `--host <机器>`（一个兜底检查只盯一台机器）。卡死阈值默认 30 分钟（`--stall-minutes`），长工有超过半小时的构建或测试时调大；断线后多久再提醒一次默认 15 分钟（`--outage-minutes`）。

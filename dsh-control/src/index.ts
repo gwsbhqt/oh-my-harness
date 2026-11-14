@@ -32,7 +32,7 @@ import { DesktopNotifications, sendDesktopNotification, showSystemNotification }
 import { ownerGateway, type ConnectionLike, type HostGatewayLike } from '../../tooling/runtime/gateway.mjs'
 import { CommandFailure, type TypertLocalLike } from './gateway.ts'
 import { COMMANDS, runCommand } from './commands.ts'
-import { resolveModelTiers, type ConfiguredTiers, type SharedTiersLike, type TierTable, type UsageReportLike } from './models.ts'
+import { resolveModelTiers, type ConfiguredTiers, type SharedTiersLike, type ModelTiersLike, type TierTable, type UsageReportLike } from './models.ts'
 import { PendingQuestions, type AnswerBatch } from './questions.ts'
 import { startServer } from './server.ts'
 import { MachinePage, machineRoutes, realMachineDeps, type FetchRoute, type Layout } from './machines.ts'
@@ -230,6 +230,7 @@ export function apply(ctx: Context, config: ConfigCells): void {
     typert: (ctx as unknown as { typert: { local: TypertLocalLike } }).typert.local,
     query: (ctx as unknown as { sessionQuery: SessionQueryLike }).sessionQuery,
     usage,
+    modelTiers: () => ctx.get('modelTiers') as ModelTiersLike | undefined,
     onStatus: (listener) => {
       statusListeners.add(listener)
       return () => statusListeners.delete(listener)
