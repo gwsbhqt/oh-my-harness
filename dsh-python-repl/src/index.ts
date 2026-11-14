@@ -28,8 +28,10 @@ import { readPanelLifecycle, readPanelSnapshot } from './snapshot.ts'
 import { controlRoute, nameRoute, panelRoute, previewRoute, type PanelWebServer } from './panel-route.ts'
 import type { PanelControlAction, PanelControlResult, PanelNameAction, PanelNameResult, PanelState } from './panel-types.ts'
 import type { BoundTool } from './lease.ts'
+import { rewritePythonSkillDispatchLog } from './skill-document-binding.ts'
 import { renderResidentAccess, renderSkillCatalog, rewriteSdkSection, RUN_CODE_EXECUTION_INSTRUCTIONS, renderToolSummaries } from './prompt.ts'
 import { isSubagentAgent, isSubagentHeader } from './subagent.ts'
+import type {} from '@deepseek-ai/dsh-tool-executor-ptc'
 import { renderToolsSdkPy } from '@deepseek-ai/dsh-tool-executor-ptc'
 import { TOP_LEVEL, type ToolSchemaLike } from './catalog.ts'
 import { applyPresetWorkflowOff } from './preset-workflow.ts'
@@ -301,6 +303,18 @@ export class PythonReplRuntime extends PtcRuntime {
     // Returned, not voided: the host waits for the final snapshots and kernel exits.
     ctx.effect(() => () => this.disposeAll().catch((error: unknown) => this.reportCloseFailure(error)), 'python-repl teardown')
     ctx.on('agent/disposed', ({ agent }) => void this.releaseIfUnused(agent))
+    // The skill tool settles with SKILL.md; the Python bridge swaps in PYSKILL.md only on the
+    // value the cell receives afterwards, so the settled projection DSH logs still shows SKILL.md.
+    // Rewrite that durable log copy (the program's value is untouched) so the conversation shows
+    // what the model actually read.
+    ctx.on('tools/ptc-dispatch-log', async (dispatch, next) => {
+      const content = await next()
+      if (dispatch.name !== 'skill' || dispatch.isError === true) return content
+      const key = sessionKeyOf(dispatch.agent)
+      if (key === undefined) return content
+      const records = this.discoveryFor(key, scopeCwd(dispatch.agent)).skills
+      return rewritePythonSkillDispatchLog(content, records) ?? content
+    })
     // Idle kernels are stopped to free memory (ReplSession.reclaimIfIdle); a sweep every few minutes is cheap.
     ctx.effect(() => {
       const timer = setInterval(() => void this.reclaimIdle(), IDLE_SWEEP_MS)
