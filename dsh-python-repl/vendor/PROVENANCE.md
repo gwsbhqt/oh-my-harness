@@ -5,25 +5,27 @@
 | 项 | 值 |
 |---|---|
 | 仓库 | https://github.com/PrimeIntellect-ai/prime-agent |
-| 跟踪的 tag | `v0.10.2` |
-| **锁定的 commit** | **`ea9d9602ec0938d9e454e8963107cd85af1565c6`** |
+| 跟踪的 tag | `v0.10.3` |
+| **锁定的 commit** | **`efb25e2be62507f8a13a157545d031da213abac9`** |
 | 仓库内路径 | `prime-agent-runtime/src/rlm/` |
-| 对应发布 | Prime Agent Rust 版 0.10.2（安装包自带 `share/prime-agent/prime-agent-runtime/`） |
+| 对应发布 | Prime Agent Rust 版 0.10.3（安装包自带 `share/prime-agent/prime-agent-runtime/`） |
 | 许可证 | MIT（见 `prime/LICENSE`） |
-| 取用日期 | 2026-10-30 |
+| 取用日期 | 2026-10-30（v0.10.2 首次取用）；2026-11-14 核对并推进跟踪基线到 v0.10.3 |
 
 **以 commit 为准，不以 tag 为准**：tag 可以被移动，commit 不会。核对时用下面的固定链接，不要用 `main`。
 
 文件取自上述 commit 的 Git 对象，已逐字节核对；本次升级修复快照恢复写入句柄时重新打开并清空文件的问题。
 
+2026-11-14 核对 v0.10.3：内核 `repl.py`、`repl.md` 与 `LICENSE` 同 v0.10.2 逐字节一致，三个哈希均未变；仅把跟踪基线从 v0.10.2 推进到 v0.10.3，`vendor/prime/` 内容未做任何改动。
+
 ### 精确定位（点开即是我们 vendor 的那个版本）
 
 | vendor 里的文件 | 上游固定链接（commit 锁定） |
 |---|---|
-| `prime/rlm/repl.py` | [blob](https://github.com/PrimeIntellect-ai/prime-agent/blob/ea9d9602ec0938d9e454e8963107cd85af1565c6/prime-agent-runtime/src/rlm/repl.py) · [raw](https://raw.githubusercontent.com/PrimeIntellect-ai/prime-agent/ea9d9602ec0938d9e454e8963107cd85af1565c6/prime-agent-runtime/src/rlm/repl.py) |
-| `prime/rlm/repl.md` | [blob](https://github.com/PrimeIntellect-ai/prime-agent/blob/ea9d9602ec0938d9e454e8963107cd85af1565c6/prime-agent-runtime/src/rlm/repl.md) · [raw](https://raw.githubusercontent.com/PrimeIntellect-ai/prime-agent/ea9d9602ec0938d9e454e8963107cd85af1565c6/prime-agent-runtime/src/rlm/repl.md) |
-| `prime/LICENSE` | [blob](https://github.com/PrimeIntellect-ai/prime-agent/blob/ea9d9602ec0938d9e454e8963107cd85af1565c6/LICENSE) · [raw](https://raw.githubusercontent.com/PrimeIntellect-ai/prime-agent/ea9d9602ec0938d9e454e8963107cd85af1565c6/LICENSE) |
-| 整个源目录 | [prime-agent-runtime/src/rlm/](https://github.com/PrimeIntellect-ai/prime-agent/tree/ea9d9602ec0938d9e454e8963107cd85af1565c6/prime-agent-runtime/src/rlm) |
+| `prime/rlm/repl.py` | [blob](https://github.com/PrimeIntellect-ai/prime-agent/blob/efb25e2be62507f8a13a157545d031da213abac9/prime-agent-runtime/src/rlm/repl.py) · [raw](https://raw.githubusercontent.com/PrimeIntellect-ai/prime-agent/efb25e2be62507f8a13a157545d031da213abac9/prime-agent-runtime/src/rlm/repl.py) |
+| `prime/rlm/repl.md` | [blob](https://github.com/PrimeIntellect-ai/prime-agent/blob/efb25e2be62507f8a13a157545d031da213abac9/prime-agent-runtime/src/rlm/repl.md) · [raw](https://raw.githubusercontent.com/PrimeIntellect-ai/prime-agent/efb25e2be62507f8a13a157545d031da213abac9/prime-agent-runtime/src/rlm/repl.md) |
+| `prime/LICENSE` | [blob](https://github.com/PrimeIntellect-ai/prime-agent/blob/efb25e2be62507f8a13a157545d031da213abac9/LICENSE) · [raw](https://raw.githubusercontent.com/PrimeIntellect-ai/prime-agent/efb25e2be62507f8a13a157545d031da213abac9/LICENSE) |
+| 整个源目录 | [prime-agent-runtime/src/rlm/](https://github.com/PrimeIntellect-ai/prime-agent/tree/efb25e2be62507f8a13a157545d031da213abac9/prime-agent-runtime/src/rlm) |
 
 ## 文件与哈希
 
@@ -42,7 +44,7 @@ sha256，与上述 commit 的内容逐字节一致（已实际下载核对，不
 在插件根目录跑：
 
 ```bash
-BASE=https://raw.githubusercontent.com/PrimeIntellect-ai/prime-agent/ea9d9602ec0938d9e454e8963107cd85af1565c6
+BASE=https://raw.githubusercontent.com/PrimeIntellect-ai/prime-agent/efb25e2be62507f8a13a157545d031da213abac9
 for f in repl.py repl.md; do
   remote=$(curl -sL "$BASE/prime-agent-runtime/src/rlm/$f" | shasum -a 256 | cut -d' ' -f1)
   local=$(shasum -a 256 "vendor/prime/rlm/$f" | cut -d' ' -f1)
@@ -70,7 +72,7 @@ local=$(shasum -a 256 vendor/prime/LICENSE | cut -d' ' -f1)
 `vendor/prime/` **整个目录都是上游的**，一个字节没改。不需要"哪个文件是我们的"这种说明——归属由目录决定：
 
 ```
-vendor/prime/          ← 全部是上游 prime-agent 0.10.2 的东西，只读
+vendor/prime/          ← 全部是上游 prime-agent 0.10.3 的东西，只读
 python/compat/     ← 全部是我们自己的东西
 ```
 
@@ -123,10 +125,10 @@ vendor 文件不改，但 DSH 在运行时改了上游模块里的这几样，�
 1. 选定新的 tag，**解析成 commit**：`git rev-list -n 1 <tag>`。tag 会移动，记 commit。
 2. 先看 diff，别直接覆盖：
    ```bash
-   git diff ea9d9602ec0938d9e454e8963107cd85af1565c6..<新commit> -- prime-agent-runtime/src/rlm/repl.py
+   git diff efb25e2be62507f8a13a157545d031da213abac9..<新commit> -- prime-agent-runtime/src/rlm/repl.py
    ```
    重点看三处：wire 协议（`repl.md` 的 protocol 版本、事件字段）、`_current_cell` 还在不在（我们的按格归属靠它）、`from .bash import` 那行有没有改成 import 别的符号。
-   `repl.md` 不一定列全请求类型（0.10.2 的 `factory_activity` 只出现在 `repl.py`），要对照 `repl.py` 里 `_REQUIRED_FIELDS` 和文件开头的 `from . import`。
+   `repl.md` 不一定列全请求类型（0.10.3 的 `factory_activity` 只出现在 `repl.py`），要对照 `repl.py` 里 `_REQUIRED_FIELDS` 和文件开头的 `from . import`。
 3. 覆盖 `vendor/prime/rlm/` 下的文件，**只覆盖，不编辑**。
 4. 更新本文件：commit、所有固定链接、三个哈希。
 5. 跑 `pnpm run check`。`test/python/test_vendor_integration.py` 会立刻告诉你哈希对不对、vendor 目录有没有混进我们的文件、`rlm.repl` 的契约还成不成立。

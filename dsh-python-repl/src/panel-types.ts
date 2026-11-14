@@ -102,6 +102,14 @@ export interface PanelCell {
   /** First non-blank code line, clipped; the code is the model's own cell text. */
   firstLine: string
   lines: number
+  /** The cell's own source, clipped to a per-cell cap so one record stays bounded; absent on records written before this field existed. */
+  code?: string
+  /** True when `code` is only the leading part of the source because it exceeded the cap. */
+  codeClipped?: boolean
+  /** The cell's visible output (stdout, displayed value, notes), clipped to a per-cell cap; absent on records written before this field existed. */
+  output?: string
+  /** True when `output` is only the leading part because it exceeded the cap. */
+  outputClipped?: boolean
   /** Host tool calls this cell made through the bridge, in first-call order. */
   tools: Array<{ name: string; calls: number; errors: number }>
   outputChars: number | null

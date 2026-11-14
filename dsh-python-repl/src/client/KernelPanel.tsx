@@ -9,7 +9,7 @@ const SURFACE_ATTR = 'data-kernel-panel-surface'
 const css = `
 [data-conversation-scroll][${SURFACE_ATTR}]>[data-composer-seat]:not(:has([data-approval-key],[data-question-key],[data-plan-review-key])),[data-conversation-scroll][${SURFACE_ATTR}]~[data-width-handle]{display:none}
 .dsh-kernel-panel{--kb-line:var(--dsw-alias-border-l2,color-mix(in srgb,currentColor 12%,transparent));--kb-muted:var(--dsw-alias-label-tertiary,#888);--kb-soft:var(--dsw-alias-label-secondary,#aaa);--kb-fill:var(--dsw-alias-interactive-bg-hover,color-mix(in srgb,currentColor 6%,transparent));--kb-panel:color-mix(in srgb,currentColor 2%,transparent);--kb-ok:var(--dsw-alias-state-success-primary,#3fa66b);--kb-err:var(--dsw-alias-state-danger-primary,#d0533f);--kb-warn:var(--dsw-alias-state-warning-primary,#c48a2c);--kb-live:var(--dsw-alias-state-business-primary,#4d7cf0);--kb-class:#9b72e8;container:kernel / inline-size;height:100%;overflow:hidden auto;display:flex;flex-direction:column;box-sizing:border-box;padding:14px 24px 20px;color:var(--dsw-alias-label-primary,inherit);font-size:12px;line-height:1.5;font-variant-numeric:tabular-nums}
-.dsh-kernel-panel *{box-sizing:border-box}.kb-shell{width:100%;max-width:1240px;margin:0 auto;flex:1 0 auto;display:flex;flex-direction:column;gap:12px}
+.dsh-kernel-panel *{box-sizing:border-box}.kb-shell{width:100%;max-width:1240px;margin:0 auto;flex:1 1 auto;min-height:0;display:flex;flex-direction:column;gap:12px}
 .kb-head{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:26px}.kb-head-main{display:flex;align-items:center;gap:10px;min-width:0}.kb-head h1{font-size:15px;font-weight:600;margin:0;white-space:nowrap}
 .kb-pill{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 9px;border-radius:11px;background:var(--kb-fill);font-size:11px;white-space:nowrap;flex:none}
 .kb-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--kb-muted);flex:none}.kb-dot[data-tone=ok]{background:var(--kb-ok)}.kb-dot[data-tone=error]{background:var(--kb-err)}.kb-dot[data-tone=warn]{background:var(--kb-warn)}.kb-dot[data-tone=live]{background:var(--kb-live)}
@@ -20,14 +20,14 @@ const css = `
 .kb-stack{display:flex;height:4px;border-radius:2px;overflow:hidden;margin-top:6px;background:var(--kb-fill)}.kb-stack>span{height:100%}
 .kb-row2{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:12px}.kb-card{border:1px solid var(--kb-line);border-radius:10px;padding:10px 14px 10px;min-width:0;display:flex;flex-direction:column}
 .kb-card-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:8px}.kb-card-title{font-weight:600}.kb-card-note{font-size:11px;color:var(--kb-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.kb-timeline{display:flex;align-items:flex-end;gap:2px;height:72px;border-bottom:1px solid var(--kb-line)}.kb-bar{flex:1 1 0;max-width:12px;min-width:2px;border:0;padding:0;border-radius:2px 2px 0 0;background:var(--kb-ok);opacity:.72;cursor:pointer;transition:opacity .12s}
+.kb-timeline{display:flex;align-items:flex-end;gap:2px;flex:1 1 auto;min-height:56px;border-bottom:1px solid var(--kb-line)}.kb-bar{flex:1 1 0;max-width:12px;min-width:2px;border:0;padding:0;border-radius:2px 2px 0 0;background:var(--kb-ok);opacity:.72;cursor:pointer;transition:opacity .12s}
 .kb-bar:hover,.kb-bar[aria-pressed=true]{opacity:1}.kb-bar[aria-pressed=true]{outline:1px solid currentColor;outline-offset:1px}.kb-bar[data-tone=error]{background:var(--kb-err)}.kb-bar[data-tone=warn]{background:var(--kb-warn)}.kb-bar[data-tone=live]{background:var(--kb-live)}.kb-bar[data-tone=idle]{background:var(--kb-muted)}
 .kb-epoch{flex:none;width:0;align-self:stretch;border-left:1px dashed var(--kb-line);margin:0 3px}.kb-epoch[data-host]{border-left:2px solid var(--kb-warn);opacity:.7}
-.kb-legend{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;margin-top:7px;color:var(--kb-muted);font-size:11px}.kb-legend>span{display:inline-flex;align-items:center;gap:5px}.kb-legend .kb-grow{margin-left:auto}
-.kb-tools{display:flex;flex-direction:column;gap:6px}.kb-tool{display:grid;grid-template-columns:minmax(0,104px) minmax(0,1fr) 44px;align-items:center;gap:8px;font-size:11px}.kb-tool code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.kb-tool>span:last-child{text-align:right;color:var(--kb-soft)}
+.kb-legend{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;margin-top:5px;color:var(--kb-muted);font-size:11px}.kb-legend>span{display:inline-flex;align-items:center;gap:5px}.kb-legend .kb-grow{margin-left:auto}
+.kb-tools{display:flex;flex-direction:column;gap:4px}.kb-tool{display:grid;grid-template-columns:minmax(0,104px) minmax(0,1fr) 44px;align-items:center;gap:8px;font-size:11px;line-height:1.3}.kb-tool code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.kb-tool>span:last-child{text-align:right;color:var(--kb-soft)}
 .kb-track{height:6px;border-radius:3px;background:var(--kb-fill);overflow:hidden;display:flex}.kb-track>span{height:100%;background:var(--kb-live)}.kb-track>span+span{background:var(--kb-err)}
 .kb-empty{color:var(--kb-muted);font-size:11px;padding:18px 8px;text-align:center;margin:auto 0}
-.kb-browser{display:grid;grid-template-columns:268px minmax(0,1fr);border:1px solid var(--kb-line);border-radius:10px;overflow:hidden;flex:1 1 0;min-height:320px}
+.kb-browser{display:grid;grid-template-columns:268px minmax(0,1fr);border:1px solid var(--kb-line);border-radius:10px;overflow:hidden;flex:1 1 0;min-height:220px}
 .kb-directory{border-right:1px solid var(--kb-line);display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--kb-panel)}.kb-search{padding:8px}
 .kb-search input{width:100%;height:28px;outline:none;border:1px solid var(--kb-line);border-radius:6px;background:transparent;color:inherit;padding:0 9px;font:inherit}.kb-search input:focus{border-color:var(--kb-live)}.kb-search input::placeholder{color:var(--kb-muted)}
 .kb-groups{flex:1;min-height:0;overflow:hidden auto;scrollbar-gutter:stable;padding:0 6px 8px;overscroll-behavior:contain}
@@ -45,15 +45,15 @@ const css = `
 .kb-preview-title{margin:0;font-size:13px;font-weight:600;overflow-wrap:anywhere}.kb-preview-meta{font-size:11px;color:var(--kb-muted);margin-top:1px;overflow-wrap:anywhere}.kb-actions{display:flex;gap:6px;flex:none}
 .kb-head-side{display:flex;align-items:center;gap:10px;flex:none;min-width:0}.kb-controls{display:flex;gap:4px}.kb-ctl-note{font-size:11px;white-space:nowrap;max-width:260px;overflow:hidden;text-overflow:ellipsis}.kb-button:disabled{opacity:.45;cursor:default}.kb-button:disabled:hover{background:transparent}.kb-button[data-tone=error]{color:var(--kb-err);border-color:color-mix(in srgb,var(--kb-err) 45%,transparent)}.kb-button[aria-busy=true]{animation:kb-pulse 1s ease-in-out infinite}@keyframes kb-pulse{50%{opacity:.4}}
 .kb-button{height:24px;padding:0 9px;border:1px solid var(--kb-line);border-radius:6px;background:transparent;color:inherit;font:inherit;font-size:11px;cursor:pointer;white-space:nowrap}.kb-button:hover{background:var(--kb-fill)}
-.kb-preview-body{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable;padding:12px 16px}.kb-facts{display:grid;grid-template-columns:96px minmax(0,1fr);gap:6px 12px;margin:0}.kb-facts dt{color:var(--kb-muted)}.kb-facts dd{margin:0;overflow-wrap:anywhere}.kb-facts code{font-size:11.5px;white-space:pre-wrap}
+.kb-preview-body{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable;padding:12px 16px}.kb-facts{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px 20px;margin:0}.kb-fact{min-width:0;display:flex;flex-direction:column;gap:1px}.kb-facts dt{color:var(--kb-muted);font-size:11px}.kb-facts dd{margin:0;overflow-wrap:anywhere}.kb-facts code{font-size:11.5px;white-space:pre-wrap}.kb-fact:has(.kb-error-text){grid-column:1 / -1}.kb-error-text{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.kb-record-code{margin-top:14px}.kb-record-code-head{font-size:11px;color:var(--kb-muted);margin-bottom:6px}
 .kb-notice{font-size:11px;color:var(--kb-muted);padding:7px 10px;border-left:2px solid var(--kb-line);margin:0 0 12px;overflow-wrap:anywhere}.kb-notice[data-tone=warn]{color:var(--kb-warn);border-color:color-mix(in srgb,var(--kb-warn) 45%,transparent)}
 .kb-status{color:var(--kb-muted);margin:0 0 10px}.kb-loader{display:flex;align-items:center;gap:8px;color:var(--kb-muted);animation:kb-fade .15s .2s both}.kb-spinner{width:12px;height:12px;border-radius:50%;border:1.5px solid var(--kb-line);border-top-color:var(--kb-soft);animation:kb-spin .8s linear infinite}
 @keyframes kb-spin{to{transform:rotate(360deg)}}@keyframes kb-fade{from{opacity:0}to{opacity:1}}
 .kb-placeholder{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;color:var(--kb-muted);text-align:center;padding:24px}.kb-placeholder strong{color:var(--kb-soft);font-weight:500;font-size:13px}
 .kb-preview-code{max-width:100%}.kb-preview-code *{max-width:100%}
 .kb-name:focus-visible,.kb-button:focus-visible,.kb-group-head:focus-visible,.kb-bar:focus-visible{outline:2px solid var(--kb-live);outline-offset:1px}
-@container kernel (max-width:1100px){.kb-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.kb-metric:nth-child(4),.kb-metric:nth-child(7){border-left:0}.kb-metric:nth-child(n+4){border-top:1px solid var(--kb-line)}}
-@container kernel (max-width:760px){.kb-row2{grid-template-columns:1fr}}
+@container kernel (max-width:1100px){.kb-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.kb-metric:nth-child(4),.kb-metric:nth-child(7){border-left:0}.kb-metric:nth-child(n+4){border-top:1px solid var(--kb-line)}.kb-facts{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@container kernel (max-width:760px){.kb-row2{grid-template-columns:1fr}.kb-facts{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:720px){.dsh-kernel-panel{padding:12px}}
 @container kernel (max-width:720px){.kb-head,.kb-preview-head{flex-wrap:wrap;align-items:flex-start}.kb-head-main{flex-wrap:wrap;flex:1 1 100%;gap:6px 10px}.kb-head-facts{flex-basis:100%;white-space:normal;overflow-wrap:anywhere}.kb-head-side{flex-wrap:wrap;gap:6px;margin-left:auto;max-width:100%}.kb-actions{flex-wrap:wrap;max-width:100%}.kb-ctl-note{white-space:normal;max-width:100%;overflow-wrap:anywhere}.kb-controls{flex-wrap:wrap}.kb-facts{grid-template-columns:76px minmax(0,1fr);gap:6px 8px}.kb-metric{padding:8px 10px}.kb-metric:nth-child(n){border-left:1px solid var(--kb-line)}.kb-metric:first-child{border-top:0}.kb-metric:nth-child(2){border-top:0}.kb-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.kb-metric:nth-child(odd){border-left:0}.kb-metric:nth-child(n+3){border-top:1px solid var(--kb-line)}.kb-browser{grid-template-columns:1fr;flex:none}.kb-directory{border-right:0;border-bottom:1px solid var(--kb-line);max-height:300px}.kb-preview-body{max-height:440px}.kb-head-facts code{display:none}}
 @media(prefers-reduced-motion:reduce){.kb-chev,.kb-bar{transition:none}.kb-button[aria-busy=true],.kb-loader,.kb-spinner{animation:none}}
@@ -117,8 +117,20 @@ const namesPending: Record<NonNullable<PanelState['namespaceReason']>, string> =
   'kernel-exit': '内核已停止', error: '暂时读不到名字，稍后自动重试',
 }
 const pendingText = (state: PanelState | null) => state === null ? '读取中' : state.namespaceStatus === 'unavailable' ? namesPending[state.namespaceReason ?? 'error'] : null
-const toolText = (cell: PanelCell) => cell.tools.length === 0 ? '没有调用工具'
+const toolText = (cell: PanelCell) => cell.tools.length === 0 ? '没有调用 DSH 工具'
   : cell.tools.map(tool => `${tool.name} ×${tool.calls}${tool.errors ? `（失败 ${tool.errors}）` : ''}`).join('、')
+const SKILL_CALL = /skills\.([A-Za-z0-9_]+)(?:\.([A-Za-z0-9_]+))?\s*\(/g
+/** 保存的这格源码里看起来调用的技能方法（skills.模块.函数(））。按代码识别，不是宿主观测。 */
+function skillText(code: string | undefined): string | null {
+  if (code === undefined) return null
+  const counts = new Map<string, number>()
+  for (const match of code.matchAll(SKILL_CALL)) {
+    const name = match[2] === undefined ? (match[1] ?? '') : `${match[1]}.${match[2]}`
+    counts.set(name, (counts.get(name) ?? 0) + 1)
+  }
+  if (counts.size === 0) return null
+  return [...counts].map(([name, n]) => `${name} ×${n}`).join('、')
+}
 
 const controlText: Record<PanelControlAction, { label: string; running: string; done: string }> = {
   start: { label: '启动', running: '正在启动内核…', done: '内核已启动' },
@@ -216,7 +228,7 @@ type RecordSelection = Exclude<Selection, { type: 'object' }>
 const selectionKey = (s: Selection | null) => s === null ? '' : s.type === 'object' ? `o:${s.item.name}` : s.type === 'cell' ? `c:${s.seq}`
   : s.type === 'skill' ? `k:${s.name}` : s.type === 'snapshot' ? `s:${s.group}:${s.name}` : s.type === 'archived' ? `a:${s.name}` : s.type === 'deleted' ? `d:${s.name}` : 'summary'
 
-interface RecordView { title: string; summary: string; note: string; tone?: Tone; facts: Array<[string, ReactNode]> }
+interface RecordView { title: string; summary: string; note: string; tone?: Tone; facts: Array<[string, ReactNode]>; code?: string; codeClipped?: boolean; codeLines?: number; codeMissing?: string; output?: string; outputClipped?: boolean }
 function recordDetails(selection: RecordSelection, state: PanelState | null, now: number): RecordView {
   const snapshot = state?.snapshot
   const lc = state?.lifecycle
@@ -248,14 +260,19 @@ function recordDetails(selection: RecordSelection, state: PanelState | null, now
       ['开始前等待', dur(wait)],
       ['执行耗时', cell.startedAt == null ? '没有开始执行' : `${dur(ran(cell, now))}${cell.endedAt == null ? '（进行中）' : ''}`],
       ['结束时间', clock(cell.endedAt)],
-      ['首行代码', <code>{cell.firstLine || '（空）'}</code>],
       ['代码行数', `${cell.lines} 行`],
       ['返回的输出', cell.outputChars == null ? '—' : `${cell.outputChars.toLocaleString()} 字符`],
-      ['工具调用', toolText(cell)],
+      ['DSH 工具调用', toolText(cell)],
     ]
-    if (cell.error) facts.push(['错误', <span className="kb-tone" data-tone="error">{cell.error}</span>])
+    const skill = skillText(cell.code)
+    if (skill) facts.push(['技能调用', <span>{skill} <span className="kb-muted">（按代码识别，不算 DSH 工具）</span></span>])
+    if (cell.error) facts.push(['错误', <span className="kb-tone kb-error-text" data-tone="error" title={cell.error}>{cell.error}</span>])
     return { title: `第 ${cell.seq} 格`, summary: `执行记录 · ${meta.label}`, tone: meta.tone, facts,
-      note: '开始前等待包括排队、启动内核和同步工具。记录跟着会话保存，DSH 重启后还在；只留最近 200 格，不保存代码全文和输出内容。' }
+      ...(cell.code === undefined
+        ? { codeMissing: cell.firstLine }
+        : { code: cell.code, codeClipped: cell.codeClipped === true, codeLines: cell.lines }),
+      ...(cell.output === undefined ? {} : { output: cell.output, outputClipped: cell.outputClipped === true }),
+      note: '开始前等待包括排队、启动内核和同步工具。记录跟着会话保存，DSH 重启后还在；只留最近 200 格，保存每格的代码和返回结果（过长会截断），不保存变量值。' }
   }
   if (selection.type === 'skill') {
     const skill = state?.skillReport?.skills.find(item => item.skill === selection.name)
@@ -321,7 +338,7 @@ const Directory = memo(function Directory({ state, query, selected, open, onTogg
   const hit = (text: string) => !search || text.toLowerCase().includes(search)
   const isOpen = (id: string) => search !== '' || open[id] === true
   const cells = useMemo(() => [...(state?.cells ?? [])].reverse(), [state?.cells])
-  const cellHits = cells.filter(cell => hit(`#${cell.seq} ${cell.firstLine} ${cell.tools.map(tool => tool.name).join(' ')}`))
+  const cellHits = cells.filter(cell => hit(`#${cell.seq} ${cell.firstLine} ${cell.code ?? ''} ${cell.tools.map(tool => tool.name).join(' ')}`))
   const names = (state?.names ?? []).filter(item => hit(item.name))
   const skills = (state?.skillReport?.skills ?? []).filter(item => hit(`${item.skill} ${item.description ?? ''}`))
   const snapshot = state?.snapshot
@@ -348,9 +365,12 @@ const Directory = memo(function Directory({ state, query, selected, open, onTogg
       <Group id="cells" label="执行记录" count={cellHits.length} open={isOpen('cells')} onToggle={onToggle}>
         {cellHits.slice(0, ROW_LIMIT).map(cell => {
           const meta = cellMeta[cell.status]
+          const calls = cell.tools.reduce((sum, tool) => sum + tool.calls, 0)
+          const duration = cell.startedAt != null && cell.endedAt != null ? dur(cell.endedAt - cell.startedAt) : meta.label
+          const busyRow = cell.status === 'running' || cell.status === 'queued'
           return <Row key={cell.seq} glyph={<span className="kb-dot" data-tone={meta.tone}/>} name={cell.firstLine || `第 ${cell.seq} 格`}
-            meta={cell.startedAt != null && cell.endedAt != null ? dur(cell.endedAt - cell.startedAt) : meta.label} tone={meta.tone === 'ok' ? undefined : meta.tone}
-            pressed={selected === `c:${cell.seq}`} label={`查看第 ${cell.seq} 格`} title={`第 ${cell.seq} 格 · ${meta.label}`} onClick={() => onRecord({ type: 'cell', seq: cell.seq })}/>
+            meta={busyRow ? meta.label : `${calls > 0 ? `${calls} 次 · ` : ''}${duration}`} tone={meta.tone === 'ok' ? undefined : meta.tone}
+            pressed={selected === `c:${cell.seq}`} label={`查看第 ${cell.seq} 格`} title={`第 ${cell.seq} 格 · ${meta.label} · 工具调用 ${calls} 次\n${cell.firstLine}`} onClick={() => onRecord({ type: 'cell', seq: cell.seq })}/>
         })}
         <More hidden={cellHits.length - ROW_LIMIT}/>
         {!cellHits.length && <div className="kb-more">{search ? '没有匹配的执行记录' : '这个会话还没有执行过代码'}</div>}
@@ -429,7 +449,8 @@ function Timeline({ cells, now, selected, onSelect }: { cells: PanelCell[]; now:
     }
     const meta = cellMeta[cell.status]
     const ms = ran(cell, now)
-    const height = ms == null ? 4 : 4 + (Math.log10(ms + 1) / scale) * 64
+    const ratio = ms == null ? 4 / 72 : (4 + (Math.log10(ms + 1) / scale) * 64) / 72
+    const height = `${Math.min(ratio, 0.96) * 100}%`
     bars.push(<button key={cell.seq} type="button" className="kb-bar" data-tone={meta.tone} style={{ height }} aria-pressed={selected === `c:${cell.seq}`}
       aria-label={`第 ${cell.seq} 格，${meta.label}，${dur(ms)}`} title={`第 ${cell.seq} 格 · ${meta.label} · ${dur(ms)}\n${cell.firstLine}`} onClick={() => onSelect(cell.seq)}/>)
   })
@@ -680,12 +701,12 @@ export function KernelPanel({ sessionId }: KernelPanelProps) {
       </div>
       <div className="kb-card">
         <div className="kb-card-head"><span className="kb-card-title">工具调用</span><span className="kb-card-note">代码里调用的 DSH 工具</span></div>
-        {stats.tools.length ? <div className="kb-tools">{stats.tools.slice(0, 7).map(tool => <div className="kb-tool" key={tool.name} title={`${tool.name}：${tool.calls} 次，失败 ${tool.errors} 次`}>
+        {stats.tools.length ? <div className="kb-tools">{stats.tools.slice(0, 5).map(tool => <div className="kb-tool" key={tool.name} title={`${tool.name}：${tool.calls} 次，失败 ${tool.errors} 次`}>
           <code>{tool.name}</code>
           <span className="kb-track"><span style={{ width: `${((tool.calls - tool.errors) / topTool) * 100}%` }}/>{tool.errors > 0 && <span style={{ width: `${(tool.errors / topTool) * 100}%` }}/>}</span>
           <span>{tool.calls}</span>
         </div>)}
-        {stats.tools.length > 7 && <div className="kb-muted" style={{ fontSize: 11 }}>另有 {stats.tools.length - 7} 种工具</div>}</div>
+        {stats.tools.length > 5 && <div className="kb-muted" style={{ fontSize: 11 }}>另有 {stats.tools.length - 5} 种工具</div>}</div>
           : <div className="kb-empty">还没有工具调用</div>}
       </div>
     </section>
@@ -695,7 +716,7 @@ export function KernelPanel({ sessionId }: KernelPanelProps) {
         <Directory state={state} query={query} selected={key} open={open} onToggle={toggle} onObject={onObject} onRecord={selectRecord}/>
       </aside>
       <article className="kb-preview" aria-label="内容预览" aria-busy={previewLoading}>
-        {!selected ? <div className="kb-placeholder"><IconInspect size={22}/><strong>点选左侧条目查看详情</strong><span>函数显示源码，变量读取 JSON；执行记录显示耗时和工具调用。</span></div> : <>
+        {!selected ? <div className="kb-placeholder"><IconInspect size={22}/><strong>点选左侧条目查看详情</strong><span>函数显示源码，变量读取 JSON；执行记录显示每格的代码、耗时和工具调用。</span></div> : <>
           <div className="kb-preview-head">
             <div style={{ minWidth: 0 }}><h2 className="kb-preview-title"><code>{record?.title ?? selectedObject?.name}</code></h2>
               <div className="kb-preview-meta">{record ? record.summary : selectedObject ? `${kindInfo[selectedObject.kind].label} · ${selectedObject.summary}${state?.snapshot.sizes?.[selectedObject.name] != null ? ` · 快照中 ${size(state.snapshot.sizes[selectedObject.name])}` : ''}${previewAt && preview?.status === 'ok' ? ` · 读取于 ${clock(previewAt)}` : ''}` : ''}</div></div>
@@ -721,7 +742,24 @@ export function KernelPanel({ sessionId }: KernelPanelProps) {
           <div className="kb-preview-body" aria-live="polite">
             {record ? <>
               <p className="kb-notice">{record.note}</p>
-              {record.facts.length > 0 && <dl className="kb-facts">{record.facts.map(([label, value]) => <Fragment key={label}><dt>{label}</dt><dd>{value}</dd></Fragment>)}</dl>}
+              {record.facts.length > 0 && <dl className="kb-facts">{record.facts.map(([label, value]) => <div className="kb-fact" key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>}
+              {record.code !== undefined
+                ? <div className="kb-record-code">
+                    <div className="kb-record-code-head">执行的代码</div>
+                    {record.codeClipped && <p className="kb-notice" data-tone="warn">这一格的代码较长，只保留并显示开头的部分。</p>}
+                    <CodeBlock className="kb-preview-code" code={record.code} lang="python" copyLabel="复制" copiedLabel="已复制" lineNumbers toolbarLabels={{ codeLabel: 'Python', wrapLabel: '自动换行', unwrapLabel: '取消换行' }}/>
+                  </div>
+                : record.codeMissing !== undefined
+                  ? <p className="kb-notice" data-tone="warn">这一格没有保存完整代码，只有首行：<code>{record.codeMissing || '（空）'}</code></p>
+                  : null}
+              {record.output !== undefined && <div className="kb-record-code">
+                <div className="kb-record-code-head">返回结果</div>
+                {record.outputClipped && <p className="kb-notice" data-tone="warn">这一格的输出较长，只保留并显示开头的部分。</p>}
+                {record.output === ''
+                  ? <p className="kb-notice">这一格没有输出。</p>
+                  : <CodeBlock className="kb-preview-code" code={record.output} lang="text" copyLabel="复制" copiedLabel="已复制" lineNumbers={false}
+                      toolbarLabels={{ codeLabel: '输出', wrapLabel: '自动换行', unwrapLabel: '取消换行' }}/>}
+              </div>}
             </> : <>
               {previewLoading && <div className="kb-loader"><span className="kb-spinner" aria-hidden/>正在读取 {selectedObject?.name}…</div>}
               {previewNote && <p className="kb-status">{previewNote}</p>}

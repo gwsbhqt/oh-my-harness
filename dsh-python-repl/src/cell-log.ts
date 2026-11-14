@@ -9,15 +9,21 @@ const SAVE_DEBOUNCE_MS = 1_000
 const MAX_GENERATIONS = 20
 const MAX_LINE = 120
 const MAX_ERROR = 240
+/** Per-cell cap on the stored source; longer cells keep a leading part and are flagged. */
+const MAX_CODE = 8192
+/** Per-cell cap on the stored visible output; longer output keeps a leading part and is flagged. */
+const MAX_OUTPUT = 8192
 
 export type CellLogView = { recordedSince: number; cells: PanelCell[]; cellsDropped: number; generations: PanelGeneration[] }
 
 const clip = (text: string, max: number): string => text.length > max ? `${text.slice(0, max - 1)}…` : text
 
 /**
- * What the kernel tab draws as history: cell timing, status and bridge tool
- * calls, plus kernel generations. Host memory only and bounded; it records
- * what the host itself did, never values read from the namespace.
+ * What the kernel tab draws as history: cell timing, status, the cell's own
+ * source and visible output (both clipped per cell) and bridge tool calls, plus
+ * kernel generations.
+ * Host memory only and bounded; it records what the host itself saw, never
+ * values read from the namespace.
  */
 export class CellLog {
   recordedSince = Date.now()
@@ -90,7 +96,10 @@ export class CellLog {
     const first = lines.find((line) => line.trim() !== '')?.trim() ?? ''
     const cell: PanelCell = {
       id: `queued-${seq}`, seq, epoch: null, queuedAt: Date.now(), startedAt: null, endedAt: null,
-      status: 'queued', firstLine: clip(first, MAX_LINE), lines: lines.length, tools: [], outputChars: null, error: null, host: this.host,
+      status: 'queued', firstLine: clip(first, MAX_LINE), lines: lines.length,
+      code: code.length > MAX_CODE ? code.slice(0, MAX_CODE) : code,
+      ...(code.length > MAX_CODE ? { codeClipped: true } : {}),
+      tools: [], outputChars: null, error: null, host: this.host,
     }
     this.#cells.push(cell)
     if (this.#cells.length > MAX_CELLS) {
@@ -137,6 +146,9 @@ export class CellLog {
       return
     }
     cell.outputChars = result.logs.reduce((total, log) => total + log.length, 0)
+    const joined = result.logs.join('\n')
+    cell.output = clip(joined, MAX_OUTPUT)
+    if (joined.length > MAX_OUTPUT) cell.outputClipped = true
     const kind = result.error?.kind
     cell.status = kind === undefined ? 'ok' : kind === 'abort' ? 'aborted' : kind === 'worker-exit' ? 'kernel-exit' : 'error'
     cell.error = result.error === undefined ? null : clip(result.error.message.split('\n', 1)[0] ?? '', MAX_ERROR)
