@@ -60,7 +60,7 @@ export const CELL_INSTRUCTIONS = `## Writing code for run_code
 
 ### Working pattern
 
-- Make the first cell setup-only: imports you actually need, paths, constants, and helpers. Later cells reuse them; do not re-import names that are already bound.
+- Don't spend a whole cell on setup alone: put imports, paths and constants in the same cell as the first real work; later cells reuse them. Split only when a cell would get too long to reason about.
 - Call \`await repl.helpers()\` before defining a helper that may already exist. \`repl\` is a reserved system binding: never assign to it.
 
 ### Shell commands
