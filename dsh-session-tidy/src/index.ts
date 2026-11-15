@@ -198,6 +198,8 @@ export interface TidyReport {
   total: number
   archived: TidyItem[]
   skipped: Array<TidyItem & { reason: string }>
+  /** 其中属于“不属于任何工作区”的孤儿会话数量（这些也一并判断/归档）。 */
+  ungroupedTotal?: number
   /** true 表示只预览、不真正归档。 */
   dryRun?: boolean
   /** 这次用的是 Jev 判断还是没 key 时的纯规则兜底。 */
@@ -221,7 +223,54 @@ async function runTidy(ctx: Ctx, ws: any, options: TidyOptions, getConfig: () =>
   // 工作区 sessionIds 包含历史归档；已归档的跳过。固定会话是用户故意留的，也不动。
   const archivedIds = new Set<string>(((registry as any).archivedSessionIds ?? []) as string[])
   const pinnedIds = new Set<string>(((registry as any).pinnedSessionIds ?? []) as string[])
-  const ids: string[] = (([...ws.sessionIds] as string[])).filter((id) => !archivedIds.has(id))
+
+  // 全部工作区的 sessionIds 合集：用来找出“不属于任何工作区”的孤儿会话（临时探针目录、无标题会话等）。
+  const inAnyWorkspace = new Set<string>()
+  try {
+    const all = ((registry as any).list?.() ?? []) as any[]
+    for (const w of Array.isArray(all) ? all : []) {
+      if (Array.isArray(w?.sessionIds)) for (const sid of w.sessionIds) inAnyWorkspace.add(String(sid))
+    }
+  } catch {
+    /* 拿不到工作区列表时，只处理当前工作区、不扫孤儿 */
+  }
+
+  // 会话记录：live（打开着/在跑）、子代理、创建时间，以及“全部会话编号”。
+  const live = new Set<string>()
+  const subagent = new Set<string>()
+  const createdAtById = new Map<string, number>()
+  const listedIds: string[] = []
+  try {
+    const records = await query.listSessions()
+    for (const rec of records) {
+      const header = rec.header ?? {}
+      const hid = typeof header.id === 'string' ? header.id : ''
+      if (hid === '') continue
+      listedIds.push(hid)
+      if (typeof header.createdAt === 'number') createdAtById.set(hid, header.createdAt)
+      if (rec.live === true) live.add(hid)
+      if (header.origin === 'subagent') subagent.add(hid)
+    }
+  } catch {
+    /* 拿不到记录就只靠标题/Idle */
+  }
+
+  // 本工作区的会话 + 不属于任何工作区的孤儿会话，一起判断；其他工作区的不动。已归档与重复的跳过。
+  const wsIds = ((ws.sessionIds as string[] | undefined) ?? [])
+  const wsIdSet = new Set<string>(wsIds)
+  const orphanIds: string[] = []
+  const seenIds = new Set<string>()
+  const ids: string[] = []
+  for (const id of [...wsIds, ...listedIds]) {
+    if (id === '' || seenIds.has(id)) continue
+    const fromWorkspace = wsIdSet.has(id)
+    const isOrphan = !fromWorkspace && !inAnyWorkspace.has(id)
+    if (!fromWorkspace && !isOrphan) continue
+    seenIds.add(id)
+    if (archivedIds.has(id)) continue
+    ids.push(id)
+    if (isOrphan) orphanIds.push(id)
+  }
 
   // 标题（批量；拿不到的当空）
   const titleById = new Map<string, string>()
@@ -235,22 +284,6 @@ async function runTidy(ctx: Ctx, ws: any, options: TidyOptions, getConfig: () =>
     }
   } catch {
     /* 标题缺失按空处理 */
-  }
-
-  // 会话记录：live（打开着/在跑）与子代理会话不动；顺便记下创建时间做兜底
-  const live = new Set<string>()
-  const subagent = new Set<string>()
-  const createdAtById = new Map<string, number>()
-  try {
-    const records = await query.listSessions()
-    for (const rec of records) {
-      const header = rec.header ?? {}
-      if (typeof header.id === 'string' && typeof header.createdAt === 'number') createdAtById.set(header.id, header.createdAt)
-      if (rec.live === true) live.add(header.id)
-      if (header.origin === 'subagent') subagent.add(header.id)
-    }
-  } catch {
-    /* 拿不到记录就只靠标题/Idle */
   }
 
   const skipped: Array<TidyItem & { reason: string }> = []
@@ -334,6 +367,7 @@ async function runTidy(ctx: Ctx, ws: any, options: TidyOptions, getConfig: () =>
     total: ids.length,
     archived,
     skipped,
+    ungroupedTotal: orphanIds.length,
     dryRun: options.dryRun === true,
     judge: asker === undefined ? 'rules' : 'jev',
   }
@@ -419,8 +453,9 @@ function registerTools(ctx: Ctx, getConfig: () => SessionTidyConfig): void {
       isConcurrencySafe: () => false,
       async execute(args: { session: string }) {
         const report = await tidyWorkspace(ctx, args.session, {}, getConfig)
+        const ungroupedNote = report.ungroupedTotal && report.ungroupedTotal > 0 ? `，含未归组 ${report.ungroupedTotal} 个` : ''
         const lines = [
-          `工作区「${report.workspaceTitle}」共 ${report.total} 个会话（判断方式：${report.judge === 'rules' ? '纯规则兜底' : 'Jev 模型'}）。`,
+          `工作区「${report.workspaceTitle}」共 ${report.total} 个会话（判断方式：${report.judge === 'rules' ? '纯规则兜底' : 'Jev 模型'}${ungroupedNote}）。`,
           `已归档 ${report.archived.length} 个：`,
           ...report.archived.slice(0, 50).map((x) => `  - ${x.title || '(无标题)'}（${x.reason ?? '无用'}）[${x.sessionId.slice(0, 18)}]`),
           `保留 ${report.skipped.length} 个：`,

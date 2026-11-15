@@ -1,11 +1,12 @@
 # dsh-session-tidy
 
-Adds a "Tidy this workspace" item to the workspace "…" menu: one click archives the workspace's useless one-off/test sessions in bulk. Archiving is reversible.
+Adds a "Tidy this workspace" item to the workspace "…" menu: one click archives the workspace's useless one-off/test sessions in bulk, together with orphan sessions that belong to no workspace. Archiving is reversible.
 
 ## What it does
 
 - The menu item sits above "Delete workspace" (order 250). Clicking runs in the background with no overlay; when done a top banner says "Archived N" (or "nothing to archive"); failures also show a banner. Archiving is reversible.
 - The judgement is delegated to an external model (Jev): each candidate session is sent its title, creation time, idle days and last assistant message (the first user message only when there is no assistant reply, since a task brief can read as "still in progress"), and asked "is this task already over (done/delivered/abandoned/closed) rather than still in progress". A probability >= 0.38 means archive.
+- Besides the workspace's own sessions, the candidates include **orphan sessions that belong to no workspace** (temp probe directories, untitled sessions, etc.), which otherwise have no cleanup entry point. Sessions in other workspaces are not touched.
 - Only sessions that are not running, not open, not subagents, not pinned and not archived are touched. Nothing is deleted.
 - The same action is exposed as the agent tool `tidy_workspace_sessions`.
 

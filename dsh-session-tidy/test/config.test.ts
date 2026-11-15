@@ -24,7 +24,7 @@ test('配置覆盖被现读到；空串保持空串（不回落默认）', () =>
 
 // ---- 用假 ctx 验证 runTidy 的规则路径与跳过条件（不需要任何网络） ----
 
-function fakeCtx(ws: any, opts: { live?: string[]; subagent?: string[]; titles?: Record<string,string>; recent?: string[]; old?: string[] } = {}) {
+function fakeCtx(ws: any, opts: { live?: string[]; subagent?: string[]; titles?: Record<string,string>; recent?: string[]; old?: string[]; extraSessions?: string[] } = {}) {
   const archived = new Set<string>()
   const archivedSession = new Set<string>()
   const ctx = {
@@ -36,7 +36,7 @@ function fakeCtx(ws: any, opts: { live?: string[]; subagent?: string[]; titles?:
     },
     sessionQuery: {
       readTitleSnapshots: async (ids: string[]) => ids.map((id) => ({ status: 'fulfilled', sessionId: id, value: { title: { title: (opts.titles ?? {})[id] ?? '' } } })),
-      listSessions: async () => ws.sessionIds.map((id: string) => ({ header: { id, createdAt: (opts.old ?? []).includes(id) ? Date.now() - 10 * 24 * 3600 * 1000 : Date.now(), ...((opts.subagent ?? []).includes(id) ? { origin: 'subagent' } : {}) }, live: (opts.live ?? []).includes(id) })),
+      listSessions: async () => [...ws.sessionIds, ...(opts.extraSessions ?? [])].map((id: string) => ({ header: { id, createdAt: (opts.old ?? []).includes(id) ? Date.now() - 10 * 24 * 3600 * 1000 : Date.now(), ...((opts.subagent ?? []).includes(id) ? { origin: 'subagent' } : {}) }, live: (opts.live ?? []).includes(id) })),
       readSession: async (id: string) => ({
         events: (opts.recent ?? []).includes(id) ? [{ type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'hi' }] }, time: Date.now() }] : [],
       }),
@@ -71,6 +71,21 @@ test('dryRun 只预览不调用 archiveSession', async () => {
   assert.deepEqual(report.archived.map((x) => x.sessionId), ['s-junk'])
   assert.equal(report.dryRun, true)
   assert.deepEqual((ctx.workspaceRegistry as any).archivedSessionIds, [])
+})
+
+test('不属于任何工作区的孤儿会话也一并扫描回收', async () => {
+  const ws = { id: 'w1', title: 'W', path: '/w', sessionIds: ['s-real'] }
+  const ctx = fakeCtx(ws, {
+    recent: ['s-real', 's-orphan-real'],
+    extraSessions: ['s-orphan', 's-orphan-real'],
+    titles: { 's-real': '真实工作', 's-orphan': '运行慢查询并汇总结果', 's-orphan-real': '进行中的活' },
+  })
+  const cfg = () => resolveConfig(Config({ apiKeyRef: '' }))
+  const report = await tidyWorkspace(ctx as any, 's-real', {}, cfg)
+  // 孤儿只有 s-orphan 是测试标题被收；s-orphan-real 近期有使用、保留
+  assert.deepEqual(report.archived.map((x) => x.sessionId), ['s-orphan'])
+  assert.equal(report.ungroupedTotal, 2)
+  assert.ok(!report.archived.some((x) => x.sessionId === 's-real'))
 })
 
 test('有 key 但网关连不上时，该条保留不归档（调用失败不误收，不退回规则）', async () => {
