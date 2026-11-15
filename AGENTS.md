@@ -31,7 +31,13 @@ A plugin or configuration change may need startup checks and a controlled restar
 
 Use fictional examples and dedicated fixtures. Exclude personal identity, accounts, private paths, machine/network details, credentials, authenticated screenshots, and real session logs. Keep any private review vocabulary outside the repository. Preserve third-party notices and provenance.
 
-Do not add unsupported compatibility promises, exact model-token claims, billing claims, or fabricated demo evidence. Explain measurement assumptions and link reproducible outputs. Documentation should describe the released behavior, not an internal task diary.
+**Commit identity.** Every commit to this public repository must use a noreply identity (`<handle>@users.noreply.github.com`, name = handle), never a company or personal email address. This repository is configured that way in `.git/config`; after any history rewrite or on a fresh clone, check with `git log --format='%ae %ce'` and `git config user.email` before pushing.
+
+**No internal experience or relationships.** Do not record internal incidents, dates, teams, machine names, internal project names, or interpersonal/organizational relationships in code, tests, docs, commit messages, or demo media. When a lesson comes from internal experience, abstract and fictionalize it: strip everything that ties it to a real person, team, machine, account, or private service. Documentation describes released behavior, not an internal task diary.
+
+**No private network or machine details.** Never put LAN, Tailscale, VPN, or intranet addresses, hostnames, internal domains, personal account IDs, or machine identifiers in the repository. Use `127.0.0.1`, `example.com`, `*.invalid`, and other reserved fixtures instead.
+
+Do not add unsupported compatibility promises, exact model-token claims, billing claims, or fabricated demo evidence. Explain measurement assumptions and link reproducible outputs.
 
 ## Finish clearly
 
