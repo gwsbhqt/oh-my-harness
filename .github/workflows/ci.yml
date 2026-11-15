@@ -58,6 +58,7 @@ jobs:
             dsh-message-tidy
             dsh-image-cap
             dsh-history-cap
+            dsh-settings
           )
           for plugin in "${plugins[@]}"; do
             echo "::group::$plugin"

@@ -20,7 +20,7 @@
 | **核心** | [dsh-python-repl](dsh-python-repl/README.md) | 让助手写 Python 来做事，大块数据留在程序里，只把结论放进对话。[详见下文](#核心一dsh-python-repl让助手写程序做事) |
 | **核心** | [dsh-use](dsh-use/README.md) | 从外面遥控正在运行的 DSH，让一个助手当主控，带着几个助手分头干活。[详见下文](#核心二dsh-use让一个助手带着几个助手干活) |
 | 操作电脑 | [browser-use](skills/browser-use/README.md) · [computer-use](skills/computer-use/README.md) · [remote-host](skills/remote-host/README.md) | 操作网页、Mac 桌面应用、另一台机器。 |
-| 配套插件 | [dsh-monitor](dsh-monitor/README.md) · [dsh-guard](dsh-guard/README.md) · [dsh-compaction-bound](dsh-compaction-bound/README.md) · [dsh-message-tidy](dsh-message-tidy/README.md) · [dsh-image-cap](dsh-image-cap/README.md) · [dsh-history-cap](dsh-history-cap/README.md) | 后台事件叫醒、拦住失控输出、让模型自己收口、让长对话不被撑爆。[详见下文](#其他部件) |
+| 配套插件 | [dsh-monitor](dsh-monitor/README.md) · [dsh-guard](dsh-guard/README.md) · [dsh-compaction-bound](dsh-compaction-bound/README.md) · [dsh-message-tidy](dsh-message-tidy/README.md) · [dsh-image-cap](dsh-image-cap/README.md) · [dsh-history-cap](dsh-history-cap/README.md) · [dsh-settings](dsh-settings/README.md) | 后台事件叫醒、拦住失控输出、让模型自己收口、让长对话不被撑爆。[详见下文](#其他部件) |
 
 部件分两种：**插件**装进 DSH 本身，放在仓库根目录下 `dsh-` 开头的文件夹中；**工具**是助手可以调用的独立程序，放在 `skills/` 下，也能在终端里单独用。每个部件的说明里都放了它的真实演示，点部件名就能看到。
 
@@ -96,6 +96,7 @@
 | --- | --- | --- |
 | [dsh-runtime](dsh-runtime/README.md) | 启动时补全登录环境，保存时顺着软链接写，并归一化补丁层的 YAML。 | 从桌面启动时命令找不到，或用软链接管理 DSH 配置。 |
 | [dsh-doctor](dsh-doctor/README.md) | 检查 profile、依赖、构建产物和实际试启动结果，提供工具、远程接口与命令行。 | 改插件或配置后，重启前确认能正常启动。 |
+| [dsh-settings](dsh-settings/README.md) | 把模式偏好、技能、快捷回复三页并成一个设置包，一次装载；三页共用同一套「草稿 / 撤销 / 保存」页头。 | 设置侧栏里想用同一套编辑操作改多项设置。 |
 
 **动手操作电脑**
 
