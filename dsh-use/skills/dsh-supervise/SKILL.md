@@ -64,15 +64,29 @@ dsh-use new <工作区名> '你是这次任务的主控，照 dsh-supervise 技�
 
 长工通常用快档：先 `dsh-use pick fast` 看当前选中的模型。也可以用 `--model provider/model --effort high` 直接指定模型和推理等级，不一定走档位。新任务开新会话；已在跑的长工追加任务用 `send`，不新开。
 
-长工会话要从工作区名开，界面才会把它和主控归在同一组；用绝对路径开会落到「未分组」。在独立工作目录（git worktree）里干活的，开好再切目录、再发任务：
+长工会话要从工作区名开，界面才会把它和主控归在同一组；用绝对路径开会落到「未分组」。在独立工作目录（git worktree）里干活的，开好再切目录、再发任务。
+
+**发消息一律直接调 `skills.dsh_use`，把中文原文当普通字符串传进去**（首选，天然没有引号/转义问题）：
+
+```python
+sid = (await skills.dsh_use.new("<工作区名>", tier="fast"))["data"]["sessionId"]
+await skills.dsh_use.cwd(sid, "<工作目录绝对路径>")             # 不用独立工作目录就省掉这步
+await skills.dsh_use.send(sid, task_brief_text, notify="self")  # task_brief_text 就是中文原文
+```
+
+**绝对不要**用 `json.dumps` 拼消息，也不要在 bash 双引号里手拼中文字符串：`json.dumps` 会把中文压成 `\uXXXX`，传进会话就变成读不了的编号乱码；双引号里的反引号、`$` 还会被 shell 当命令执行，路径就丢了。（dsh-use 现在会在入口把这种 `\uXXXX` 串自动还原，但那是兜底，别当常规写法。）
+
+没有 Python 内核、只能用命令行时，消息用 `shlex.quote` 或 heredoc 原样传入，照样不要 `json.dumps`：
 
 ```bash
 dsh-use new <工作区名> --tier fast --json                  # 不带消息，只建会话，拿 sessionId
 dsh-use cwd <长工> <工作目录绝对路径> --json               # 不用独立工作目录就省掉这步
-dsh-use send <长工> '<任务书全文，或「读 <计划文档> 的 X 节照做」>' --notify self --json
+msg=$(cat <<'BRIEF'
+<任务书原文>
+BRIEF
+)
+dsh-use send <长工> "$msg" --notify self --json
 ```
-
-在 Python 内核里用 `bash` 跑这些命令时，消息用 `shlex.quote(msg)` 拼进去；会话里有 `skills.dsh_use` 就直接把消息当参数传。不要用 `json.dumps`：它把中文转成 `\u` 转义，双引号里的反引号还会被 shell 当命令执行，路径就丢了。
 
 跨机器就在每条前面加 `-H <机器>`，其余不变；跨机器不能用 `chat --notify self`。保存回执里的 `sessionId` 和 `since`，回执的 `data.notify` 有 `watchId` 才算通知登记上了，有 `error` 就别重发，改用 `wait --settled` 自己等。然后挂兜底检查（持久后台服务，DSH 重启后自动接回；`--quiet` 让它的常规输出不叫醒主控，只有它发的 notice 才叫醒）：
 

@@ -12,6 +12,7 @@ import { CommandFailure, errorPayload, UsageError, splitEndpoint, describeEndpoi
 import { buildTranscript, clock, oneLine, renderTurn, turnLine, type RawEvent, type Transcript } from './transcript.ts'
 import { pick, routeKey, tierOf, verdictLine, publicTier, fromSharedPick, clock as shortClock, type Tier, type TierTable, type UsageReportLike, type ModelTiersLike, type ModelJudgement, type PickResult } from './models.ts'
 import { findInterruptedUser, scanLostMessages } from './lost-messages.ts'
+import { normalizeMessageText } from './message-text.ts'
 import type { PendingQuestions } from './questions.ts'
 import type { QueuedDetail } from './quit-blockers.ts'
 import type { DesktopNotification } from './desktop-notifications.ts'
@@ -231,6 +232,13 @@ export class RemoteService {
   }
 
   private now(): number { return this.deps.now?.() ?? Date.now() }
+
+  /** 入口处还原被 JSON 转义过的中文等正文（详见 message-text.ts）；解码过就记一行审计。 */
+  private normalizeText(text: string): string {
+    const decoded = normalizeMessageText(text)
+    if (decoded !== text) this.deps.log(`decode message chars=${text.length}->${decoded.length}`)
+    return decoded
+  }
 
   private async call(endpoint: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
     const { namespace, method } = splitEndpoint(endpoint)
@@ -622,6 +630,7 @@ export class RemoteService {
    */
   async send(raw: string, text: string, options: { steer?: boolean; now?: boolean; interrupt?: boolean; tier?: Tier; model?: string; effort?: string; notify?: string }): Promise<CommandResult> {
     this.assertWritable()
+    text = this.normalizeText(text)
     if (text.trim() === '') throw new UsageError('消息是空的')
     if (options.interrupt === true && (options.now === true || options.steer === true)) throw new UsageError('--interrupt 和 --now 只能选一个：--now 插进当前这一轮，--interrupt 先停下当前这一步再发')
     const { id, summary, title } = await this.resolve(raw)
@@ -925,7 +934,8 @@ export class RemoteService {
 
   async newSession(workspace: string, text: string | undefined, options: { tier?: Tier; model?: string; effort?: string; preset?: string; ifIdle?: boolean; notify?: string }): Promise<CommandResult> {
     this.assertWritable()
-    if (options.notify !== undefined && (text === undefined || text.trim() === '')) throw new UsageError('--notify 要和第一条消息一起用：没发消息就没有要等的任务')
+    const message = text === undefined ? undefined : this.normalizeText(text)
+    if (options.notify !== undefined && (message === undefined || message.trim() === '')) throw new UsageError('--notify 要和第一条消息一起用：没发消息就没有要等的任务')
     if (options.ifIdle) this.assertMaintenanceIdle()
     const notifyTo = options.notify === undefined ? undefined : await this.resolveNotify(options.notify)
     const ws = await this.workspaces()
@@ -957,7 +967,7 @@ export class RemoteService {
     const switched = await this.applyRoute(id, route, options.effort ?? keep, options.effort !== undefined)
     const lines = [`新会话 ${id}（${match?.title ?? expanded}）。`, switched.text]
     const since = (await this.transcript(id)).lastSeq
-    const sent = text !== undefined && text.trim() !== ''
+    const sent = message !== undefined && message.trim() !== ''
     let notify: { line: string; data: Json } | undefined
     if (sent) {
       if (options.ifIdle) {
@@ -968,8 +978,8 @@ export class RemoteService {
           return { ok: false, status: 'failed', error: { ...payload, message }, text: message, data: { created: true, sessionId: id, workspace: match?.path ?? expanded, since, sent: false, model: switched.data } }
         }
       }
-      await this.call('session/prompt', { request: { requestId: randomUUID(), sessionId: id, mode: 'queue', content: [{ type: 'text', text }], clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone } })
-      this.deps.log(`send ${id} mode=queue chars=${text.length}`)
+      await this.call('session/prompt', { request: { requestId: randomUUID(), sessionId: id, mode: 'queue', content: [{ type: 'text', text: message }], clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone } })
+      this.deps.log(`send ${id} mode=queue chars=${message.length}`)
       lines.push(`第一条消息已发出，起点 seq ${since}。`, `等它跑完：dsh-use wait ${short(id)} --since ${since}`)
       if (notifyTo !== undefined) {
         notify = await this.registerNotify({ target: id, notify: notifyTo, since })
@@ -1029,6 +1039,7 @@ export class RemoteService {
    */
   async notice(raw: string, text: string, summary?: string, quiet = false): Promise<CommandResult> {
     this.assertWritable()
+    text = this.normalizeText(text)
     if (text.trim() === '') throw new UsageError('消息是空的')
     if (this.deps.notice === undefined) throw new CommandFailure('这个 DSH 不支持插件通知，改用 send', 'notice-unsupported')
     const { id } = await this.resolve(raw)
