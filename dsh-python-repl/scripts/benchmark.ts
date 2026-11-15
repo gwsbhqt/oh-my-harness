@@ -221,6 +221,32 @@ async function execute(file: string, args: string[], env: NodeJS.ProcessEnv, cwd
   return { exitCode, timedOut, cancelled, spawnError, elapsedMs: Math.round(performance.now() - started), stdout, stderr }
 }
 
+interface BenchPatchRow {
+  id?: string
+  name?: string
+  disabled?: boolean
+  config?: Record<string, unknown>
+  insert?: BenchPatchRow[]
+}
+
+/** Match dsh-base's executor rows explicitly; a missing PTC runtime must never select native. */
+export function benchmarkPatch(options: Pick<BenchOptions, 'credentials' | 'provider' | 'model' | 'api' | 'baseUrl' | 'keyRef' | 'mode' | 'pluginRoot'>, python?: string): BenchPatchRow[] {
+  if (!['native', 'ptc'].includes(options.mode)) throw new Error('模式必须为 native 或 ptc')
+  if (options.mode === 'ptc' && !python) throw new Error('PTC 评测必须指定现有 Python 内核运行环境')
+  return [
+    { id: 'credentials', disabled: false, config: { path: resolve(options.credentials), watch: false } },
+    { id: 'agent-default-model', config: { provider: options.provider, model: options.model } },
+    { id: 'llm-pi-ai', config: { providers: { [options.provider]: { apiKeyEnv: options.keyRef, api: options.api, baseURL: options.baseUrl,
+      models: [{ id: options.model, name: options.model, contextWindow: 1000000, maxTokens: 16384, input: ['text'] }] } } } },
+    { id: 'tool-executor-native', disabled: options.mode !== 'native' },
+    { id: 'tool-executor-ptc', disabled: options.mode !== 'ptc' },
+    { id: 'ptc-runtime', disabled: true },
+    { id: 'permission', config: { defaultPreset: 'danger-full-access' } },
+    ...['session-title-llm', 'agent-instructions', 'tool-skill', 'workflow-ptc', 'tool-workflow', 'tool-web', 'tool-subagent', 'tool-subagent-fork', 'tool-goal', 'tool-todo'].map(id => ({ id, disabled: true })),
+    ...(options.mode === 'ptc' ? [{ insert: [{ id: 'python-repl', name: resolve(options.pluginRoot, 'lib/index.js'), config: { python, skillRoots: [], projectSkillRoots: [] } }] }] : []),
+  ]
+}
+
 export async function runBenchmark(options: BenchOptions) {
   if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1000) throw new Error('超时必须为至少 1000 毫秒的整数')
   if (!['native', 'ptc'].includes(options.mode)) throw new Error('模式必须为 native 或 ptc')
@@ -264,7 +290,10 @@ export async function runBenchmark(options: BenchOptions) {
       { id: 'agent-default-model', config: { provider: options.provider, model: options.model } },
       { id: 'llm-pi-ai', config: { providers: { [options.provider]: { apiKeyEnv: options.keyRef, api: options.api, baseURL: options.baseUrl,
         models: [{ id: options.model, name: options.model, contextWindow: 1000000, maxTokens: 16384, input: ['text'] }] } } } },
-      { id: 'tools', config: { mode: options.mode } },
+      { id: 'tools' },
+      ...(options.mode === 'ptc'
+        ? [{ id: 'tool-executor-native', disabled: true }, { id: 'tool-executor-ptc', disabled: false }]
+        : [{ id: 'tool-executor-native', disabled: false }, { id: 'tool-executor-ptc', disabled: true }]),
       { id: 'permission', config: { defaultPreset: 'danger-full-access' } },
       ...['session-title-llm', 'agent-instructions', 'tool-skill', 'workflow-ptc', 'tool-workflow', 'tool-web', 'tool-subagent', 'tool-subagent-fork', 'tool-goal', 'tool-todo'].map(id => ({ id, disabled: true })),
     ]

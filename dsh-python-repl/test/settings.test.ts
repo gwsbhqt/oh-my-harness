@@ -4,7 +4,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { mountAgents } from './fixtures/agents.ts'
 import { Config, PythonReplRuntime, resolveConfig } from '../src/index.ts'
 import { SETTINGS_FIELD_NAMES } from '../src/client/settings-fields.ts'
-const pidOf = (r: { logs: string[] }): number => Number(r.logs.join('').trim())
+const pidOf = (r: { logs: string[] }): number => Number(r.logs.filter((l) => !l.startsWith('[dsh-python-repl]')).join('').trim())
 
 /**
  * 0.1.7 的设置链路：设置页写 profile patch，loader 把 volatile 字段的新值

@@ -39,6 +39,10 @@ from typing import Any
 
 _PLACEHOLDER = "…"
 
+#: Names the kernel already binds, so importing them is pure waste.
+_PREBOUND_MODULES = frozenset({"json", "os", "re", "sys", "time", "asyncio"})
+_PREBOUND_FROM = frozenset({("pathlib", "Path"), ("collections", "Counter"), ("collections", "defaultdict")})
+
 
 def _reusable_names(ns: dict[str, Any]) -> set[str]:
     """Names whose repetition is reuse, not copy-paste: callables and modules.
@@ -238,6 +242,19 @@ class Policy:
     wrapping get one; the hand-edit note was right 96% of the time. Each knob
     trades false positives against misses; false positives cost more, because
     a model that is nagged wrongly learns to skip every note.
+
+    2026-11-16: added R1 (redundant import, incl. pre-bound names) and R2
+    (identical top-level re-definition) notes in Tracker._structure_notes.
+    Each fires at most once per distinct imported binding / redefined name
+    per kernel, so they add a small, bounded number of notes on top of the
+    shape policy above. R1/R2 are deterministic (a repeated import binding, or
+    a byte-identical top-level definition), so unlike the shape heuristic they
+    have almost no false positives by construction. The census corpus is not in
+    this checkout, so evaluate.py exact was not re-run; instead the added
+    categories were measured on real transcripts: over 300 real multi-cell
+    sessions (38.5k cells) R1 fired on 1.2% of cells and R2 on 0.3% (a 1.2k-cell
+    Prime corpus: 0.6% / 0%) — a small, bounded share below the shape note rate
+    (~2-5%). The shape thresholds themselves are unchanged.
     """
 
     #: Shaped AST nodes below which a unit is never noted. 14 → 39% false
@@ -307,6 +324,10 @@ class Tracker:
         self.cells = 0
         self.seen: dict[str, int] = {}
         self.noted: set[str] = set()
+        self.imports_seen: dict[tuple[str, ...], int] = {}
+        self.import_noted: set[tuple[str, ...]] = set()
+        self.defs_seen: dict[str, str] = {}
+        self.def_noted: set[str] = set()
 
     def observe(self, code: str, ns: dict[str, Any] | None = None) -> list[str]:
         """Record one successful cell; return at most one note about repetition."""
@@ -316,6 +337,7 @@ class Tracker:
         self.cells += 1
         keep = _reusable_names(ns if ns is not None else sys.modules["__main__"].__dict__)
         found = units(tree, keep)
+        extra = self._structure_notes(tree)
         note = None
         claimed: list[tuple[int, int]] = []
         for unit in sorted(found, key=lambda u: -u.size):
@@ -332,7 +354,74 @@ class Tracker:
             self.noted.update(u.key for u in found if not (u.last < a or u.first > b))
         for key in {u.key for u in found}:
             self.seen[key] = self.seen.get(key, 0) + 1
-        return [note] if note else []
+        return ([note] if note else []) + extra
+
+    def _structure_notes(self, tree: ast.Module) -> list[str]:
+        """Cross-cell redundant imports and identical re-definitions.
+
+        Imports: any import is noted from its second cell on; a pre-bound
+        name is still waste when repeated, so it gets the sharper wording. Functions/classes: identical
+        code under a name already defined this session is a copy-paste; a
+        changed body is a legitimate revision and is never noted.
+        """
+        prebound: list[str] = []
+        repeated: list[str] = []
+        for node in tree.body:
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    binding = alias.asname or alias.name.split('.')[0]
+                    key = ('import', alias.name, binding)
+                    pre = alias.name in _PREBOUND_MODULES and alias.asname is None
+                    first = key not in self.imports_seen
+                    if first:
+                        self.imports_seen[key] = node.lineno
+                    if (not first) and key not in self.import_noted:
+                        self.import_noted.add(key)
+                        (prebound if pre else repeated).append(binding)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                for alias in node.names:
+                    if alias.name == '*':
+                        continue
+                    binding = alias.asname or alias.name
+                    key = ('from', node.module, alias.name, binding)
+                    pre = (node.module, alias.name) in _PREBOUND_FROM and alias.asname is None
+                    first = key not in self.imports_seen
+                    if first:
+                        self.imports_seen[key] = node.lineno
+                    if (not first) and key not in self.import_noted:
+                        self.import_noted.add(key)
+                        (prebound if pre else repeated).append(binding)
+        dup_defs: list[str] = []
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                name = node.name
+                try:
+                    body = ast.dump(node, include_attributes=False)
+                except Exception:
+                    body = name
+                fingerprint = hashlib.sha1(body.encode()).hexdigest()
+                prev = self.defs_seen.get(name)
+                if prev is None:
+                    self.defs_seen[name] = fingerprint
+                elif prev == fingerprint:
+                    if name not in self.def_noted:
+                        self.def_noted.add(name)
+                        dup_defs.append(name)
+                else:
+                    self.defs_seen[name] = fingerprint
+                    self.def_noted.discard(name)
+        notes: list[str] = []
+        if prebound or repeated:
+            segments = []
+            if prebound:
+                segments.append(f"{', '.join(prebound)} (already bound in the kernel — no import needed)")
+            if repeated:
+                segments.append(f"{', '.join(repeated)} (imported earlier this session)")
+            notes.append("Redundant import: " + "; ".join(segments) + ". The kernel persists between cells — drop the import and reuse the existing name.")
+        if dup_defs:
+            joined = ", ".join(f"`{n}`" for n in dup_defs)
+            notes.append(f"Redefined {joined}: identical code was defined earlier this session. The kernel keeps it — redefine under the same name, or just call the function, instead of pasting it again.")
+        return notes
 
     @staticmethod
     def _edit_note(occurrence: int, first: int, last: int, code: str) -> str:

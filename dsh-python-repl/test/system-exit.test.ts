@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { ReplSession } from '../src/session.ts'
 import type { BoundTool } from '../src/lease.ts'
-const pidOf = (r: { logs: string[] }): number => Number(r.logs.join('').trim())
+const pidOf = (r: { logs: string[] }): number => Number(r.logs.filter((l) => !l.startsWith('[dsh-python-repl]')).join('').trim())
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const sessions: ReplSession[] = []

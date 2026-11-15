@@ -347,7 +347,7 @@ describe('the kernel follows the session when it changes directory', () => {
   const where = async (session: ReplSession, cwd?: string): Promise<{ cwd: string; env: string }> => {
     const result = await session.runCell('import os, json\nprint(json.dumps([os.getcwd(), os.environ.get("DSH_PYTHON_REPL_WORKSPACE")]))', noTools(), undefined, [], cwd)
     assert.equal(result.error, undefined, JSON.stringify(result))
-    const [got, env] = JSON.parse(result.logs.join('').trim()) as [string, string]
+    const [got, env] = JSON.parse(result.logs.filter((l) => !l.startsWith('[dsh-python-repl]')).join('').trim()) as [string, string]
     return { cwd: got, env }
   }
 
@@ -404,7 +404,7 @@ describe('the kernel follows the session when it changes directory', () => {
     const ask = async (): Promise<string> => {
       const result = await agents.withInitiator(agent, () => runtime.run({ program: 'import os\nprint(os.getcwd())', bindings: [], cwd: start, signal: new AbortController().signal }))
       assert.equal(result.error, undefined, JSON.stringify(result))
-      return result.logs.join('').trim()
+      return result.logs.filter((l) => !l.startsWith('[dsh-python-repl]')).join('').trim()
     }
     try {
       assert.equal(await ask(), start)

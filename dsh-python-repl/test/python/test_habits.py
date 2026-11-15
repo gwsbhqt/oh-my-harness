@@ -150,5 +150,49 @@ class PolicyKnobs(unittest.TestCase):
         self.assertFalse(whole.plain)
 
 
+
+class ReuseDetection(unittest.TestCase):
+    """R1 redundant imports and R2 identical re-definitions, across cells."""
+
+    def test_non_prebound_import_noted_from_second_cell_and_once(self):
+        t = habits.Tracker()
+        cell = "import subprocess\nprint(subprocess.run(['x'], capture_output=True).stdout)\n"
+        got = [run(t, cell) for _ in range(3)]
+        self.assertEqual([bool(n) for n in got], [False, True, False])
+        self.assertIn("Redundant import", got[1][0])
+        self.assertIn("subprocess", got[1][0])
+
+    def test_single_prebound_import_is_silent(self):
+        t = habits.Tracker()
+        self.assertEqual(run(t, "import json\nprint(json.dumps({}))\n"), [])
+
+    def test_prebound_import_noted_from_second_cell(self):
+        t = habits.Tracker()
+        cell = "import json\nprint(json.dumps({}))\n"
+        self.assertEqual(run(t, cell), [])
+        notes = run(t, cell)
+        self.assertEqual(len(notes), 1)
+        self.assertIn("json", notes[0])
+        self.assertIn("already bound", notes[0])
+
+    def test_identical_redefinition_noted_changed_revision_is_not(self):
+        t = habits.Tracker()
+        body = "def sh(cmd):\n    return cmd\n"
+        self.assertEqual(run(t, body), [])
+        dup = run(t, body)
+        self.assertEqual(len(dup), 1)
+        self.assertIn("Redefined", dup[0])
+        self.assertIn("`sh`", dup[0])
+        self.assertEqual(run(t, body.replace("return cmd", "return cmd.strip()")), [])
+
+    def test_same_cell_reports_both_redundant_import_and_redefinition(self):
+        t = habits.Tracker()
+        cell = "import subprocess\ndef sh(cmd):\n    return cmd\n"
+        self.assertEqual(run(t, cell), [])
+        joined = " ".join(run(t, cell))
+        self.assertIn("Redundant import", joined)
+        self.assertIn("Redefined", joined)
+
+
 if __name__ == "__main__":
     unittest.main()
