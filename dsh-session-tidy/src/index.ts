@@ -266,6 +266,8 @@ async function runTidy(ctx: Ctx, ws: any, options: TidyOptions, getConfig: () =>
     const fromWorkspace = wsIdSet.has(id)
     const isOrphan = !fromWorkspace && !inAnyWorkspace.has(id)
     if (!fromWorkspace && !isOrphan) continue
+    // 子代理会话一律不处理；孤儿里也把它们剔除，免得把历史子代理都算进总数。
+    if (isOrphan && subagent.has(id)) continue
     seenIds.add(id)
     if (archivedIds.has(id)) continue
     ids.push(id)

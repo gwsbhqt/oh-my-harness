@@ -77,15 +77,19 @@ test('不属于任何工作区的孤儿会话也一并扫描回收', async () =>
   const ws = { id: 'w1', title: 'W', path: '/w', sessionIds: ['s-real'] }
   const ctx = fakeCtx(ws, {
     recent: ['s-real', 's-orphan-real'],
-    extraSessions: ['s-orphan', 's-orphan-real'],
-    titles: { 's-real': '真实工作', 's-orphan': '运行慢查询并汇总结果', 's-orphan-real': '进行中的活' },
+    extraSessions: ['s-orphan', 's-orphan-real', 's-sub-orphan'],
+    subagent: ['s-sub-orphan'],
+    titles: { 's-real': '真实工作', 's-orphan': '运行慢查询并汇总结果', 's-orphan-real': '进行中的活', 's-sub-orphan': '运行慢查询并汇总结果' },
   })
   const cfg = () => resolveConfig(Config({ apiKeyRef: '' }))
   const report = await tidyWorkspace(ctx as any, 's-real', {}, cfg)
-  // 孤儿只有 s-orphan 是测试标题被收；s-orphan-real 近期有使用、保留
+  // 孤儿只有 s-orphan 是测试标题被收；s-orphan-real 近期有使用、保留；
+  // s-sub-orphan 是子代理会话，从孤儿里剔除，不进总数也不归档
   assert.deepEqual(report.archived.map((x) => x.sessionId), ['s-orphan'])
   assert.equal(report.ungroupedTotal, 2)
+  assert.equal(report.total, 3)
   assert.ok(!report.archived.some((x) => x.sessionId === 's-real'))
+  assert.ok(!report.skipped.some((x) => x.sessionId === 's-sub-orphan'))
 })
 
 test('有 key 但网关连不上时，该条保留不归档（调用失败不误收，不退回规则）', async () => {
