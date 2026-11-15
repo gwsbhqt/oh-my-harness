@@ -17,7 +17,7 @@ App 成对 profile 夹具在 test/doctor.test.mjs，由 App 实际解析或启�
 | 删除仍在读取的用户补丁导致链接断开 | profile-patch-target | 正常链接 / 删除目标后的断链 / 切到统一补丁后恢复；无用户补丁仍合法 |
 | bundle 和用户补丁重复 insert | duplicate-entry-ids | 实际 App 同 scope 重复 / 不同 scope 复用 |
 | 旧 peer 范围使插件静默跳过 | dsh-peer-ranges、bundles-active | App >=预发布下限 / 旧 ^范围 |
-| 插件运行时加载的官方包只装在开发依赖、没声明为 peer：开发机能跑，别的机器拉取后起不来（2026-11-04 一台机器 升 0.2.2-rc.1 预检，python-repl 缺 dsh-tool-executor-ptc） | link-host-peers | 已声明 / 未声明的本地插件；宿主产物里静态导入、`import("…")` 与 `import(常量)` 都算 |
+| 插件运行时加载的官方包只装在开发依赖、没声明为 peer：开发机能跑，别的机器拉取后起不来（升级预发布版预检时，python-repl 缺 dsh-tool-executor-ptc） | link-host-peers | 已声明 / 未声明的本地插件；宿主产物里静态导入、`import("…")` 与 `import(常量)` 都算 |
 | 缺 bundle、断链、构建入口丢失 | bundle-artifacts | 实际 App 可读入口 / 缺包、断链、缺 lib |
 | link 包源码更新但编译产物未重建，动态 Python 与 TS 旧产物混跑 | link-build-freshness | 明确内容清单匹配 / TS、Python 或输出变化；touch 同内容不误报；未声明协议只列未验证，声明缺清单失败，不用 mtime 当内容 |
 | 客户端入口丢失、打包外壳错误，或访问 ctx.remote 却缺连接组件 / remote 注入 | client-artifacts | 有外壳与完整注入 / 缺文件、非函数、缺 remote 注入；factory 不执行 |
