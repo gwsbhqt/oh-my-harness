@@ -1,4 +1,4 @@
-"""Offline pre-labeling with TypeSafe Jev (a yes/no-probability model).
+"""Offline pre-labeling with Jev (a yes/no-probability model), via the Magpie gateway.
 
 Used by `label.py … --jev`: every item of a new batch is scored; confident
 answers become labels, the rest (plus an audit sample of the confident ones)
@@ -10,7 +10,9 @@ $0.042 per million tokens: 1,500 items cost ~$0.04 and take ~95 s.
 Never the only judge: precision is decided on `evaluate.py exact`, which says
 how many of its labels came from Jev; the audit sample re-checks Jev each round.
 
-Needs TYPESAFE_API_KEY.
+Goes through the Magpie gateway (local 127.0.0.1:3425 by default, so calls are counted in Magpie usage).
+Override with MAGPIE_BASE_URL; key comes from MAGPIE_GATEWAY_KEY / MAGPIE_STUDIO_KEY when a remote
+or key-protected gateway needs one.
 """
 
 import concurrent.futures as cf
@@ -19,7 +21,7 @@ import os
 import time
 import urllib.request
 
-URL = "https://api.typesafe.ai/v1/systemone"
+URL = os.environ.get("MAGPIE_BASE_URL", "http://127.0.0.1:3425/v1").rstrip("/") + "/systemone"
 LOW, HIGH, AUDIT = 0.30, 0.75, 0.10
 
 QUESTIONS = {
@@ -62,7 +64,10 @@ def _ask(key, note, shape):
     body = json.dumps({"model": "jev-latest", "questions": {"q": QUESTIONS[note]}, "state": {
         "first_occurrence": _clip(shape["first"]), "second_occurrence": _clip(shape["second"]),
         "times_run_in_session": shape["total"]}}).encode()
-    request = urllib.request.Request(URL, data=body, headers={"authorization": f"Bearer {key}", "content-type": "application/json"})
+    headers = {"content-type": "application/json"}
+    if key:
+        headers["authorization"] = f"Bearer {key}"
+    request = urllib.request.Request(URL, data=body, headers=headers)
     error = None
     for attempt in range(3):
         try:
@@ -76,9 +81,7 @@ def _ask(key, note, shape):
 
 def score(note, shapes, workers=6):
     """[shape] → [{"p", "tokens"} | {"error"}], same order."""
-    key = os.environ.get("TYPESAFE_API_KEY")
-    if not key:
-        raise SystemExit("jev: TYPESAFE_API_KEY is not set")
+    key = os.environ.get("MAGPIE_GATEWAY_KEY") or os.environ.get("MAGPIE_STUDIO_KEY") or ""
     with cf.ThreadPoolExecutor(workers) as pool:
         return list(pool.map(lambda s: _ask(key, note, s), shapes))
 
