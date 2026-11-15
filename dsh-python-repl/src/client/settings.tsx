@@ -28,6 +28,7 @@ import {
   SettingsForm,
   SettingsValueField,
   SettingsFormModel,
+  Switch,
   settingsNumberField,
   settingsTextField,
   type SettingsFieldSpec,
@@ -64,6 +65,8 @@ type LocaleKey =
   | 'invalidText'
   | 'pythonLabel'
   | 'pythonHint'
+  | 'ptcCreativeModeLabel'
+  | 'ptcCreativeModeHint'
   | 'maxFrameBytesLabel'
   | 'maxFrameBytesHint'
   | 'startupTimeoutMsLabel'
@@ -110,6 +113,8 @@ const en: Record<LocaleKey, string> = {
   invalidText: "Invalid value.",
   pythonLabel: "Python interpreter",
   pythonHint: "A uv-managed version such as 3.14, a name on PATH, or an absolute path; >= 3.11.",
+  ptcCreativeModeLabel: "PTC Creator mode",
+  ptcCreativeModeHint: "Default is off. Enable it to use Python code cells and Office tools in the built-in Creator mode. Saving applies the mode change immediately; existing Python kernels keep running.",
   maxFrameBytesLabel: "Maximum kernel frame (bytes)",
   maxFrameBytesHint: "Default 64 MiB; one oversized message stops this kernel. Total output is not limited by this field.",
   startupTimeoutMsLabel: "Startup timeout (ms)",
@@ -157,6 +162,8 @@ const zh: Record<LocaleKey, string> = {
   invalidText: "无效的值。",
   pythonLabel: "Python 解释器",
   pythonHint: "uv 管理的版本号（如 3.14）、PATH 上的命令名或绝对路径，版本必须 >= 3.11。",
+  ptcCreativeModeLabel: "PTC 创造模式",
+  ptcCreativeModeHint: "默认关闭。打开后，创造模式会通过 Python 代码格调用工具，并提供 Office 工具。保存后模式切换立即生效，已有 Python 内核继续运行。",
   maxFrameBytesLabel: "最大单条内核消息（字节）",
   maxFrameBytesHint: "默认 64 MiB。单条消息超限会停止该内核；不限制所有消息的总量。",
   startupTimeoutMsLabel: "启动超时（毫秒）",
@@ -197,10 +204,25 @@ function formLabels(t: Translate<LocaleKey>) {
   }
 }
 
+function settingsBooleanField(field: string): SettingsFieldSpec {
+  return {
+    field,
+    format: (value) => (value === true ? 'true' : value === false ? 'false' : ''),
+    parse: (text) => {
+      const trimmed = text.trim().toLowerCase()
+      if (!trimmed) return { kind: 'clear' }
+      if (trimmed === 'true') return { kind: 'set', value: true }
+      if (trimmed === 'false') return { kind: 'set', value: false }
+      return undefined
+    },
+  }
+}
+
 const SPECS: SettingsFieldSpec[] = SETTINGS_FIELD_DEFS.map(([field, kind]) =>
   kind === 'text' ? settingsTextField(field)
     : kind === 'list' ? stringListField(field)
-      : settingsNumberField(field),
+      : kind === 'bool' ? settingsBooleanField(field)
+        : settingsNumberField(field),
 )
 
 /** 每个字段的渲染元数据：label/hint 的文案键 + 控件类型。 */
@@ -229,22 +251,45 @@ function SettingsCard(props: CardProps) {
   if (props.view === 'summary') return t('description')
   return (
     <SettingsForm labels={formLabels(t)} state={state} onSave={props.save} onDiscard={props.discard}>
-      {FIELDS.map(({ field, kind }) => (
-        <SettingsValueField
-          key={field}
-          id={`plugin-config-python-repl-${field}`}
-          label={t(`${field}Label` as LocaleKey)}
-          hint={t(`${field}Hint` as LocaleKey)}
-          overriddenLabel={t('overridden')}
-          resetLabel={t('reset')}
-          invalidLabel={t(INVALID_LABEL[kind])}
-          numeric={kind === 'number'}
-          disabled={!state.writable}
-          {...(state[field] as SettingsFieldState)}
-          onEdit={(text) => props.edit(field, text)}
-          onReset={() => props.resetField(field)}
-        />
-      ))}
+      {FIELDS.map(({ field, kind }) => {
+        const label = t(`${field}Label` as LocaleKey)
+        const hint = t(`${field}Hint` as LocaleKey)
+        const fieldState = state[field] as SettingsFieldState
+        // 布尔项用拨动开关，别让用户自己敲 true / false。改动仍进草稿，点保存统一提交。
+        if (kind === 'bool') {
+          return (
+            <div key={field} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0' }}>
+              <Switch
+                checked={fieldState.text === 'true'}
+                onChange={(next) => props.edit(field, next ? 'true' : 'false')}
+                label={label}
+                title={hint}
+                disabled={!state.writable}
+              />
+              <span>{label}</span>
+              {fieldState.overridden
+                ? <button type="button" onClick={() => props.resetField(field)}>{t('reset')}</button>
+                : null}
+            </div>
+          )
+        }
+        return (
+          <SettingsValueField
+            key={field}
+            id={`plugin-config-python-repl-${field}`}
+            label={label}
+            hint={hint}
+            overriddenLabel={t('overridden')}
+            resetLabel={t('reset')}
+            invalidLabel={t(INVALID_LABEL[kind])}
+            numeric={kind === 'number'}
+            disabled={!state.writable}
+            {...fieldState}
+            onEdit={(text) => props.edit(field, text)}
+            onReset={() => props.resetField(field)}
+          />
+        )
+      })}
     </SettingsForm>
   )
 }

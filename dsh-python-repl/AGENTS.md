@@ -9,6 +9,7 @@
 - 基础渐进披露已实现：六工具完整契约、其他工具摘要、详情按需；可信技能启动前静态发现，只声明配置与发现，不冒充加载。加载、内核及安全恢复状态放动态上下文；自动排名未实现。
 - 2026-09-22真实GUI探索已验证持久执行、单个子代理返回及图片上下文。2026-11-03 在真实 DSH 会话里验过：一格内同时开 3 个子代理（各自进程、运行时间重叠、变量互不影响）、代码里提问并等待回答、计划审批（退回带意见、批准返回 approved）、真实 MCP 调用与失败报错；多 Agent 并发时的提示组装未单独验。快照恢复 2026-10-15 在真实 DSH 里验过。历史已挂载不等于当前进程已载入最新构建。
 - 设置为 0.1.7 的 volatile 模型：Config 全字段 volatile，loader 原地提交不重启插件；GUI 入口是 client 半自注册的插件页配置卡片（`src/client/settings.tsx`——0.1.7 没有自动生成表单这回事）。变更只影响新会话内核，不自动重启已有内核。工具桥等待上限默认0，沿用DSH生命周期；显式超时不代表外部动作已取消，不自动重放。
+- 配置项 `ptcCreativeMode`（默认 false）把官方创造模式（内置 id `cordis`）改造成 PTC 创造模式（`src/ptc-creator.ts`，复用 `preset-workflow.ts` 的 `remount`/`ownOrInherited`）：从当前 PTC 模式现取工具呈现条目补上，模型只看到 `run_code`，并补 `tool-office`（`CARRIED`）。关闭时还原官方样子，卸载只撤自己这三处，不动其他插件的改动。网页文案由 `src/client/rename.ts` 随开关包住 locale 的 `translate`（false 一个字不改，true 换成「PTC 创造模式」，配置快照一变就重查、卸载还原）；设置卡用拨动开关（`Switch`），配置文件 `cordis.patch.yml` 的 insert config 也显式写 `ptcCreativeMode: false`。开 true/关 false 走 volatile 更新路径。
 
 ## 开工审查修订
 
@@ -38,7 +39,7 @@
 - 内核不是项目的运行环境（Prime 的使用规则）：分析用的库用 `repl.install` 装进内核，项目自己的代码和依赖走项目环境（`uv run`、项目的 `.venv`）。
 - 不把 Prime 的原生 bash/MCP/子代理与 DSH 对应能力同时作为默认模型入口。
 - 宿主下限 0.2.2-rc.1（三台机器 2026-11-05 都已升级，同伴依赖写 `>=0.2.2-rc.1`）：不再给 0.2.1 留退路（提示词钩子改写 run_code 说明、`sdkSchemas`、`dsh-tools` 里找 `renderToolsSdkPy`、没有管线或进度栏时的分支都已删）。
-- 不用 DSH 工作流，不留 TypeScript 运行时（用户 2026-11-04 定：Python 代码格里已能派子代理）。官方 `dsh-workflow-ptc` 一加载就要求 TypeScript 运行时，所以 Host 层的 `workflow-ptc`、`tool-workflow` 在本插件 `cordis.patch.yml` 里关掉；模式里 delegation 组的那两条补丁层够不着，由 `src/preset-workflow.ts` 在模式注册表的记录上关掉并按宿主方式重新挂载（和官方 PTC 模式写法一样；与模式插件分别登记关闭原因，最后一方退出时还原）。依赖注册表内部成员 `definitions`、`activate`、`collect`，DSH 改了它们就不改写，创造、标准模式会加载失败。
+- 不用 DSH 工作流，不留 TypeScript 运行时（用户 2026-11-04 定：Python 代码格里已能派子代理）。官方 `dsh-workflow-ptc` 一加载就要求 TypeScript 运行时，所以 Host 层的 `workflow-ptc`、`tool-workflow` 在本插件 `cordis.patch.yml` 里关掉；模式里 delegation 组的那两条补丁层够不着，由 `src/preset-workflow.ts` 在模式注册表的记录上关掉并按宿主方式重新挂载（和官方 PTC 模式写法一样）。依赖注册表内部成员 `definitions`、`activate`、`collect`，DSH 改了它们就不改写，创造、标准模式会加载失败。
 
 ## 常用快捷区
 

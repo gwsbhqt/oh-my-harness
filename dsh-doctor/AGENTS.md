@@ -32,7 +32,7 @@ App 成对 profile 夹具在 test/doctor.test.mjs，由 App 实际解析或启�
 | 试启动超过时限被停掉，报告只剩一条 Node 废弃警告，会话照着警告查了 35 步（2026-10-14） | isolated-startup 及其他子进程检查的失败说明 | 超时的说明第一行写明没在时限内跑完，修复建议给放宽时限重查；正常非零退出写退出码、不提时限 |
 | 测试夹具用错条目 id（写成 `web`，网页外壳的条目实际叫 `web-runtime`），关浏览器的覆盖落空，每跑一次测试就在默认浏览器开一个 DSH 标签（2026-10-01） | 测试 `startupFixture` | 启动输出不得出现 `opening the default browser`；改回旧 id 时该断言失败 |
 
-提醒项（不算失败、不挡启动）：`preset-ptc-cordis` 对照 App 自带的 PTC、创造模式清单，列出 dsh-presets 的 PTC 创造模式继承不到的官方改动（PTC 模式那一侧新增或写法不同的条目）；有就只列进「未验证」，因为要人判断要不要跟进，不是启动故障。比对规则在公共 `tooling/preset-drift.mjs`，只检查已加载且声明参与的 bundle；测试在公共 `tooling/test/preset-drift.test.mjs`。
+提醒项（不算失败、不挡启动）：`preset-ptc-cordis` 对照 App 自带的 PTC、创造模式清单，列出 dsh-python-repl 可选的 PTC 创造模式继承不到的官方改动（PTC 模式那一侧新增或写法不同的条目）；有就只列进「未验证」，因为要人判断要不要跟进，不是启动故障。比对规则在公共 `tooling/preset-drift.mjs`，只检查已加载且声明参与的 bundle；测试在公共 `tooling/test/preset-drift.test.mjs`。
 
 ## 共用构建与内容清单
 

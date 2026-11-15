@@ -106,6 +106,7 @@ pnpm run check
 | 选项 | 默认值 | 含义 |
 | --- | --- | --- |
 | `python` | `"3.14"` | uv 管理的版本号、宿主 PATH 上的命令名，或解释器路径。会展开 `~`。 |
+| `ptcCreativeMode` | `false` | 把 DSH 自带的创造模式（内置 id `cordis`）改造成 PTC 创造模式：从 PTC 模式现取工具呈现条目，模型只看到 `run_code`，并补上 PTC 有、创造模式没有的通用工具（现为 `tool-office`）；同时把网页上这个模式的名字和介绍换成「PTC 创造模式」。关闭时创造模式保持官方样子。这是对官方模式的运行时改写，和按工作区选默认模式互不相干。 |
 | `skillRoots` | `[]` | 可信 Python 技能目录。相对路径以宿主启动目录为准。 |
 | `projectSkillRoots` | `[".agents/skills"]` | 相对于最近仓库根目录的技能目录；不在仓库中时，相对于会话目录。同名时项目技能优先于配置中的技能。设为 `[]` 可关闭项目技能发现。 |
 | `skillRenames` | `{}` | 旧导入名到当前导入名的对应关系，只用于缺失名字时的建议。不创建别名，也只建议可用技能。 |
@@ -121,6 +122,8 @@ pnpm run check
 | `archiveAfterCells` | `100` | 未固定的名字连续多少格没使用后归档。再次使用会自动恢复。零表示不归档。 |
 | `deleteAfterCells` | `200` | 名字连续多少格没使用后删除。零表示不删除。 |
 | `idleKernelMinutes` | `60` | 没有任务、线程或子进程在运行，且状态能完整恢复时，回收闲置内核的等待时间。零表示不回收。 |
+
+`ptcCreativeMode` 默认关闭，因此装上本插件不会改变任何模式的呈现或名字；只有把它设为 `true` 时才把官方创造模式改造成 PTC 创造模式（工具呈现、`tool-office` 和网页文案一起变），改回 `false` 立即还原成官方样子，插件其他功能（代码格、技能、工具桥）不受影响。设置卡里是一个拨动开关，不用手填 true/false。
 
 默认常驻的额外工具是 `job_output`、`job_kill`、`ask_user_question`、`read_image`、`web_search`、`present`、`todo_write`、`interrupt_agent` 和 `update_goal`。
 

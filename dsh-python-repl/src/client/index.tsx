@@ -20,6 +20,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { CodeRow, type CodeRowProps } from './CodeRow.tsx'
 import { registerSettingsCard } from './settings.tsx'
 import { KernelPanel } from './KernelPanel.tsx'
+import { syncPtcCreativeLocale, PLUGIN_NS, type PtcConfigScope, type PtcLocaleContext } from './rename.ts'
 
 export const inject = ['slots', 'locale', 'configForms']
 
@@ -31,6 +32,13 @@ export function apply(ctx: ClientContext): void {
     ),
   )
   registerSettingsCard(ctx)
+  ctx.effect(
+    () => syncPtcCreativeLocale(
+      ctx as unknown as PtcLocaleContext,
+      ctx.configForms.get(PLUGIN_NS) as unknown as PtcConfigScope,
+    ),
+    'dsh-python-repl: ptc creative locale',
+  )
   ctx.slots.inject('conversation.view', () =>
     ctx.slots.register(
       { name: 'conversation.view', id: 'python-kernel', label: '内核', order: 35, inject: sessionId => ({ sessionId }) },

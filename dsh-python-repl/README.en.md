@@ -106,6 +106,7 @@ Options are stored under the `python-repl` loader id. The plugin settings card e
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `python` | `"3.14"` | uv-managed version, command on the host PATH, or interpreter path; `~` expands. |
+| `ptcCreativeMode` | `false` | Turns DSH's shipped Creator mode (built-in id `cordis`) into PTC Creator: it takes the tool presentation row from the current PTC mode so the model only sees `run_code`, adds the general tools PTC has but Creator lacks (currently `tool-office`), and relabels the mode's name and description in the UI as "PTC Creator". When off, the Creator mode stays as shipped. This rewrites the shipped mode at runtime and is unrelated to picking a per-workspace default mode. |
 | `skillRoots` | `[]` | Trusted Python skill directories; relative paths resolve against the host startup directory. |
 | `projectSkillRoots` | `[".agents/skills"]` | Skill directories relative to the nearest repository root, or session directory outside a repository. A project skill wins over a configured one with the same name. Set `[]` to disable project skill discovery. |
 | `skillRenames` | `{}` | Old import names mapped to current import names, only for missing-name suggestions. No aliases are created, and only available skills are suggested. |
@@ -121,6 +122,8 @@ Options are stored under the `python-repl` loader id. The plugin settings card e
 | `archiveAfterCells` | `100` | Archive unpinned names after this many unused cells; using them restores them automatically. Zero disables archiving. |
 | `deleteAfterCells` | `200` | Delete unpinned names after this many unused cells. Zero disables deletion. |
 | `idleKernelMinutes` | `60` | Reclaim fully recoverable idle kernels when no tasks, threads, or child processes are active. Zero disables reclaim. |
+
+`ptcCreativeMode` defaults to off, so installing this plugin does not change any mode's presentation or name; only setting it to `true` rewrites the shipped Creator mode into PTC Creator (tool presentation, `tool-office`, and the UI labels together), and setting it back to `false` restores the shipped appearance, with the rest of the plugin (cells, skills, tool bridge) unaffected. It is a toggle on the settings card, so users do not type true/false by hand.
 
 The default resident tools are `job_output`, `job_kill`, `ask_user_question`, `read_image`, `web_search`, `present`, `todo_write`, `interrupt_agent`, and `update_goal`.
 

@@ -31,6 +31,10 @@
     - id: python-repl
       name: "dsh-python-repl"
       config:
+        # PTC 创造模式：默认关闭。打开后把 DSH 自带的「创造模式」（id `cordis`）改造成
+        # PTC 创造模式（模型只看到 run_code、补 tool-office、网页文案改「PTC 创造模式」），
+        # 关掉即还原成官方样子。设置卡里的开关写的就是这一项。
+        ptcCreativeMode: false
         # 会话内核用哪个 Python 建专用 venv。**必须 >= 3.11**，和 Prime 内核的下限一致。
         # 写版本号就用 uv 管理的 Python，缺了首次用到时装上；和 Prime 一样停在
         # dill 能完整快照的版本（dill 0.4.1 在 3.15 上存不了函数和类）。

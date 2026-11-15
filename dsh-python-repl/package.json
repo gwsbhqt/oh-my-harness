@@ -40,6 +40,7 @@
     "node": "^22.19.0 || >=24.0.0"
   },
   "dsh": {
+    "presetDrift": true,
     "bundle": {
       "patch": "./cordis.patch.yml"
     },
@@ -71,6 +72,8 @@
         "tooling/runtime/card.mjs",
         "tooling/runtime/fields.d.mts",
         "tooling/runtime/fields.mjs",
+        "tooling/runtime/method-patch.mjs",
+        "tooling/runtime/method-patch.d.mts",
         "tooling/runtime/workflow-guard.mjs",
         "tooling/runtime/workflow-guard.d.mts",
         "tooling/runtime/notice.mjs",

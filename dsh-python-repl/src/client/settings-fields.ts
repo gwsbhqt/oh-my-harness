@@ -4,6 +4,7 @@
  */
 
 export const SETTINGS_FIELD_DEFS = [
+  ['ptcCreativeMode', 'bool'],
   ['python', 'text'],
   ['maxFrameBytes', 'number'],
   ['startupTimeoutMs', 'number'],

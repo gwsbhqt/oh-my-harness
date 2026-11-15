@@ -97,7 +97,7 @@ export function remount(
 }
 
 /** Own method on the instance, or the prototype's. Read by descriptor: the cordis service proxy re-wraps every method read. */
-function ownOrInherited(target: object, key: string): PropertyDescriptor | undefined {
+export function ownOrInherited(target: object, key: string): PropertyDescriptor | undefined {
   for (let at: object | null = target; at !== null; at = Object.getPrototypeOf(at)) {
     const found = Object.getOwnPropertyDescriptor(at, key)
     if (found !== undefined) return found

@@ -35,6 +35,7 @@ import type {} from '@deepseek-ai/dsh-tool-executor-ptc'
 import { renderToolsSdkPy } from '@deepseek-ai/dsh-tool-executor-ptc'
 import { TOP_LEVEL, type ToolSchemaLike } from './catalog.ts'
 import { applyPresetWorkflowOff } from './preset-workflow.ts'
+import { applyPtcCreatorToggle } from './ptc-creator.ts'
 import { createPresentationGuard } from './presentation-guard.ts'
 import { boundCellOutput, type SaveOutput } from './output-budget.ts'
 import { sharedPipeline, type PipelineLike } from './background-tools.ts'
@@ -196,6 +197,15 @@ export const Config = Schema.object({
       'Directories inside the session\'s project (the nearest ancestor holding .git, else the session cwd) also scanned for Python skills, '
       + 'the same rule Prime and the host skill list use for `.agents/skills`. A project skill wins over a configured one of the same name. '
       + 'Importing runs the module\'s top-level code, so every repository you open is trusted like skillRoots; set [] to scan only skillRoots.',
+    ),
+  ptcCreativeMode: Schema.boolean()
+    .volatile()
+    .default(false)
+    .description(
+      'Off by default. When on, DSH\'s built-in Creator mode (id `cordis`) is turned into PTC Creator mode at runtime: it gets the PTC preset\'s tool-presentation '
+      + 'row (the model only sees run_code) and carries the PTC-only general tools (currently `tool-office`: Office render/convert/recalculate). '
+      + 'The Creator mode keeps its built-in id and no name, so existing Creator-mode sessions still work; workflows stay off in every preset regardless (see preset-workflow). '
+      + 'Toggling applies immediately: the rewrite is installed or removed in place without restarting existing kernels.',
     ),
 })
 
@@ -1219,6 +1229,7 @@ export function apply(ctx: Context, config: Config): void {
     })), 'python-repl: name lifecycle route')
   })
   applyPresetWorkflowOff(ctx)
+  applyPtcCreatorToggle(ctx, () => resolveConfig(config).ptcCreativeMode)
 }
 
 // No default runtime-class export: the loader prefers default over the module,
