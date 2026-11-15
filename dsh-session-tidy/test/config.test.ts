@@ -46,7 +46,7 @@ function fakeCtx(ws: any, opts: { live?: string[]; subagent?: string[]; titles?:
   return ctx
 }
 
-test('无 key（apiKeyRef 空）走纯规则：空白/测试标题归档、运行中/置顶/子代理/已归档不动、近期真实会话保留', async () => {
+test('无 key（apiKeyRef 空）走纯规则：空白/测试标题归档、运行中/置顶/子代理/已归档不动、近期正常会话保留', async () => {
   const ws = { id: 'w1', title: 'W', path: '/w', sessionIds: ['s-junk', 's-live', 's-pinned', 's-sub', 's-archived', 's-real', 's-old'] }
   const ctx = fakeCtx(ws, {
     live: ['s-live'], subagent: ['s-sub'], recent: ['s-real'], old: ['s-old'],
@@ -114,8 +114,8 @@ async function loopbackJev() {
         body: raw === '' ? undefined : JSON.parse(raw),
       })
       res.writeHead(200, { 'content-type': 'application/json' })
-      // junk 高、testlike 低、ongoing 高：判为无用（归档），且不触发 test 补强
-      res.end(JSON.stringify({ answers: { junk: { noul: 0.99 }, testlike: { noul: 0.1 }, ongoing: { noul: 0.9 } } }))
+      // finished 高：判为“任务已结束”，归档
+      res.end(JSON.stringify({ answers: { finished: { noul: 0.99 } } }))
     })
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
@@ -150,7 +150,10 @@ function integrationCtx(workspaces: any[], titles: Record<string, string>, first
       readTitleSnapshots: async (ids: string[]) => ids.map((id) => ({ status: 'fulfilled', sessionId: id, value: { title: { title: titles[id] ?? '' } } })),
       listSessions: async () => allIds.map((id) => ({ header: { id, createdAt: Date.now() }, live: false })),
       readSession: async (id: string) => ({
-        events: firstMsgs[id] === undefined ? [] : [{ type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: firstMsgs[id] }] }, time: Date.now() }],
+        events: firstMsgs[id] === undefined ? [] : [
+          { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: firstMsgs[id] }] }, time: Date.now() },
+          { type: 'assistant/message', data: { message: { role: 'assistant', content: [{ type: 'text', text: '任务已完成并推送，无需再操作' }] } }, time: Date.now() },
+        ],
       }),
     },
     get: (name: string) => (name === 'credentials' ? credentials : undefined),
@@ -191,8 +194,11 @@ test('真实 HttpJev：端点/Authorization/model/body 正确；同一 volatile 
     assert.equal(r1.authorization, 'Bearer sk-test-A') // key 按 ref 由 credentials 解析出来
     assert.equal(r1.contentType, 'application/json')
     assert.equal(r1.body.model, 'model-A')                 // model 进请求体
-    assert.equal(r1.body.state.firstUserMessage, 'first message route')
-    assert.equal(r1.body.questions.junk.type, 'noul')
+    // 有最后一条助手回复时不再带第一段用户消息（避免任务书误导“还在进行”）
+    assert.equal(r1.body.state.firstUserMessage, undefined)
+    assert.equal(r1.body.state.lastAssistantMessage, '任务已完成并推送，无需再操作')
+    assert.deepEqual(Object.keys(r1.body.questions), ['finished']) // 只问“任务结没结束”
+    assert.equal(r1.body.questions.finished.type, 'noul')
     assert.deepEqual(resolvedRefs, ['REF_A'])             // credentials 收到的是 ref，不是明文
 
     // 按本仓 volatile 机制修改同一单元格（模拟设置页热更新）
@@ -211,7 +217,8 @@ test('真实 HttpJev：端点/Authorization/model/body 正确；同一 volatile 
     assert.equal(r2.url, '/v2/systemone')
     assert.equal(r2.authorization, 'Bearer sk-test-B')
     assert.equal(r2.body.model, 'model-B')
-    assert.equal(r2.body.state.firstUserMessage, 'first message tool')
+    assert.equal(r2.body.state.firstUserMessage, undefined)
+    assert.equal(r2.body.state.lastAssistantMessage, '任务已完成并推送，无需再操作')
     assert.deepEqual(resolvedRefs, ['REF_A', 'REF_B'])
   } finally {
     await srv.close()

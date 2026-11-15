@@ -5,10 +5,12 @@
  * - 工作区「…」菜单项，经 /api/session-tidy.tidy 调它；
  * - agent 用 tidy_workspace_sessions 工具调它。
  *
- * 判定交给 Jev（Typesafe 的“是非概率”模型）：每条会话带上标题、创建时间、多久没用、第一段用户消息，
- * 问“是不是一次性的测试/临时/调试会话”，概率 ≥ JUNK_THRESHOLD 就归档。真实对照里，
- * 只给标题会把「…合并验收（主控）」这类正在推进的会话误判成垃圾，带上第一段消息后能干净分开，
- * 所以第一段消息是必需的输入（截 300 字）。
+ * 判定交给 Jev（Typesafe 的“是非概率”模型）：每条会话带上标题、创建时间、多久没用、
+ * 最后一段助手回复（第一段用户消息只在没有助手回复时才带，避免任务书把“已收口”误读成“进行中”），
+ * 问“这件事是不是已经结束了（完成/交付/放弃/收口）”，概率 ≥ FINISHED_THRESHOLD 就归档。
+ * 老问法“是不是一次性测试/临时会话”会把「真实工作但已经做完」的任务会话全判成“还有用”；
+ * 改问“结没结束”、并带上最后一条助手回复（“已推送/无需操作” vs “待验收/待办”），
+ * 才能把已收口的收掉、把还有下一步的留下。
  *
  * 正在内存里的（打开着 / 在跑，含当前会话）、子代理、置顶、已归档的会话永不处理。
  * Jev 没配 key 或某条调用失败时，该条保留（调用失败不归档）；完全没 key 时退回原来的纯规则口径。
@@ -65,29 +67,28 @@ export interface TidyItem {
   score?: number
 }
 
-/** Jev 判为“无用”的主门槛。真实 17 条 + 24 条合成数据上：无用最低 0.61，有用最高 0.54，取中间。 */
-const JUNK_THRESHOLD = 0.58
-/** 补强：标题/第一段明显是“一次性测试/验收”，且不像仍在进行的工作时，即使 junk 分数在边缘也收。 */
-const TESTLIKE_THRESHOLD = 0.9
-const ONGOING_KEEP_THRESHOLD = 0.5
-const TESTLIKE_MIN_JUNK = 0.35
+/**
+ * Jev 判为“已结束”的主门槛。把“是不是一次性测试”改成“任务是不是已经结束”、
+ * 只喂标题/是否在跑/闲置天数/最后一段助手回复（不再喂第一段用户消息，因为一整段完整任务说明
+ * 会让它误判成“还在进行”）后，已收口的会话概率明显高于阈值、还有明确待办/待验收的明显低于阈值；
+ * 阈值取 0.38 时重放校准：不误收（从不收正在运行或明显还在做的），已收口的能收掉大部分。
+ */
+const FINISHED_THRESHOLD = 0.38
 /** 第一段用户消息最多带多少字给 Jev（截断不影响判断，见插件手册的校准记录）。 */
 const MAX_FIRST_CHARS = 300
+/** 最后一段助手回复最多带多少字给 Jev：判断“这件事收没收口”主要靠它。 */
+const MAX_LAST_CHARS = 600
 const JEV_TIMEOUT_MS = 15_000
 const JEV_CONCURRENCY = 6
 
-/** Jev 的题目：一条会话是否是没保留价值的一次性会话，以及两条用于补强的旁证。 */
-const JUNK_QUESTION: NoulQuestion = {
+/**
+ * Jev 的题目：这条会话对应的任务是不是已经结束了（而不是仍在进行）。
+ * 老问法“是不是一次性测试/临时会话”会把「真实工作但已做完」的任务会话全判成“还有用”；
+ * 改问“结没结束”、并带上最后一条助手回复后，能干净区分“已交付/已推送/无需操作”与“还有待办/待验收”。
+ */
+const FINISHED_QUESTION: NoulQuestion = {
   type: 'noul',
-  instructions: '这条会话是一次性的测试、临时、调试或顺手试试的会话，事后没有继续保留的价值，可以归档。',
-}
-const TEST_QUESTION: NoulQuestion = {
-  type: 'noul',
-  instructions: '标题或第一段消息显示这是一次性的测试、验收、验证、联调类会话，而不是一件持续的工作。',
-}
-const ONGOING_QUESTION: NoulQuestion = {
-  type: 'noul',
-  instructions: '这条会话对应的是一件仍在进行、以后还要继续使用的实际工作。',
+  instructions: '这条会话对应的任务已经结束（完成、交付、放弃或收口），不是仍在进行中的工作。',
 }
 
 /** 标题正常、但超过这么多天没有任何用户消息，也当没用的收起来（仅在没配 Jev key 时作为兜底）。 */
@@ -134,28 +135,46 @@ function humanText(data: Record<string, unknown>): string {
 interface SessionFacts {
   /** 第一段用户消息（截断）。 */
   firstUserMessage: string
+  /** 最后一段助手回复（截断）；判断“收没收口”主要靠它。 */
+  lastAssistantMessage: string
   /** 最后一条用户消息的时间；没有则退回创建时间。 */
   lastUserAt: number
 }
 
-/** 读一次会话日志，取出第一段用户消息和最后一条用户消息的时间。 */
+/** 从 assistant/message 事件里取助手正文（data.message.content 里的 text 段）。 */
+function assistantText(data: Record<string, unknown>): string {
+  const message = data['message'] as { content?: unknown } | undefined
+  return textOf(message?.content)
+}
+
+/** 读一次会话日志，取出第一段用户消息、最后一段助手回复和最后一条用户消息的时间。 */
 async function sessionFacts(query: any, id: string, fallbackCreatedAt: number): Promise<SessionFacts> {
   let firstUserMessage = ''
+  let lastAssistantMessage = ''
   let lastUserAt = 0
   try {
     const log = await query.readSession(id)
     const events = Array.isArray(log?.events) ? log.events : []
     for (const e of events) {
-      if (e?.type !== 'user/message' || typeof e.data !== 'object' || e.data === null) continue
-      const body = humanText(e.data as Record<string, unknown>)
-      if (body === '') continue
-      if (firstUserMessage === '') firstUserMessage = body.slice(0, MAX_FIRST_CHARS)
-      if (typeof e.time === 'number' && e.time > lastUserAt) lastUserAt = e.time
+      if (typeof e?.data !== 'object' || e.data === null) continue
+      if (e.type === 'user/message') {
+        const body = humanText(e.data as Record<string, unknown>)
+        if (body === '') continue
+        if (firstUserMessage === '') firstUserMessage = body.slice(0, MAX_FIRST_CHARS)
+        if (typeof e.time === 'number' && e.time > lastUserAt) lastUserAt = e.time
+      } else if (e.type === 'assistant/message') {
+        const body = assistantText(e.data as Record<string, unknown>)
+        if (body.trim() !== '') lastAssistantMessage = body.slice(-MAX_LAST_CHARS)
+      }
     }
   } catch {
     /* 读不到日志就当没有第一段消息、时间退回创建时间 */
   }
-  return { firstUserMessage, lastUserAt: lastUserAt > 0 ? lastUserAt : fallbackCreatedAt }
+  return {
+    firstUserMessage,
+    lastAssistantMessage,
+    lastUserAt: lastUserAt > 0 ? lastUserAt : fallbackCreatedAt,
+  }
 }
 
 /** 小并发地跑一批异步任务，保持输出顺序。 */
@@ -264,30 +283,26 @@ async function runTidy(ctx: Ctx, ws: any, options: TidyOptions, getConfig: () =>
       return { junk: false, reason: '最近还在用，保留', ageDays }
     }
 
-    const state = {
+    // 完全空白（无标题、无用户消息、无助手回复）的会话直接收，不劳模型。
+    if (c.title.trim() === '' && facts.firstUserMessage === '' && facts.lastAssistantMessage === '') {
+      return { junk: true, reason: '空白会话', ageDays }
+    }
+    const state: Record<string, unknown> = {
       title: c.title,
       createdAt: c.createdAt > 0 ? new Date(c.createdAt).toISOString() : '',
       idleDays: ageDays,
-      firstUserMessage: facts.firstUserMessage,
+      lastAssistantMessage: facts.lastAssistantMessage,
     }
+    // 有助手回复时只给最后回复：第一段用户消息多是完整任务书，会让模型误以为“还在进行”。
+    if (facts.lastAssistantMessage === '') state['firstUserMessage'] = facts.firstUserMessage
     try {
-      const scores = await asker.ask(
-        state,
-        { junk: JUNK_QUESTION, testlike: TEST_QUESTION, ongoing: ONGOING_QUESTION },
-        AbortSignal.timeout(JEV_TIMEOUT_MS),
-      )
-      const score = scores.junk
-      if (typeof score !== 'number' || !Number.isFinite(score)) throw new Error('Jev 没给出 junk 概率')
-      const testlike = typeof scores.testlike === 'number' ? scores.testlike : 0
-      const ongoing = typeof scores.ongoing === 'number' ? scores.ongoing : 1
-      const testOverride = testlike >= TESTLIKE_THRESHOLD && ongoing < ONGOING_KEEP_THRESHOLD && score >= TESTLIKE_MIN_JUNK
-      if (score >= JUNK_THRESHOLD) {
-        return { junk: true, reason: `Jev 判为无用（${score.toFixed(2)}）`, ageDays, score }
+      const scores = await asker.ask(state, { finished: FINISHED_QUESTION }, AbortSignal.timeout(JEV_TIMEOUT_MS))
+      const score = scores.finished
+      if (typeof score !== 'number' || !Number.isFinite(score)) throw new Error('Jev 没给出 finished 概率')
+      if (score >= FINISHED_THRESHOLD) {
+        return { junk: true, reason: `Jev 判为已结束（${score.toFixed(2)}）`, ageDays, score }
       }
-      if (testOverride) {
-        return { junk: true, reason: `Jev 判为一次性测试/验收（test ${testlike.toFixed(2)}，junk ${score.toFixed(2)}）`, ageDays, score }
-      }
-      return { junk: false, reason: `Jev 认为还有用（${score.toFixed(2)}）`, ageDays, score }
+      return { junk: false, reason: `Jev 认为仍在进行（${score.toFixed(2)}）`, ageDays, score }
     } catch (error) {
       return { junk: false, reason: `模型判断失败，保留（${String((error as Error)?.message ?? error).slice(0, 60)}）`, ageDays }
     }
@@ -393,7 +408,7 @@ function registerTools(ctx: Ctx, getConfig: () => SessionTidyConfig): void {
     defineTool({
       name: 'tidy_workspace_sessions',
       description:
-        'Archive the useless (one-off test/temp/debug, non-running, non-pinned, non-archived) sessions of the workspace that contains the given session. Each session is judged by the Jev model from its title, creation time, idle days and first user message. Returns which sessions were archived and which were kept and why. Archiving is reversible (unarchive).',
+        'Archive the finished/finished-with-no-follow-up (non-running, non-pinned, non-archived) sessions of the workspace that contains the given session. Each session is judged by the Jev model: from its title, creation time, idle days, first user message and last assistant message, it decides whether the task is already over (done/delivered/abandoned) rather than still in progress. Returns which sessions were archived and which were kept and why. Archiving is reversible (unarchive).',
       parameters: {
         session: { type: 'string', required: true, description: 'Any session id in the target workspace (full id or unique prefix).' },
       },

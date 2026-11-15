@@ -2,7 +2,7 @@
   "name": "dsh-session-tidy",
   "version": "0.1.0",
   "private": true,
-  "description": "会话行尾的「整理本工作区」按钮：一键把当前工作区里没用的一次性/测试会话批量归档（排除打开中、运行中、子代理；走正式 archive，可撤销）",
+  "description": "工作区「…」菜单的「整理本工作区」：一键把当前工作区里已经做完、没保留价值的一次性/任务会话批量归档（排除打开中、运行中、子代理；走正式 archive，可撤销）",
   "keywords": [
     "dsh",
     "dsh-plugin",

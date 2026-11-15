@@ -1,13 +1,13 @@
 # dsh-session-tidy
 
-给工作区加一个「整理本工作区」入口：工作区行「…」菜单里一项（排最后），点一下把**该工作区**里没用的一次性/测试会话批量归档。
+给工作区加一个「整理本工作区」入口：工作区行「…」菜单里一项（排最后），点一下把**该工作区**里已经做完、没保留价值的一次性/任务会话批量归档。
 
 ## 行为
 
 - 唯一入口：工作区「…」菜单，`ctx.contextMenus` 结构化菜单 `target: 'workspace'`，order 250，排在“删除工作区”上面。会话「…」菜单不再注册（用户要求只放工作区菜单；要恢复会话入口再加一条 `target: 'session'` 即可）。
 - 点击 → 直接把 `dryRun:false` 发到 `/api/session-tidy.tidy`，**后台静默执行**（不弹全屏遮罩/确认框，不挡界面）→ 完成后用应用内置的**顶部横幅 Toast**（`@deepseek-ai/dsh-client-ui-primitives` 的 `Toast`，body portal、顶部居中、与产品其它提示同款）报「已归档 N 个」（或“没有需要归档的”），失败也用同款 Toast（停留 5s）。归档可恢复。
-- 判定在宿主半（`runTidy`），交给外部模型 **Jev**（`/systemone` 的“是非概率”调用，请求体 `{model,state,questions}` → `answers.<名>.noul`，与 dsh-composer 协议一致）：每条候选会话带上**标题、创建时间、多久没用、第一段用户消息（截 300 字）**，问“是不是一次性的测试/临时/调试会话”，概率 ≥ `JUNK_THRESHOLD=0.58` 就归档；另有两问做补强——明显是“一次性测试/验收”（`testlike≥0.9`）且不像仍在进行的工作（`ongoing<0.5`）时，junk 分数在 0.35 以上也收，用来兜住模型分数的波动。只处理非 live（不在内存、没打开着/没在跑，含当前会话）、非子代理、非置顶、非已归档的会话。
-- 为什么必须带第一段消息：只给标题时“长工”“…合并验收（主控）”这类正在推进的会话会被误判；带上第一段用户消息后能干净分开。
+- 判定在宿主半（`runTidy`），交给外部模型 **Jev**（`/systemone` 的“是非概率”调用，请求体 `{model,state,questions}` → `answers.<名>.noul`，与 dsh-composer 协议一致）：每条候选会话带上**标题、创建时间、多久没用、最后一段助手回复（截 600 字；只有在没有助手回复时才带第一段用户消息，截 300 字）**，问“任务是不是已经结束了（完成/交付/放弃/收口）、而不是仍在进行”，概率 ≥ `FINISHED_THRESHOLD=0.38` 就归档。完全空白（无标题、无用户消息、无助手回复）的会话直接收，不劳模型。只处理非 live（不在内存、没打开着/没在跑，含当前会话）、非子代理、非置顶、非已归档的会话。
+- 为什么改问“结没结束”、并去掉第一段用户消息：老问法“是不是一次性测试/临时会话”会把「真实工作但已经做完」的任务会话全判成“还有用”；而这类会话的第一段用户消息往往是一整段完整任务说明，喂进去会让模型误判成“还在进行”。改问“结没结束”、只喂最后一段助手回复（“已推送/无需操作” vs “待验收/待办”）后，重放校准：该留的不误收，已收口的能收掉大部分。
 - Jev 没配 key 时退回旧规则口径（标题模板 + 超过 `MAX_IDLE_DAYS=3` 天没有用户消息）；单条调用失败或超时则该条保留，不因失败归档。
 - 归档走宿主 `workspaceRegistry.archiveSession`，可撤销；不删除、不中断任何运行中的会话。
 - 同一操作也暴露成 agent 工具 `tidy_workspace_sessions`，参数 `session`（目标工作区里任一会话编号）。
@@ -22,7 +22,7 @@
 | `baseUrl` | `https://api.typesafe.ai/v1/systemone` | Jev 的**完整请求端点**（含 `/systemone`） |
 | `model` | `jev-latest` | 模型名 |
 
-阈值 `JUNK_THRESHOLD=0.58`、第一段消息截断 `MAX_FIRST_CHARS=300`、并发 `JEV_CONCURRENCY=6`、单条超时 15s 写在 `src/index.ts`。条目 id 与包名同名 `session-tidy` / `dsh-session-tidy`，补丁层只插一条 `id: session-tidy`。禁用：profile 补丁写 `- id: session-tidy` + `disabled: true`。
+阈值 `FINISHED_THRESHOLD=0.38`、第一段消息截断 `MAX_FIRST_CHARS=300`、最后回复截断 `MAX_LAST_CHARS=600`、并发 `JEV_CONCURRENCY=6`、单条超时 15s 写在 `src/index.ts`。条目 id 与包名同名 `session-tidy` / `dsh-session-tidy`，补丁层只插一条 `id: session-tidy`。禁用：profile 补丁写 `- id: session-tidy` + `disabled: true`。
 
 ## 依赖与降级
 
