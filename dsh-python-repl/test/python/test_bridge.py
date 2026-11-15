@@ -411,6 +411,7 @@ class ToolResultViews(unittest.IsolatedAsyncioTestCase):
             result["stdout"]
         self.assertIn("job_output", str(caught.exception))
         self.assertIn("job-7", str(caught.exception))
+        self.assertIn("r = await r", str(caught.exception))
         self.assertIsNone(result.get("stdout"))
         with self.assertRaises(KeyError) as plain:
             (await self.call("bash", dict(BASH_OK)))["missing"]
@@ -471,6 +472,7 @@ class ToolResultViews(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(AttributeError) as running:
             promoted.stdout
         self.assertIn("job_output", str(running.exception))
+        self.assertIn("r = await r", str(running.exception))
 
     async def test_empty_grep_view_warns_that_absence_is_not_proven(self) -> None:
         text = repr(await self.call("grep", {"matches": []}))
