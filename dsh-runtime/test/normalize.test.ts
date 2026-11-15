@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { lstat, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -184,5 +184,107 @@ test('dshVolatile：行内数组不动带引号的逗号', () => {
   const e = entry.dshVolatile
   const text = '    args: ["a,b", c]'
   assert.equal(e(text), text)
+})
+
+// ---------------------------------------------------------------------------
+// 外部写入（不走宿主保存钩子）：启动归一化 + 运行中监听
+// ---------------------------------------------------------------------------
+
+async function waitFor(check: () => Promise<boolean>, timeout = 2000): Promise<boolean> {
+  const start = Date.now()
+  while (Date.now() - start < timeout) {
+    if (await check()) return true
+    await new Promise(resolve => setTimeout(resolve, 25))
+  }
+  return false
+}
+
+async function loadWithWatcher() {
+  const ctx = new Context()
+  const fiber = ctx.plugin({
+    name: entry.name,
+    apply: (c: Context) => { entry.applyConfigWrite(c); entry.applyPatchWatcher(c) },
+  })
+  await settle()
+  return fiber
+}
+
+test('collectPatchPaths：归并 .yml 链接、跳过备份、跨 profile 收集真实文件', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'collect-patch-'))
+  try {
+    const desktop = join(home, 'profiles', 'desktop')
+    const other = join(home, 'profiles', 'mbp')
+    await mkdir(desktop, { recursive: true })
+    await mkdir(other, { recursive: true })
+    await writeFile(join(desktop, 'cordis.patch.main.yml'), 'a: 1\n')
+    await symlink('cordis.patch.main.yml', join(desktop, 'cordis.patch.yml'))
+    await writeFile(join(desktop, 'cordis.patch.yml.bak-hermes'), 'old\n')
+    await writeFile(join(other, 'cordis.patch.yml'), 'b: 2\n')
+    const paths = (await entry.collectPatchPaths(home)).sort()
+    assert.deepEqual(paths, [
+      await realpath(join(other, 'cordis.patch.yml')),
+      await realpath(join(desktop, 'cordis.patch.main.yml')),
+    ].sort())
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+test('normalizePathInPlace：经链接归一化目标文件，链接与权限不变', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'norm-inplace-'))
+  try {
+    const main = join(dir, 'cordis.patch.main.yml')
+    await writeFile(main, 'model: "a/b"\nreasoningEffort: "high"\n', { mode: 0o640 })
+    const link = join(dir, 'cordis.patch.yml')
+    await symlink('cordis.patch.main.yml', link)
+    await entry.normalizePathInPlace(link)
+    assert.equal(await readFile(main, 'utf8'), 'model: a/b\nreasoningEffort: high\n')
+    assert.ok((await lstat(link)).isSymbolicLink(), '链接保持')
+    assert.equal((await stat(main)).mode & 0o777, 0o640, '权限保持')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('applyPatchWatcher：启动时归一化已有补丁文件', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'watcher-startup-'))
+  const prev = process.env.DSH_HOME
+  try {
+    const prof = join(dir, 'profiles', 'desktop')
+    await mkdir(prof, { recursive: true })
+    const main = join(prof, 'cordis.patch.main.yml')
+    await writeFile(main, 'model: "a/b"\n')
+    process.env.DSH_HOME = dir
+    const fiber = await loadWithWatcher()
+    assert.ok(await waitFor(async () => (await readFile(main, 'utf8')) === 'model: a/b\n'), '启动应归一化')
+    await fiber.dispose()
+  } finally {
+    process.env.DSH_HOME = prev
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('applyPatchWatcher：运行中外部直写（不经保存钩子）也被归一化', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'watcher-external-'))
+  const prev = process.env.DSH_HOME
+  try {
+    const prof = join(dir, 'profiles', 'desktop')
+    await mkdir(prof, { recursive: true })
+    const main = join(prof, 'cordis.patch.main.yml')
+    await writeFile(main, 'model: ok\n')
+    process.env.DSH_HOME = dir
+    const fiber = await loadWithWatcher()
+    await settle()
+    // 模拟外部进程直接覆盖（普通 writeFile，不走 temp+rename 的保存钩子）
+    await writeFile(main, 'model: "a/b"\nexclude: [ x, y ]\n')
+    assert.ok(
+      await waitFor(async () => (await readFile(main, 'utf8')) === 'model: a/b\nexclude: [x, y]\n'),
+      '外部直写应被监听归一化',
+    )
+    await fiber.dispose()
+  } finally {
+    process.env.DSH_HOME = prev
+    await rm(dir, { recursive: true, force: true })
+  }
 })
 

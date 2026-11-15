@@ -53,11 +53,12 @@
  */
 
 import fsp from 'node:fs/promises'
+import { readdirSync, watch, type FSWatcher } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { syncBuiltinESMExports } from 'node:module'
-import { dirname, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
-import { userInfo } from 'node:os'
+import { homedir, userInfo } from 'node:os'
 import type { Context } from '@deepseek-ai/cordis'
 
 export const name = 'dsh-runtime'
@@ -460,8 +461,129 @@ export function applyConfigWrite(ctx: Context): void {
   })
 }
 
-/** 插件入口：先装顺链接写（全平台），再装登录环境（win32 上跳过）。 */
+// ---------------------------------------------------------------------------
+// 三、配置文件的外部写入：启动时归一化 + 运行中监听
+//
+// 归一化原先只在「宿主自己保存」时触发。可有些配置是宿主之外的进程直接改写文件
+// （不走 save/rename），这种写入宿主里的保存钩子看不到。这里在启动时先把已有的
+// 补丁文件归一化一遍，并监听这些文件；运行中一有变化，不论是谁写的，都再归一化。
+// 只作用于 profile 的 `cordis.patch.*.yml`，规则仍是上面的 `dshVolatile`。
+// ---------------------------------------------------------------------------
+
+/** DSH 主目录：与宿主共用同一个环境变量，缺省 `~/.dsh`。 */
+function dshHomeDir(): string {
+  return process.env.DSH_HOME || join(homedir(), '.dsh')
+}
+
+/** profile 下 `cordis.patch.*.yml` 的真实文件；`.yml` 链接归并到目标，跳过备份。 */
+export async function collectPatchPaths(home = dshHomeDir()): Promise<string[]> {
+  const profiles = join(home, 'profiles')
+  let dirs: string[]
+  try {
+    dirs = await fsp.readdir(profiles)
+  } catch {
+    return []
+  }
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const dir of dirs) {
+    let names: string[]
+    try {
+      names = await fsp.readdir(join(profiles, dir))
+    } catch {
+      continue
+    }
+    for (const name of names) {
+      if (name.includes('.bak') || !PATCH_FILE.test(name)) continue
+      const path = join(profiles, dir, name)
+      let real: string
+      try {
+        real = await fsp.realpath(path)
+      } catch {
+        continue
+      }
+      if (seen.has(real)) continue
+      seen.add(real)
+      out.push(real)
+    }
+  }
+  return out
+}
+
+/** 就地把一个文件按 `dshVolatile` 归一化；仅在内容变化时写，保留权限。传链接时写到它最终指向的文件。 */
+export async function normalizePathInPlace(path: string): Promise<void> {
+  let target: string
+  try {
+    target = (await linkTarget(path)) ?? path
+  } catch {
+    return
+  }
+  let before: string
+  try {
+    before = await fsp.readFile(target, 'utf8')
+  } catch {
+    return
+  }
+  let after: string
+  try {
+    after = dshVolatile(before)
+  } catch {
+    return
+  }
+  if (after === before) return
+  const tmp = `${target}.${randomBytes(6).toString('hex')}.tmp`
+  try {
+    const mode = (await fsp.stat(target)).mode & 0o7777
+    await fsp.writeFile(tmp, after, { mode })
+    await fsp.rename(tmp, target)
+  } catch {
+    await fsp.rm(tmp, { force: true }).catch(() => {})
+  }
+}
+
+/** 启动时归一化已有补丁文件，并监听 profile 目录里它们的外部改动。 */
+export function applyPatchWatcher(ctx: Context): void {
+  ctx.effect(() => {
+    const home = dshHomeDir()
+    const profiles = join(home, 'profiles')
+    const pending = new Map<string, ReturnType<typeof setTimeout>>()
+    const watchers: FSWatcher[] = []
+    const schedule = (path: string): void => {
+      const prev = pending.get(path)
+      if (prev !== undefined) clearTimeout(prev)
+      pending.set(path, setTimeout(() => {
+        pending.delete(path)
+        normalizePathInPlace(path).catch(() => {})
+      }, 150))
+    }
+    collectPatchPaths(home)
+      .then(paths => Promise.all(paths.map(p => normalizePathInPlace(p).catch(() => {}))))
+      .catch(() => {})
+    try {
+      for (const dir of readdirSync(profiles)) {
+        try {
+          watchers.push(watch(join(profiles, dir), (_event, filename) => {
+            const name = filename === null ? '' : String(filename)
+            if (PATCH_FILE.test(name)) schedule(join(profiles, dir, name))
+          }))
+        } catch {
+          // 某个 profile 目录不可监听不影响其他目录
+        }
+      }
+    } catch {
+      // profiles 目录不存在：没什么可监听
+    }
+    return () => {
+      for (const watcher of watchers) watcher.close()
+      for (const timer of pending.values()) clearTimeout(timer)
+      pending.clear()
+    }
+  }, 'runtime: patch watcher')
+}
+
+/** 插件入口：先装顺链接写与补丁监听（全平台），再装登录环境（win32 上跳过）。 */
 export async function apply(ctx: Context): Promise<void> {
   applyConfigWrite(ctx)
+  applyPatchWatcher(ctx)
   await applyLoginEnvironment(ctx)
 }
