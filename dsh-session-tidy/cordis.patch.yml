@@ -1,0 +1,6 @@
+# dsh-session-tidy bundle 补丁层：会话行尾「整理本工作区」按钮。
+#
+# 关掉：在 profile 的 cordis.patch.yml 写 `- id: session-tidy` 加 `disabled: true`。
+- insert:
+    - id: session-tidy
+      name: "dsh-session-tidy"

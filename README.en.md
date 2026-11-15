@@ -20,7 +20,7 @@ This repository is **not a standalone app**. It is a set of components that add 
 | **Core** | [dsh-python-repl](dsh-python-repl/README.en.md) | Lets the assistant do its work in Python. Large data stays in the program; only the conclusion goes into the chat. [Details below](#core-1-dsh-python-repl-let-the-assistant-write-programs) |
 | **Core** | [dsh-use](dsh-use/README.en.md) | Remote-controls a running DSH so one assistant can lead several others. [Details below](#core-2-dsh-use-one-assistant-leads-several-others) |
 | Operate the computer | [browser-use](skills/browser-use/README.en.md) · [computer-use](skills/computer-use/README.en.md) · [remote-host](skills/remote-host/README.en.md) | Operate web pages, Mac desktop apps, and another machine. |
-| Supporting plugins | [dsh-monitor](dsh-monitor/README.en.md) · [dsh-guard](dsh-guard/README.en.md) · [dsh-compaction-bound](dsh-compaction-bound/README.en.md) · [dsh-message-tidy](dsh-message-tidy/README.en.md) · [dsh-image-cap](dsh-image-cap/README.en.md) · [dsh-history-cap](dsh-history-cap/README.en.md) · [dsh-settings](dsh-settings/README.en.md) | Wake on background events, stop runaway output, let the model wrap up its own goal, and keep long chats from overflowing. [Details below](#other-components) |
+| Supporting plugins | [dsh-monitor](dsh-monitor/README.en.md) · [dsh-guard](dsh-guard/README.en.md) · [dsh-compaction-bound](dsh-compaction-bound/README.en.md) · [dsh-message-tidy](dsh-message-tidy/README.en.md) · [dsh-image-cap](dsh-image-cap/README.en.md) · [dsh-history-cap](dsh-history-cap/README.en.md) · [dsh-settings](dsh-settings/README.en.md) · [dsh-session-link](dsh-session-link/README.en.md) · [dsh-grep-scope](dsh-grep-scope/README.en.md) · [dsh-prompt-prefix](dsh-prompt-prefix/README.en.md) · [dsh-session-tidy](dsh-session-tidy/README.en.md) | Wake on background events, stop runaway output, let the model wrap up its own goal, and keep long chats from overflowing. [Details below](#other-components) |
 
 There are two kinds: **plugins** load into DSH itself (root folders that start with `dsh-`); **tools** are separate programs the assistant can call, under `skills/`, and also work on their own from a terminal. Each component's README has its real demo; click a name to see it.
 
@@ -97,6 +97,15 @@ Click a name to open that component's own README with setup, configuration, limi
 | [dsh-runtime](dsh-runtime/README.en.md) | Loads the login environment at startup, preserves symlinks on save, and normalizes profile patch YAML. | Desktop launches cannot find commands, or DSH configuration is managed through symlinks. |
 | [dsh-doctor](dsh-doctor/README.en.md) | Checks profiles, dependencies, build artifacts, and actual startup; exposes a tool, remote API, and CLI. | Before restarting after plugin or configuration changes. |
 | [dsh-settings](dsh-settings/README.en.md) | One settings package that carries three pages — preset preferences, skills, and quick replies — loaded once, sharing the same draft / revert / save page header. | When you want one consistent edit flow for several settings in the settings sidebar. |
+
+**Sessions and retrieval**
+
+| Component | What it does | Use it when |
+| --- | --- | --- |
+| [dsh-session-link](dsh-session-link/README.en.md) | References another session with locating hints only; the model reads overview, single turns and search on demand instead of copying the whole transcript. | You want to look into another session from a new one without dumping it into context. |
+| [dsh-grep-scope](dsh-grep-scope/README.en.md) | Adds an "all" scope to file search: include hidden and ignored files when needed (VCS metadata excluded). | You want to confirm "the repository truly has none" while the default search misses hidden or ignored files. |
+| [dsh-prompt-prefix](dsh-prompt-prefix/README.en.md) | Pins workspace instructions, the skill catalog and the memory profile to the end of the system prompt so a new session's first request hits the cache. | Every new session recomputes a large fixed block on its first message. |
+| [dsh-session-tidy](dsh-session-tidy/README.en.md) | One workspace-menu click archives the useless one-off/test sessions in bulk; reversible. | A workspace has piled up test sessions and you want to clear them without deleting the ones in use. |
 
 **Operate the computer**
 

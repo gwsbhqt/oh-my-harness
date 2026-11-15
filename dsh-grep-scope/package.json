@@ -1,0 +1,80 @@
+{
+  "name": "dsh-grep-scope",
+  "version": "0.1.0",
+  "description": "给模型的文件搜索加一个「全部」范围：需要时连隐藏目录和被忽略的文件一起搜（版本库内部除外）",
+  "private": true,
+  "files": [
+    "lib/*.js",
+    "cordis.patch.yml",
+    "AGENTS.md",
+    "README.md",
+    "README.en.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "build": {
+      "manifest": "./lib/dsh-build.json",
+      "inputs": [
+        "src",
+        "package.json",
+        "scripts/build.mjs",
+        "cordis.patch.yml",
+        "pnpm-lock.yaml",
+        "tsconfig.json",
+        "tsdown.config.ts"
+      ],
+      "outputs": [
+        "lib"
+      ],
+      "repositoryInputs": [
+        "tooling/build.mjs",
+        "tooling/build-manifest.mjs",
+        "tooling/build-manifest.d.mts",
+        "tooling/tsdown.mjs",
+        "tooling/tsdown.d.mts",
+        "tooling/tsconfig.base.json",
+        "tooling/tsconfig.node.json"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test 'test/*.test.ts'",
+    "check": "pnpm run typecheck && pnpm run build && pnpm run test"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-agent": ">=0.2.1-rc.2",
+    "@deepseek-ai/dsh-tool-fs-search": ">=0.2.1-rc.2",
+    "@deepseek-ai/dsh-tools": ">=0.2.1-rc.2"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tool-fs-search": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-subprocess": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-subprocess-local": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session-projection": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tool-executor-native": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tool-executor-ptc": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-spill": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-scope": "0.2.2-rc.1",
+    "@types/node": "^24.0.0",
+    "@vscode/ripgrep": "^1.18.0",
+    "tsdown": "^0.22.2",
+    "typescript": "^5.9.0"
+  }
+}

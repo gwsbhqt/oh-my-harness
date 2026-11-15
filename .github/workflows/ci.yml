@@ -59,6 +59,10 @@ jobs:
             dsh-image-cap
             dsh-history-cap
             dsh-settings
+            dsh-session-link
+            dsh-grep-scope
+            dsh-prompt-prefix
+            dsh-session-tidy
           )
           for plugin in "${plugins[@]}"; do
             echo "::group::$plugin"

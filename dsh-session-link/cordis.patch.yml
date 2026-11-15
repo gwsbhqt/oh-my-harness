@@ -1,0 +1,11 @@
+# dsh-session-link bundle 补丁层。
+#
+# 挂在外层：官方的 sessionReferenceResolver（引用会话）和 sessionQuery（读会话）都在外层。
+# 关掉它：在 profile 的 cordis.patch.yml 写 `- id: session-link` 加 `disabled: true`，
+# 引用会退回官方的整份复制，三个 session_* 工具也一起下线。
+- insert:
+    - id: session-link
+      name: "dsh-session-link"
+      config:
+        # 引用别的会话时只给线索、不复制内容。false = 退回官方整份复制（工具仍在）。
+        replaceReferences: true

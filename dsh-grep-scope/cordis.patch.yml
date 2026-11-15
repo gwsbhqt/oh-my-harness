@@ -1,0 +1,3 @@
+- insert:
+    - id: grep-scope
+      name: "dsh-grep-scope"
