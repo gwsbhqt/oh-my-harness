@@ -83,6 +83,8 @@ export interface SessionOptions {
   toolCallTimeoutMs?: number
   /** Bounds one cell's own output (see output-budget.ts); absent leaves it whole. */
   boundOutput?: (logs: readonly string[], runId: string) => Promise<string[]>
+  /** Bounds the captured output of a FAILED cell more tightly than a successful one. */
+  boundErrorOutput?: (logs: readonly string[], runId: string) => Promise<string[]>
   /**
    * Host-side ceiling on a cancelled cell that will not stop. Counted from the
    * NEXT cell's arrival, not from the cancel: the cancel itself returns after
@@ -849,9 +851,12 @@ export class ReplSession {
       const executed = await kernel.execute(runId, code)
       trace.endedAt = Date.now()
       this.#activeRunId = undefined
-      const outcome = this.#options.boundOutput === undefined
+      const bound = executed.error !== undefined && this.#options.boundErrorOutput !== undefined
+        ? this.#options.boundErrorOutput
+        : this.#options.boundOutput
+      const outcome = bound === undefined
         ? executed
-        : { ...executed, logs: await this.#options.boundOutput(executed.logs, runId) }
+        : { ...executed, logs: await bound(executed.logs, runId) }
       // Revoke BEFORE teardown runs: teardown is itself a kernel request, and
       // a task still running during it must not hold this cell's authority.
       this.#revoke(runId)

@@ -72,3 +72,20 @@ it('a real cell ending on a 200 000-item list comes back bounded with `_` still 
   const again = await session.runCell('len(_)', new Map())
   assert.deepEqual(again.logs, ['200000'])
 })
+
+const errSession = new ReplSession({
+  python: process.env['DSH_PY'] ?? 'python3',
+  vendorRoot: join(root, 'vendor', 'prime'),
+  pythonRoot: join(root, 'python'),
+  boundOutput: (logs) => boundCellOutput(logs, 8_000, async () => ({ locator: '/spill/ok-cell.txt' })),
+  boundErrorOutput: (logs) => boundCellOutput(logs, 500, async () => ({ locator: '/spill/err-cell.txt' })),
+})
+after(() => errSession.dispose())
+
+it('a failed cell bounds its captured output with the smaller error budget', async () => {
+  const cell = await errSession.runCell('print("A" * 6000)\nraise ValueError("boom")', new Map())
+  assert.equal(cell.error?.kind, 'exception')
+  const text = cell.logs.join('\n')
+  assert.ok(text.length < 4_000, `got ${text.length} characters`)
+  assert.match(text, /saved at \/spill\/err-cell\.txt/)
+})

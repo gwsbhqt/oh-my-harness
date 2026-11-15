@@ -303,10 +303,10 @@ class _BashResult(_ToolResult):
             job = self.get("jobId")
             raise KeyError(
                 f"{key!r}: this bash call became a {self['kind']} job {job!r} and has no {key!r} yet. "
-                + (f"You are a subagent: ending your turn ends your run, and DSH then kills this job with no notice, so wait for it in a cell before you read `{key}`: `r = await r` collects it "
-                 f"(or call tools.job_output({{'job_id': {job!r}, 'wait': True}}) until it is not running). Do not re-run the command"
+                + (f"You are a subagent: ending your turn kills it with no notice, so wait in a cell with `r = await r` "
+                 f"(or tools.job_output({{'job_id': {job!r}, 'wait': True}})). Do not re-run the command"
                  if _SUBAGENT else
-                 f"Collect it first with `r = await r` (it raises JobStillRunning if the cell's wait runs out), or end this turn — DSH wakes you when it finishes — then `await` this value for its result (or tools.job_output({{'job_id': {job!r}}})). Do not re-run the command")
+                 f"Get it with `r = await r` — DSH wakes you when it finishes (or tools.job_output({{'job_id': {job!r}}})). Do not re-run the command")
             )
         return _ToolResult.__missing__(self, key)
 

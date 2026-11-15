@@ -12,6 +12,7 @@ export const SETTINGS_FIELD_DEFS = [
   ['interruptGraceMs', 'number'],
   ['toolCallTimeoutMs', 'number'],
   ['maxCellOutputTokens', 'number'],
+  ['maxErrorOutputTokens', 'number'],
   ['maxCellTimeoutMs', 'number'],
   ['archiveAfterCells', 'number'],
   ['deleteAfterCells', 'number'],

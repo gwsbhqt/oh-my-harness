@@ -33,8 +33,8 @@ describe('failed and cancelled cells', () => {
     assert.equal(message(await s.runCell('rows = [1]', new Map())), '')
     const text = message(await s.runCell('r = await read({"file_path": "/a.py"})\nawait edit({"file_path": "/a.py", "old_string": "x", "new_string": "y"})\nrows = [2]\ndef helper():\n    return 1', tools))
     assert.match(text, /^ToolCallError: old_string was not found/)
-    assert.match(text, /Tool calls this cell made before it stopped \(2\):\n  #1 read \/a\.py: ok\n  #2 edit \/a\.py: failed/)
-    assert.match(text, /Last call that succeeded: #1 read\. Completed calls are not undone/)
+    assert.match(text, /Before it stopped this cell ran: #1 read ok; #2 edit failed\./)
+    assert.match(text, /Completed calls are not undone — continue from the failing line, not the whole cell\./)
     assert.match(text, /The cell stopped at line 2; lines 3-5 did not run, so not defined: helper; still the value from an earlier cell: rows\./)
   })
 
@@ -51,7 +51,7 @@ describe('failed and cancelled cells', () => {
     await sleep(800)
     controller.abort()
     const text = message(await pending)
-    assert.match(text, /cell was cancelled\nTool calls this cell made before it stopped \(1\):\n  #1 bash sleep 100: still running when the cell stopped; DSH cancels it/)
+    assert.match(text, /cell was cancelled\nBefore it stopped this cell ran: #1 bash still running \(DSH cancels it\)\./)
   })
 })
 
@@ -131,8 +131,8 @@ describe('cell-end notes from the trace', () => {
     const calls = Array.from({ length: 14 }, (_, i) => call(i + 1, 'read', 0, 1))
     calls[13]!.status = 'error'
     const text = callsReport(calls)
-    assert.match(text, /\(14\):\n  #1-#4: 4 ok \(not listed\)\n  #5 read: ok/)
-    assert.match(text, /#14 read: failed\nLast call that succeeded: #13 read\./)
+    assert.match(text, /Before it stopped this cell ran: \+4 earlier; #5 read ok;/)
+    assert.match(text, /#14 read failed\./)
     assert.equal(callsReport([]), '')
   })
 })

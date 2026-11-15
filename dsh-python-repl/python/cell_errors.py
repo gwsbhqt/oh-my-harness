@@ -23,7 +23,7 @@ _CHAIN = 3
 def _where(filename: str) -> tuple[str, str]:
     """(kind, label) of a frame outside the session's cells."""
     path = filename.replace("\\", "/")
-    if "/dsh-python-repl/python/" in path or "/vendor/prime/" in path:
+    if "/dsh-python-repl/python/" in path or "/vendor/prime/" in path or ("/kernel-sources/" in path and "/python/" in path):
         return "bridge", "the DSH bridge"
     match = re.search(r"/skills/([^/]+)/", path) or re.search(r"/src/([^/]+)/", path)
     if match:

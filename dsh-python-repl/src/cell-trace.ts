@@ -57,26 +57,22 @@ export function newCall(n: number, tool: string, args: unknown): TracedCall {
   return { n, tool, preview: argPreview(tool, args), status: 'running', startedAt: Date.now(), background }
 }
 
-const STATUS: Record<TracedCall['status'], string> = { ok: 'ok', error: 'failed', running: 'still running when the cell stopped; DSH cancels it' }
+const STATUS: Record<TracedCall['status'], string> = { ok: 'ok', error: 'failed', running: 'still running (DSH cancels it)' }
 
 /**
  * What a failed or cancelled cell already did. Codex #49908 / Pydantic: without
- * it the model re-runs the whole cell and repeats writes. Empty when no calls.
+ * it the model re-runs the whole cell and repeats writes. Kept to one line and
+ * without per-call previews: the model already knows the code it wrote, and the
+ * old multi-line form cost more context than it saved. Empty when no calls.
  */
 export function callsReport(calls: readonly TracedCall[]): string {
   if (calls.length === 0) return ''
   const shown = calls.slice(-SHOWN)
-  const earlier = calls.slice(0, calls.length - shown.length)
-  const lines = [`Tool calls this cell made before it stopped (${calls.length}):`]
-  if (earlier.length > 0) {
-    const failed = earlier.filter((call) => call.status !== 'ok').length
-    lines.push(`  #1-#${earlier.length}: ${earlier.length - failed} ok${failed > 0 ? `, ${failed} not ok` : ''} (not listed)`)
-  }
-  for (const call of shown) lines.push(`  #${call.n} ${call.tool}${call.preview === '' || call.preview === call.tool ? '' : ` ${call.preview}`}: ${STATUS[call.status]}`)
-  const lastOk = [...calls].reverse().find((call) => call.status === 'ok')
-  lines.push(`${lastOk === undefined ? 'None of them succeeded.' : `Last call that succeeded: #${lastOk.n} ${lastOk.tool}.`} `
-    + 'Completed calls are not undone: continue from the first one that did not succeed instead of re-running the whole cell.')
-  return lines.join('\n')
+  const earlier = calls.length - shown.length
+  const list = shown.map((call) => `#${call.n} ${call.tool} ${STATUS[call.status]}`).join('; ')
+  const prefix = earlier > 0 ? `+${earlier} earlier; ` : ''
+  return `Before it stopped this cell ran: ${prefix}${list}. `
+    + 'Completed calls are not undone — continue from the failing line, not the whole cell.'
 }
 
 /** Cell time not covered by any bridge call: Python running, sleeping, or blocked. */

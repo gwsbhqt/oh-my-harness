@@ -79,6 +79,8 @@ type LocaleKey =
   | 'toolCallTimeoutMsHint'
   | 'maxCellOutputTokensLabel'
   | 'maxCellOutputTokensHint'
+  | 'maxErrorOutputTokensLabel'
+  | 'maxErrorOutputTokensHint'
   | 'maxCellTimeoutMsLabel'
   | 'maxCellTimeoutMsHint'
   | 'archiveAfterCellsLabel'
@@ -127,6 +129,8 @@ const en: Record<LocaleKey, string> = {
   toolCallTimeoutMsHint: "0 uses DSH tool lifetimes, including human waits.",
   maxCellOutputTokensLabel: "Cell output budget (tokens)",
   maxCellOutputTokensHint: "Longer output shows only its start and end; the whole text is saved to a file. 0 turns this off.",
+  maxErrorOutputTokensLabel: "Failed-cell output budget (tokens)",
+  maxErrorOutputTokensHint: "How much of a failed cell's captured output stays visible; the rest is saved to a file. 0 uses the cell output budget.",
   maxCellTimeoutMsLabel: "Cell timeout (ms)",
   maxCellTimeoutMsHint: "Longest a cell may run; past it the cell is cancelled like an interrupt. Default one day.",
   archiveAfterCellsLabel: "Archive after (cells)",
@@ -176,6 +180,8 @@ const zh: Record<LocaleKey, string> = {
   toolCallTimeoutMsHint: "0 表示沿用 DSH 工具生命周期（含等人回复）。",
   maxCellOutputTokensLabel: "单格输出上限（token）",
   maxCellOutputTokensHint: "超出时只给模型看开头和结尾，全文存进文件。填 0 关闭。",
+  maxErrorOutputTokensLabel: "报错格输出上限（token）",
+  maxErrorOutputTokensHint: "报错时回显多少失败前打印的内容；其余存进文件。填 0 沿用单格输出上限。",
   maxCellTimeoutMsLabel: "单格最长运行时间（毫秒）",
   maxCellTimeoutMsHint: "超过就像中断一样取消这一格；默认一天。",
   archiveAfterCellsLabel: "多少格没用就归档",

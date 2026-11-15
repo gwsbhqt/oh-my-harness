@@ -23,6 +23,15 @@ it('skill error labels recognize both skill roots and source packages',async()=>
   assert.equal(message(await session.runCell('import cell_errors\nassert cell_errors._where("/checkout/skills/demo-tool/src/demo/api.py") == ("library", "skill demo-tool")\nassert cell_errors._where("/checkout/extensions/demo/src/demo_skill/api.py") == ("library", "skill demo-skill")',new Map())), '')
 })
 
+it('kernel-sources copies count as the bridge, so its frames fold instead of leaking', async () => {
+  const text = message(await session.runCell(
+    'import cell_errors\n'
+    + 'assert cell_errors._where("/x/.dsh/plugins/python-repl/kernel-sources/abc123/python/dsh_kernel.py") == ("bridge", "the DSH bridge")\n'
+    + 'assert cell_errors._where("/x/.dsh/plugins/python-repl/kernel-sources/abc123/python/cell_errors.py") == ("bridge", "the DSH bridge")',
+    new Map()))
+  assert.equal(text, '')
+})
+
 it('a failed tool call: the cell line, one marker, the message once, and what to do', async () => {
   const tools = new Map([['read', async () => { throw new Error('cannot read "/x/y.py": not found') }]])
   const text = message(await session.runCell('x = 1\nr = await read({"file_path": "/x/y.py"})', tools))

@@ -38,6 +38,7 @@ import { applyPresetWorkflowOff } from './preset-workflow.ts'
 import { applyPtcCreatorToggle } from './ptc-creator.ts'
 import { createPresentationGuard } from './presentation-guard.ts'
 import { boundCellOutput, type SaveOutput } from './output-budget.ts'
+import { redactHome } from './redact.ts'
 import { sharedPipeline, type PipelineLike } from './background-tools.ts'
 import type { SubagentsLike } from './agent-runs.ts'
 import { JobNotices, listUnfinished, unfinishedNotice, type HostJobs, type JobsService } from './bash-jobs.ts'
@@ -131,6 +132,14 @@ export const Config = Schema.object({
     .description(
       'Estimated tokens one cell may print and display before only its start and end are shown; the whole output goes to the DSH spill store '
       + 'and the notice names the file. 0 turns it off. Without a spill store the output is left whole. Applies to new session kernels.',
+    ),
+  maxErrorOutputTokens: Schema.natural()
+    .volatile()
+    .default(2_000)
+    .description(
+      'Estimated tokens of a FAILED cell\'s captured output (what it printed before the error) that stay visible; the whole text still goes '
+      + 'to the spill store and the notice names the file. Keep it smaller than maxCellOutputTokens: a failed cell usually needs to know where it '
+      + 'stopped, not everything it printed. 0 falls back to maxCellOutputTokens. Applies to new session kernels.',
     ),
   residentTools: Schema.array(Schema.string())
     .volatile()
@@ -465,7 +474,7 @@ export class PythonReplRuntime extends PtcRuntime {
         // instead of starting a kernel that cannot clean up after itself.
         return {
           logs: [],
-          error: { kind: 'exception', message: error instanceof Error ? error.message : String(error) },
+          error: { kind: 'exception', message: redactHome(error instanceof Error ? error.message : String(error)) },
         }
       }
     }
@@ -484,16 +493,18 @@ export class PythonReplRuntime extends PtcRuntime {
     } finally {
       budget.dispose()
     }
-    const logs = [...result.logs]
-    if (result.error === undefined) return { logs }
+    if (result.error === undefined) return { logs: [...result.logs] }
+    // Failed cells only: keep the account name and home-directory paths out of the error block, and redact the
+    // captured output that rides along with it. A successful cell keeps real paths so the model can act on them.
+    const logs = result.logs.map(redactHome)
     if (result.error.kind === 'abort' && budget.expired && !(spec.signal?.aborted ?? false)) {
-      return { logs, error: { kind: 'timeout', message: timeoutMessage(spec.timeoutMs as number, result.error.message) } }
+      return { logs, error: { kind: 'timeout', message: redactHome(timeoutMessage(spec.timeoutMs as number, result.error.message)) } }
     }
     return {
       logs,
       error: {
         kind: result.error.kind === 'abort' ? 'abort' : result.error.kind === 'worker-exit' ? 'worker-exit' : 'exception',
-        message: result.error.message,
+        message: redactHome(result.error.message),
       },
     }
   }
@@ -855,6 +866,7 @@ export class PythonReplRuntime extends PtcRuntime {
       interruptGraceMs: config.interruptGraceMs,
       toolCallTimeoutMs: config.toolCallTimeoutMs,
       boundOutput: (logs, runId) => boundCellOutput(logs, config.maxCellOutputTokens, this.spillSaver(key, runId)),
+      boundErrorOutput: (logs, runId) => boundCellOutput(logs, config.maxErrorOutputTokens > 0 ? config.maxErrorOutputTokens : config.maxCellOutputTokens, this.spillSaver(key, runId)),
       backgroundPipeline: () => this.toolPipeline(),
       subagents: () => this.ctx.get('subagents' as never) as SubagentsLike | undefined,
     })
