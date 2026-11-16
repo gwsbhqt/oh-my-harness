@@ -11,6 +11,7 @@ import { describe, it } from 'node:test'
 import {
   AGENT_PRESET_NS,
   PLUGIN_NS,
+  SETTINGS_PRESETS_NS,
   renameCreator,
   syncPtcCreativeLocale,
   type PtcConfigScope,
@@ -54,6 +55,10 @@ function fakeLocale(): FakeLocale {
       presetCordis: '创造模式',
       presetCordisDescription: '创造模式：具备标准任务工具',
       presetPtc: 'PTC 模式',
+    },
+    [SETTINGS_PRESETS_NS]: {
+      preset_cordis: '创造模式',
+      preset_ptc: 'PTC 模式',
     },
   }
   const registrations: string[] = []
@@ -108,6 +113,9 @@ describe('syncPtcCreativeLocale', () => {
     scope.set(true)
     assert.equal(service.translate(AGENT_PRESET_NS, 'presetCordis'), 'PTC 创造模式')
     assert.match(service.translate(AGENT_PRESET_NS, 'presetCordisDescription'), /PTC 模式加上创造模式的加成/)
+    // 设置侧栏「模式偏好」页的下拉（dsh-settings 的 presets 命名空间）也要一致；别的模式名不动
+    assert.equal(service.translate(SETTINGS_PRESETS_NS, 'preset_cordis'), 'PTC 创造模式')
+    assert.equal(service.translate(SETTINGS_PRESETS_NS, 'preset_ptc'), 'PTC 模式')
     // 与创造模式无关的命名空间保持原样
     assert.equal(service.translate('settings.other', 'x'), 'settings.other/x')
     // 配置变化触发了文案重查（注册了内部空命名空间）

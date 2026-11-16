@@ -4,6 +4,8 @@
  *
  * 后台不给 `cordis` 起名字，它在模式名单里仍是内置模式（网页认内置模式的规则：没有名字、id 是自带的四个之一）。
  * 名字、介绍、「Agent 预设」页的说明都是网页按 `settings.agentPreset` 文案现查的，所以在查文案这一步换。
+ * 设置侧栏「模式偏好」页的下拉用的是 `dsh-settings` 自己的 `presets` 文案（`preset_cordis`），同一个
+ * `cordis` 模式在那边也要显示成 PTC 创造模式，所以对那一个键一起换。
  * 照继承的思路：拿官方当时的原文做替换，官方改了措辞就用新措辞，替换不上的句子保留原文；
  * 只有介绍整句换掉，因为官方那句讲的是创造模式本身，换词说不通。
  *
@@ -13,6 +15,8 @@
 import { createMethodPatcher } from '../../../tooling/runtime/method-patch.mjs'
 
 export const AGENT_PRESET_NS = 'settings.agentPreset'
+/** dsh-settings「模式偏好」页的文案命名空间；下拉里 `cordis` 那一项叫 `preset_cordis`。 */
+export const SETTINGS_PRESETS_NS = 'presets'
 export const PLUGIN_NS = 'python-repl'
 
 const DESCRIPTION = {
@@ -69,8 +73,10 @@ export function syncPtcCreativeLocale(ctx: PtcLocaleContext, scope: PtcConfigSco
   const dispose = installLocalePatch(locale, 'translate', (original: Translate) =>
     function (this: unknown, ns: string, key: string, params?: Record<string, unknown>) {
       const text = original.call(this, ns, key, params)
-      if (!enabled || ns !== AGENT_PRESET_NS || typeof text !== 'string') return text
-      return renameCreator(key, text)
+      if (!enabled || typeof text !== 'string') return text
+      if (ns === AGENT_PRESET_NS) return renameCreator(key, text)
+      if (ns === SETTINGS_PRESETS_NS && key === 'preset_cordis') return renameCreator(key, text)
+      return text
     })
 
   let seq = 0
