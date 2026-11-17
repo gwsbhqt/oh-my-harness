@@ -17,6 +17,20 @@ env:
   UV_NO_PROGRESS: '1'
 
 jobs:
+  public-content:
+    name: Public content checks (no install)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26.13.0'
+      - name: Check documentation, licenses and public boundaries
+        run: node --test tooling/test/public-repository.test.mjs
+
   plugins:
     name: Tooling and plugin checks
     runs-on: ubuntu-latest
@@ -47,24 +61,8 @@ jobs:
         run: |
           set -euo pipefail
           ci_failures=()
-          plugins=(
-            dsh-python-repl
-            dsh-use
-            dsh-monitor
-            dsh-guard
-            dsh-runtime
-            dsh-doctor
-            dsh-compaction-bound
-            dsh-message-tidy
-            dsh-image-cap
-            dsh-history-cap
-            dsh-settings
-            dsh-session-link
-            dsh-grep-scope
-            dsh-prompt-prefix
-            dsh-session-tidy
-          )
-          for plugin in "${plugins[@]}"; do
+          plugin_list="$(node tooling/cli.mjs list)"
+          while IFS=$'\t' read -r plugin _; do
             echo "::group::$plugin"
             if pnpm --dir "$plugin" install --frozen-lockfile; then
               if uv run --no-project --python 3.14 --with dill --with httpx pnpm --dir "$plugin" run check; then
@@ -78,7 +76,7 @@ jobs:
               echo "::error::$plugin dependency installation failed; check was not run"
             fi
             echo "::endgroup::"
-          done
+          done <<< "$plugin_list"
           echo "::group::tooling"
           if node --test tooling/test/*.test.mjs; then
             echo "Tooling checks passed"
@@ -103,6 +101,10 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: '3.12'
+      - name: Install media test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-noto-cjk
       - name: Test tools and shared transport
         env:
           DSH_HOME: ${{ runner.temp }}/dsh-ci-home
@@ -113,10 +115,16 @@ jobs:
         run: |
           set -euo pipefail
           ci_failures=()
-          for component in browser-use computer-use remote-host _shared; do
+          for component in browser-use computer-use remote-host shot-sheet _shared; do
             echo "::group::$component"
             if [[ "$component" == "_shared" ]]; then
               if uv run --no-project --python 3.12 python -m unittest discover -s _shared/tests -v; then
+                echo "$component tests passed"
+              else
+                ci_failures+=("$component:$?")
+              fi
+            elif [[ "$component" == "shot-sheet" ]]; then
+              if uv sync --python 3.12 --project "$component" --extra test && uv run --offline --no-sync --project "$component" python -m pytest "$component/tests" -v; then
                 echo "$component tests passed"
               else
                 ci_failures+=("$component:$?")

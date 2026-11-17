@@ -47,7 +47,7 @@ All three do the same kind of thing: the model writes a piece of code and calls 
 
 **What it takes from Prime.** Only the Python kernel from Prime's runtime: `rlm/repl.py` and its instructions. Both files sit unchanged in [`vendor/prime/`](vendor/prime/); their source and hashes are recorded in [PROVENANCE.md](vendor/PROVENANCE.md). Prime's conversation loop, tools and installer are not installed.
 
-**Why not write one from scratch.** I had already written my own Python kernel for DSH. It was feature-complete at close to ten thousand lines of code and tests, and it needed its own process pool and a virtual environment per session. That was too much to maintain, so I archived it. Prime's kernel already solves and tests the hard parts, persistent variables and snapshot restore, so borrowing it left me with only the bridge to DSH to write.
+**Why reuse an upstream kernel.** Prime already provides persistent execution and snapshot recovery. Reusing it lets this project focus on DSH tool authority, cancellation, background work, recovery reports, and skill integration. Upstream files remain unchanged; compatibility code lives separately, with source hashes and integration tests checking the boundary.
 
 **What it turns off.** The bundle turns off DSH's built-in TypeScript code mode and the workflow feature that depends on it, including the matching entries in the standard and creation presets. To run several subagents from Python, use `repl.agent`.
 
@@ -140,6 +140,12 @@ Do not use `import skills.demo_reader` or install a package named `skills`. `ski
 **This is a trusted Python environment, not a sandbox.** Python can access the host filesystem, network, and processes independently of Harness tools. Importing a skill executes its top-level code. Trust every configured skill directory and every repository opened with project skill discovery enabled.
 
 Harness tool calls retain Harness approval and policy checks. A cell losing its tool authorization does not remove Python's host capabilities. Cancellation delivers `asyncio.CancelledError` and preserves the kernel when possible. Completed external effects are not undone or replayed; threads and detached processes may continue. Use managed Harness background jobs for services that must outlive a kernel.
+
+## Output completeness
+
+`await repl.require_complete(result)` returns Bash stdout only after the command has finished successfully and its output is known to be complete. A successful exit does not prove that logs are complete. Known gaps are marked as truncation; when the background interface supplies no structured completeness information, the result is explicitly unknown and the check refuses it.
+
+A full-log file supplied by the host may combine stdout and stderr. The same path must not be described as each stream’s separate full output. Read the actual supplied file when complete logs are needed; missing text cannot be recovered from a retained tail when no file is available.
 
 ## Development and attribution
 

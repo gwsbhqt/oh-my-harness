@@ -1,6 +1,7 @@
 {
   "name": "dsh-grep-scope",
   "version": "0.1.0",
+  "license": "MIT",
   "description": "给模型的文件搜索加一个「全部」范围：需要时连隐藏目录和被忽略的文件一起搜（版本库内部除外）",
   "private": true,
   "files": [

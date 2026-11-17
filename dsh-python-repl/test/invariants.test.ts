@@ -117,7 +117,7 @@ describe('tasks outlive their cell, as in Prime', () => {
   })
 
   it('names a background task that failed while nobody awaited it, once', async () => {
-    // Field 2026-09-28: the task ended with an error and the cell reported plain success.
+    // An unawaited task can fail even when the enclosing cell completes successfully.
     const session = newSession()
     const result = await session.runCell(
       'import asyncio\n'

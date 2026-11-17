@@ -1,8 +1,8 @@
 import { asarParts } from './asar.ts'
 
 /**
- * Dependency and cache directories left out of grep and glob unless the call names one. In dotfiles they
- * made up 32 of the 34 MB a whole-tree glob printed and turned an 18 s grep into 1.5 s (2026-11-13, evolve I-014).
+ * Dependency and cache directories are omitted unless the call names one explicitly. Their generated
+ * content can consume traversal time and raw-output budgets before useful project matches are returned.
  */
 export const SKIPPED_DIRECTORIES = ['node_modules', '.venv', 'site-packages', '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache', '.tox'] as const
 

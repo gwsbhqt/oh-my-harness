@@ -124,7 +124,7 @@ export interface Deps {
   setWorkingDirectory?: (sessionId: string, directory: string) => Promise<string>
   /**
    * 收回会话目标的自动续跑授权（宿主 `goals` 服务的 disarm）：目标仍是进行中，这一轮跑完不再自动开下一轮。
-   * 宿主的 `goals/pause` 遇到在跑的会话会以「用户中止」打断当前这一轮（goal-round-driver，2026-10-18 核对 0.2.1-rc.2），disarm 不会。
+   * 宿主的 `goals/pause` 遇到在跑的会话会以「用户中止」打断当前这一轮（goal-round-driver），disarm 不会。
    * 会话没加载时返回 false：没加载的会话本来就不会自动续跑。不给就不支持 `goal hold`。
    */
   holdGoal?: (sessionId: string) => boolean
@@ -331,8 +331,8 @@ export class RemoteService {
   }
 
   /**
-   * 宿主让存档会话的每一轮在第一步前就以 blocked 结束，不调模型（`archived-session-gate`，2026-10-19 核对 0.2.1-rc.2），
-   * 消息照收、却没人看。所以明说送不到；dsh-use restart 据此知道「请再排一次」没人接手（复盘 I-018）。
+   * 宿主的 archived-session-gate 会在首步前阻止存档会话运行。
+   * 接受消息不等于能够处理消息，因此发送前明确拒绝已存档会话。
    * 读不到存档名单时照旧送，不让通知因为这一步查询失败。
    */
   private async assertNotArchived(id: string): Promise<void> {
@@ -621,7 +621,7 @@ export class RemoteService {
   }
 
   /**
-   * 发消息。三种送法（2026-10-08 按宿主 0.2.0-rc.2 源码核对）：
+   * 发消息时区分三种宿主投递方式：
    * - 默认排队：进下一轮的收件箱，当前这一轮跑完才看到。
    * - `now`（旧名 steer）：会话在跑就插进当前这一轮的下一步（宿主 `mode: 'steer'`，和界面「插话发送」同一条路），
    *   模型做完手上这一步就看到；会话没在跑就和排队一样立即开跑。

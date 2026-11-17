@@ -1,6 +1,7 @@
 {
   "name": "dsh-prompt-prefix",
   "version": "0.1.0",
+  "license": "MIT",
   "private": true,
   "description": "把工作规范、技能目录、记忆画像固定到系统提示词末尾，便于复用缓存",
   "type": "module",

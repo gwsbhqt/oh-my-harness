@@ -2,12 +2,12 @@
 
 dill saves a module outside the standard library and site-packages together
 with its whole global namespace. A restore then imports the current code from
-disk and writes the old globals over it: new code, old data (Prime research,
-2026-11-03), and a skill module whose globals hold locks or sessions cannot be
-saved at all, so `reader = skills.demo_reader` and every function that used it
-came back missing after a restart. Here an importable module is saved as its
-import name and imported again on restore; a skill binding is saved as its
-name in `skills`. The cost: attributes set on a module by hand are not kept.
+disk and writes the old globals over it: new code, old data. A skill module
+whose globals hold locks or sessions may not be serializable at all, which
+can also prevent restoration of bindings and functions that reference it.
+Here an importable module is saved as its import name and imported again on
+restore; a skill binding is saved as its name in `skills`. The cost:
+attributes set on a module by hand are not kept.
 """
 from __future__ import annotations
 

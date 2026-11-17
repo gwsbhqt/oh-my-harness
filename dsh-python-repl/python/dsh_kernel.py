@@ -87,12 +87,9 @@ class _ToolResult(dict):
     Still a plain `dict` for every program purpose — indexing, `json.dumps`,
     passing it back into another tool — only `repr()`/`str()` differ. The
     kernel displays a trailing expression with `repr()`, and a raw dict repr
-    puts a whole shell transcript on one line with escaped newlines. So the
-    model wrote `print(r["stdout"]["text"], r["exitCode"])` by hand in 174 of
-    314 cells of a real session (2026-09-23) — and never once looked at
-    `truncated` or `spillPath`. The view shows the fields a conclusion depends
-    on (exit status, stderr, truncation) every time, so skipping them is no
-    longer the path of least resistance.
+    puts a whole shell transcript on one line with escaped newlines. The view
+    keeps exit status, stderr, truncation and spill metadata visible alongside
+    the output, so a readable display retains the evidence needed to assess it.
 
     The header names the tool and says it is a view, so it is never mistaken
     for the raw JSON. A shape the renderer does not recognise falls back to
@@ -110,7 +107,7 @@ class _ToolResult(dict):
     __str__ = __repr__
 
     def __missing__(self, key: Any) -> Any:
-        # 2026-11-03 real sessions: `r["text"]` on a read result and `r[:500]` on a dict were common KeyErrors.
+        # Report the structured result shape when a caller guesses a key or tries to slice it.
         keys = ", ".join(repr(k) for k in self)
         if isinstance(key, slice):
             raise KeyError(f"this tool result is a dict, not text or a list, so it cannot be sliced; its keys are {keys}")
@@ -122,13 +119,12 @@ class _ToolResult(dict):
                 guess = cell_errors._close_key(key, list(self))
             except Exception:  # noqa: BLE001 - the key list below is enough without a guess
                 guess = None
-        # 2026-11-03 evolve I-044: `exit_code`, `id` guessed for `exitCode`, `jobId` even with the keys listed.
+        # Suggest a close key spelling as well as listing the available keys.
         tail = f"; did you mean {guess!r}?" if guess else ""
         raise KeyError(f"{key!r} is not a key of this tool result; its keys are {keys}{tail}")
 
     def __getattr__(self, name: str) -> Any:
-        # 2026-11-03 evolve I-044: after the KeyError hint, cells still wrote `r.totalLines`, `files.paths`,
-        # `g.matches` and failed. Reading an existing key by attribute is unambiguous, so it just works.
+        # Attribute access is an unambiguous alias for an existing public dictionary key.
         if name.startswith("_"):
             raise AttributeError(name)
         try:
@@ -164,6 +160,16 @@ def _wrap_nested(value: Any) -> Any:
     return value
 
 
+def _bash_output_location(result: dict, stream: str) -> str:
+    output = result.get(stream)
+    if isinstance(output, dict) and isinstance(output.get("spillPath"), str):
+        return f"full output path: {output['spillPath']}"
+    paths = result.get("spillPaths")
+    if isinstance(paths, list) and paths and all(isinstance(path, str) for path in paths):
+        return "shared output files (stream mapping unavailable): " + ", ".join(paths)
+    return "full output path: not reported"
+
+
 def require_complete(result: Any, stream: str = "stdout", *, check_exit: bool = True) -> str:
     """Return an untruncated bash stream; never mistake a tail for full output.
 
@@ -177,6 +183,10 @@ def require_complete(result: Any, stream: str = "stdout", *, check_exit: bool = 
             "read does not report reliable byte completeness; require_complete cannot certify it. "
             "Use await repl.read_window(result) for window validation only, not lossless reading."
         )
+    if isinstance(result, _BashJobResult):
+        if result.get("truncated") is True:
+            raise ValueError(f"collected bash output was truncated ({_bash_output_location(result, stream)}); do not parse or count it as complete")
+        raise ValueError("job_output does not supply reliable structured truncation metadata; completeness is unknown")
     if not isinstance(result, dict) or result.get("kind") != "foreground":
         raise ValueError("require_complete needs a foreground bash result; collect background/promoted jobs without re-running them")
     output = result.get(stream)
@@ -195,10 +205,10 @@ def require_complete(result: Any, stream: str = "stdout", *, check_exit: bool = 
             "Use check_exit=False only when you intend to analyze failed output; "
             "it does not turn failure into success and still rejects truncation/interruption."
         )
-    if output.get("truncated"):
-        location = output.get("spillPath") or "not reported"
+    if output.get("truncated") is True:
+        location = _bash_output_location(result, stream)
         raise ValueError(
-            f"bash {stream} was truncated; only its tail is in text (full output path: {location}). "
+            f"bash {stream} was truncated; its collected text may be incomplete ({location}). "
             "The host has not promised a durable complete-output API here; do not parse or count this tail. "
             "Do not re-run a command with side effects automatically."
         )
@@ -240,16 +250,18 @@ def validate_read_window(result: Any, *, offset: int | None = None, limit: int |
     }
 
 
-def _stream(label: str, stream: Any) -> list[str]:
+def _stream(label: str, stream: Any, has_shared_paths: bool = False) -> list[str]:
     """One bash stream: its text plus an explicit truncation marker."""
     if not isinstance(stream, dict):
         return []
     text = stream.get("text") or ""
     lines = [f"[{label}]", text.rstrip("\n")] if text else []
-    if stream.get("truncated"):
+    if stream.get("truncated") is True:
         spill = stream.get("spillPath")
-        where = f"; full output: {spill}" if spill else "; no full-output file was reported"
-        lines.append(f"[{label} truncated to its tail{where}]")
+        where = f"; full output: {spill}" if spill else ("; recovery paths are shared" if has_shared_paths else "; no full-output file was reported")
+        lines.append(f"[{label} marked truncated{where}]")
+    elif stream.get("truncated") is not False:
+        lines.append(f"[{label} completeness is unknown]")
     return lines
 
 
@@ -274,8 +286,8 @@ class _BashResult(_ToolResult):
                     "next time keep `await job`'s result in a variable."
                 )
             handle = BashJob(job_id, "")
-            if self.get("kind") == "promoted" and self.get("output"):
-                handle._text.append(self["output"])
+            if self.get("kind") == "promoted":
+                handle._append_output(self.get("output") or "", truncated=self.get("truncated"), spill_paths=self.get("spillPaths"))
             _HANDLES[job_id] = handle
         return handle
 
@@ -289,7 +301,7 @@ class _BashResult(_ToolResult):
         return await self._handle().wait(timeout_ms)
 
     async def peek(self) -> str:
-        """Everything the job wrote so far, without waiting."""
+        """Collected output text so far, without certifying its completeness."""
         return await self._handle().peek()
 
     async def kill(self, reason: str | None = None) -> Any:
@@ -297,8 +309,8 @@ class _BashResult(_ToolResult):
         return await self._handle().kill(reason)
 
     def __missing__(self, key: Any) -> Any:  # noqa: D105 - see below
-        # Observed: `r["stdout"]["text"]` on a command the host moved to the
-        # background raised a bare KeyError, and the receipt view never showed.
+        # A background receipt has no completed stdout; explain how to
+        # collect the result even when the caller accesses a missing key.
         if self.get("kind") in ("background", "promoted"):
             job = self.get("jobId")
             raise KeyError(
@@ -336,7 +348,9 @@ class _BashResult(_ToolResult):
         sandbox = self.get("sandbox")
         if isinstance(sandbox, dict) and sandbox.get("denied"):
             status.append("SANDBOX DENIED")
-        body = _stream("stdout", self["stdout"]) + _stream("stderr", self["stderr"])
+        shared = bool(self.get("spillPaths"))
+        body = ([f"[{_bash_output_location(self, 'stdout')}]"] if shared else [])
+        body += _stream("stdout", self["stdout"], shared) + _stream("stderr", self["stderr"], shared)
         if not body:
             body = ["(no output on stdout or stderr)"]
         return "\n".join([f"── bash · {' · '.join(status)} (view of a dict) ──", *body])
@@ -361,7 +375,7 @@ class _ReadResult(_ToolResult):
         return "\n".join(line["text"] for line in self["lines"])
 
     def __missing__(self, key: Any) -> Any:
-        # 2026-11-06 evolve I-073: the KeyError hint still cost one failed cell per session (4 that day); r["text"] is unambiguous.
+        # The text alias joins only this read window; it does not imply the whole file was read.
         if key == "text":
             return self.text
         return super().__missing__(key)
@@ -386,8 +400,7 @@ class _ReadResult(_ToolResult):
 
 #: Display caps for search views, matching the host's direct-call caps
 #: (`grepMaxMatches` 250, `globMaxResults` 100). A cell gets the COMPLETE
-#: result — the host caps only top-level calls — so an uncapped view put 6519
-#: matches of `grep e` into the context (field regression 2026-09-23).
+#: result, so the view must be bounded independently of the stored value.
 _GREP_SHOW = 250
 _GLOB_SHOW = 100
 _LINE_SHOW = 300
@@ -440,8 +453,8 @@ class _GlobResult(_ToolResult):
         out = [f"── glob · {len(paths)} paths under {self['root']} (view of a dict) ──", *paths[:_GLOB_SHOW]]
         if len(paths) > _GLOB_SHOW:
             out.append(_not_shown(len(paths) - _GLOB_SHOW, len(paths), "paths", _GLOB_SHOW))
-        # Observed: `*/package.json` with a path, then an absolute pattern, both
-        # came back empty with nothing saying why; the fourth try was right.
+        # Explain workspace-root matching when a slash-containing pattern
+        # returns no paths, so an empty result is not mistaken for absence.
         pattern, with_path = getattr(self, "_pattern", (None, False))
         if not paths and isinstance(pattern, str) and "/" in pattern and not pattern.startswith("**/"):
             if pattern.startswith("/"):
@@ -548,9 +561,8 @@ def _install(host_request: Any, cell_var: Any, epoch: int) -> None:
         _hint_name_errors(repl_module)
 
 
-#: Appended to a NameError for `display`: GPT called IPython's display() in 10
-#: cells (session analysis 2026-10-08). `display` is deliberately NOT defined —
-#: a stand-in would hide the mistake instead of teaching the REPL's way.
+#: Appended to a NameError for IPython's display(). This kernel uses print()
+#: or a trailing expression; a stand-in would conceal that API difference.
 _DISPLAY_HINT = (
     "This is not IPython: use print() or put the value last in the cell (a trailing expression is displayed).\n"
 )
@@ -569,9 +581,9 @@ def _business_error(exc: BaseException) -> bool:
 
 
 def _name_error_hint(name: Any) -> str | None:
-    """Why a missing name is missing, when the bridge knows: IPython's display, or a
-    tool or skill reached without its namespace (`read_image(...)` for
-    `tools.read_image(...)`: 7 cells on real sessions, 2026-11-03)."""
+    """Explain known missing names: IPython's display, or a tool or skill
+    reached without its namespace, such as `read_image(...)` instead of
+    `tools.read_image(...)`."""
     if type(name) is not str:
         return None
     if name == "display":
@@ -702,20 +714,18 @@ def _rehearse(text: str, edits: list[dict]) -> str | None:
 async def _edit_many(args: dict) -> Any:
     """`edit({"file_path": p, "edits": [{"old_string", "new_string", "replace_all"?}, ...]})`.
 
-    The host `edit` changes one place per call, so cells patched several places
-    by hand — `assert old in t; t = t.replace(old, new); write back` — around
-    900 times in the sessions mined on 2026-09-23, bypassing the host's
-    read-before-edit policy. Here every change is still one host `edit`, in
-    order, each under that policy.
+    The host `edit` changes one place per call. Keep batch edits on that
+    path so every change is dispatched in order under the host's
+    read-before-edit policy.
 
     Before dispatching anything, the whole batch is rehearsed in memory against
     the file's current text with the host's matching rules, each change seeing
     the result of the ones before it. If any change would fail, the batch is
     rejected and nothing is written. A new_string holding U+0000 is rejected
     too: the host treats a file containing it as binary and refuses every later
-    edit, so the batch would stop half-applied (evolve I-004, where a normal
-    Python string turned "\\x00" into a real NUL). When the file cannot be
-    read here (missing, not UTF-8, too large), the rehearsal is skipped and
+    edit, so the batch would stop half-applied. A Python string escape can
+    introduce a real NUL before dispatch. When the file cannot be read here
+    (missing, not UTF-8, too large), the rehearsal is skipped and
     changes go straight to the host. A change can still fail during dispatch
     (the file changed in between, or the host's read policy refuses); then the
     error says exactly which changes are already in the file (edits are not
@@ -810,9 +820,8 @@ async def _call_tool(tool: str, args: Any = None) -> Any:
     # and notes NaN is the only corruption vector, because every other
     # unserializable value already raises during the send itself.
     #
-    # Failing fast with a normal tool error beats hanging: the model sees which
-    # argument cannot be sent and can fix it. (Cost a real session ~8 minutes
-    # on 2026-09-22.)
+    # Failing fast identifies the invalid argument without waiting for a reply
+    # that the host cannot produce.
     try:
         json.dumps(payload, allow_nan=False)
     except (ValueError, TypeError) as exc:
@@ -932,6 +941,12 @@ class _BashJobResult(_ToolResult):
         code = self["exitCode"]
         status = f"exitCode={code}" if code is not None else f"status={self['status']}"
         out = [f"── bash job {self['jobId']} · {status} (view of a dict) ──"]
+        if self.get("truncated") is True:
+            out.append("[output truncated; collected text is incomplete]")
+        else:
+            out.append("[output completeness is unknown: job_output does not supply structured truncation metadata]")
+        if self.get("spillPaths"):
+            out.append(f"[{_bash_output_location(self, 'stdout')}]")
         text = self["text"]
         if len(text) > _BASH_JOB_SHOW:
             out.append(f"[... first {len(text) - _BASH_JOB_SHOW} chars not shown; all of it is in r['text'] ...]")
@@ -968,11 +983,11 @@ def _finished(handle: "BashJob") -> None:
         del _RELEASED[next(iter(_RELEASED))]
 
 
-def _streams(text: str) -> dict:
-    """A job's text (stdout, then stderr after a `[stderr]` line) as the foreground stdout/stderr fields."""
+def _streams(text: str, truncated: bool | None) -> dict:
+    """A job's text and its known gap state; None means completeness is unknown."""
     head, sep, tail = text.partition("\n[stderr]\n") if not text.startswith("[stderr]\n") else ("", "x", text[len("[stderr]\n"):])
-    return {"stdout": {"text": head + ("\n" if sep and head and not head.endswith("\n") else ""), "truncated": False},
-            "stderr": {"text": tail if sep else "", "truncated": False}}
+    return {"stdout": {"text": head + ("\n" if sep and head and not head.endswith("\n") else ""), "truncated": truncated},
+            "stderr": {"text": tail if sep else "", "truncated": truncated}}
 
 #: Live handles by job id. DSH hands each piece of a job's output out once, so
 #: a `tools.job_output` call made outside the handle would otherwise take that
@@ -985,7 +1000,8 @@ def _keep_job_text(args: Any, result: Any) -> None:
     job_id = args.get("job_id") if isinstance(args, dict) else None
     handle = _BASH_JOBS.get(job_id) if isinstance(job_id, str) else None
     if handle is not None and handle._result is None and isinstance(result, dict):
-        handle._text.append(result.get("text") or "")
+        # The public job_output result supplies text/job, not a structured gap flag.
+        handle._append_output(result.get("text") or "")
 
 
 class BashJob:
@@ -1001,14 +1017,44 @@ class BashJob:
     `detail` and stays None when the job did not report one.
     """
 
-    __slots__ = ("id", "command", "_text", "_result", "__weakref__")
+    __slots__ = ("id", "command", "_text", "_result", "_truncated", "_spill_paths", "__weakref__")
 
     def __init__(self, job_id: str, command: str) -> None:
         self.id = job_id
         self.command = command
         self._text: list[str] = []
         self._result: _BashJobResult | None = None
+        self._truncated: bool | None = False
+        self._spill_paths: list[str] = []
         _BASH_JOBS[job_id] = self
+
+    def __setstate__(self, state: tuple[None, dict]) -> None:
+        _, fields = state
+        for name, value in fields.items():
+            setattr(self, name, value)
+        legacy = "_truncated" not in fields
+        if legacy:
+            self._truncated = True if self._result is not None and self._result.get("truncated") is True else None
+        if "_spill_paths" not in fields:
+            self._spill_paths = []
+        if legacy and self._result is not None:
+            self._result["truncated"] = self._truncated
+            self._result["spillPaths"] = list(self._spill_paths)
+            for channel in ("stdout", "stderr"):
+                if isinstance(self._result.get(channel), dict):
+                    self._result[channel]["truncated"] = self._truncated
+        _BASH_JOBS[self.id] = self
+
+    def _append_output(self, text: str, *, truncated: bool | None = None, spill_paths: Any = ()) -> None:
+        self._text.append(text)
+        if truncated is True:
+            self._truncated = True
+        elif self._truncated is not True and truncated is not False:
+            self._truncated = None
+        if isinstance(spill_paths, (list, tuple)):
+            for path in spill_paths:
+                if isinstance(path, str) and path and path not in self._spill_paths:
+                    self._spill_paths.append(path)
 
     @property
     def jobId(self) -> str:
@@ -1040,8 +1086,8 @@ class BashJob:
             got = await call_tool("job_output", args)
             job = got.get("job", {})
             if job.get("status") in _JOB_LIVE and "user steered" in (job.get("detail") or ""):
-                # DSH ends every wait at once while a user message waits for the next step;
-                # asking again spun 1000+ calls a second (2026-11-08: 11737 calls in 10 s).
+                # DSH ends waits while user steering is pending; retrying here
+                # would busy-loop until the agent reads that message.
                 raise JobStillRunning(
                     f"bash job {self.id} still running; the user just sent a message, so the wait stopped. "
                     + ("Read it now. The job keeps running. You are a subagent: ending your turn kills it with no notice, "
@@ -1057,7 +1103,9 @@ class BashJob:
                     exitCode=int(match.group(1)) if match else None,
                     text="".join(self._text),
                     detail=job.get("detail"),
-                    **_wrap_nested(_streams("".join(self._text))),
+                    truncated=self._truncated,
+                    spillPaths=list(self._spill_paths),
+                    **_wrap_nested(_streams("".join(self._text), self._truncated)),
                 )
                 # The result now holds the text; a second copy would double the memory every job keeps.
                 self._text = []
@@ -1075,7 +1123,7 @@ class BashJob:
         )
 
     async def peek(self) -> str:
-        """Everything the job has written so far, without waiting; `await job` still gets all of it."""
+        """Collected text so far; `await job` retains it and its known completeness state."""
         if self._result is not None:
             return self._result["text"]
         await call_tool("job_output", {"job_id": self.id})
@@ -1190,7 +1238,7 @@ class _Namespace:
             return self._members[name]
         except KeyError:
             if name in ("list", "describe"):
-                # Observed: `tools['list']({...})`, read as "index to reach the catalog method".
+                # Indexing selects named members, not namespace catalog methods.
                 raise KeyError(
                     f"{self._kind}[{name!r}] only reaches a member literally named {name!r}, and there is none; "
                     f"the catalog method is await {self._kind}.{name}(...)"

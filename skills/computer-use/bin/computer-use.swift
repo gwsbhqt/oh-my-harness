@@ -944,8 +944,8 @@ func shortActions(_ a: [String]) -> String {
 
 // ==================== 截图 ====================
 
-/// 进程内截窗口：CGWindowListCreateImage 在新系统上已废弃，只能动态取符号，但比起动 screencapture + sips
-/// 两个子进程快 3 倍（实测文本编辑窗口 0.16 秒对 0.5 秒）。拿不到符号或截图失败再退回 screencapture。
+/// 动态查找已废弃的 CGWindowListCreateImage，避免依赖新系统不再导出的静态符号。
+/// 获取失败或截图失败时使用 screencapture；性能取决于系统和窗口内容。
 private enum WindowImage {
     typealias Fn = @convention(c) (CGRect, UInt32, CGWindowID, UInt32) -> Unmanaged<CGImage>?
     static let fn: Fn? = {
@@ -957,9 +957,8 @@ private enum WindowImage {
 
 /// 截窗口并按长边缩到 maxDim（0 = 不缩放）写成 PNG。成功返回 true。
 ///
-/// 常驻进程里不直接截：新系统把这个接口转给系统截屏服务，进程会一直连着它。两个连过的进程同时活着，
-/// 服务每秒在它们之间来回切几百次，三方各吃半个核（2026-10-13 实测两个闲置 computer-use 进程拖了 20 多小时）。
-/// 所以交给一个只截这一张就退出的子进程。代价是新进程每次都要重新连截屏服务，实测每张图慢约 0.12 秒。
+/// 常驻进程不直接持有系统截屏连接，避免空闲时仍占用服务资源。
+/// 使用只截一张就退出的子进程；每次重新连接服务会增加开销。
 func captureWindowFast(_ wid: CGWindowID, to path: String, maxDim: Int) -> Bool {
     if serveMode {
         let p = Process()
@@ -2159,7 +2158,7 @@ func settleAfterAction(_ pid: pid_t, maxWait: Double = 1.5) -> Double {
     if settleDisabled || ProcessInfo.processInfo.environment["COMPUTER_USE_NO_SETTLE"] == "1" { return 0 }
     let t0 = Date()
     // 先等一小下让应用处理完事件，再比两次指纹：相同且不忙就返回。
-    // 实测计算器、文本编辑按一下后 50 毫秒内就重画完；网页加载时靠繁忙标记继续等。
+    // 初次短等待只让事件有机会被处理；是否稳定仍由指纹和繁忙标记判断。
     usleep(50000)
     var (last, busy) = windowFingerprint(pid)
     while true {
@@ -3247,8 +3246,7 @@ func runServe() {
     reader.name = "computer-use-reader"
     reader.stackSize = 16 << 20
     reader.start()
-    // 空闲太久就自己退出：会话停了但 Python 环境还开着时，常驻进程会跟着一直待命，
-    // 2026-10-13 有两个这样待了 20 多小时、还卡在系统录屏组件里反复连截屏服务。
+    // 调用方内核可能在会话空闲后继续存活，因此常驻进程需要独立的空闲回收。
     // 调用方按同一个时长提前重开，所以这里退出不会撞上正在发来的请求。
     let idle = Double(ProcessInfo.processInfo.environment["COMPUTER_USE_SERVE_IDLE"] ?? "") ?? 600
     while true {

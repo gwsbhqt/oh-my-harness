@@ -249,8 +249,8 @@ describe('repl.background work calling tools on a real kernel', () => {
   })
 
   it('a call the job starts while its cell still runs and that returns after the cell ended still reaches the job', async () => {
-    // Field case 2026-11-06 (evolve I-074): repl.background(tools.doctor({})) was dispatched before its cell
-    // settled; the cell's end dropped the pending reply and the job stayed "running" with nothing left to wait for.
+    // A background call can start before its cell settles and reply afterward.
+    // Its reply must belong to the job so cell cleanup cannot leave the job running forever.
     pipeline.calls = []
     const cell = await run('import asyncio\njl = await repl.background(tools.late({}), label="late")\nawait asyncio.sleep(0.15)')
     assert.equal(cell.error, undefined, text(cell))
@@ -291,7 +291,7 @@ describe('repl.background work calling tools on a real kernel', () => {
       const id = lastJob()
       assert.deepEqual(jobs.progress.get(id), ['step A', 'step B'])
       assert.equal(jobs.jobs.get(id)!.view.detail, 'step B', 'DSH shows only the latest step')
-      // Field case 2026-11-05: with the status line alone, earlier steps were gone from job_output.
+      // A status line holds only the latest step; output must retain earlier progress.
       assert.match(jobs.jobs.get(id)!.text, /\[progress\] step A\n\[progress\] step B\n/)
       await sleep(400)
     }

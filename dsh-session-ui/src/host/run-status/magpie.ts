@@ -19,7 +19,7 @@ export interface MagpieRow {
 
 export type TimingPatch = Omit<RequestTiming, 'responseId' | 'step' | 'model' | 'totalMs' | 'end'>
 
-/** 一次拉多少行。Studio 上所有会话的请求都在里面，一两分钟内的够用。 */
+/** 每次读取的最近请求记录上限；所有会话共用该记录列表。 */
 export const ROW_LIMIT = 100
 /** 请求结束后隔多久去找它的记录；最后一次还找不到就算没有。 */
 export const LOOKUP_DELAYS = [1500, 4000, 10_000, 30_000] as const

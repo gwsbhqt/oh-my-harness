@@ -1,10 +1,9 @@
 /**
  * An argument rejection carries the exact fix.
  *
- * Field case (session 9ca3a036, 2026-09-29): Gemini 3.8 Flash called
- * `tools.read_image({"image_path": ...})` 16 times. The host said only
- * `missing required property "file_path"`; the model never connected that to
- * its own `image_path` and never followed the pointer to `tools.describe`.
+ * A missing-required-property error should connect an unexpected argument
+ * to the schema's required name. This covers `image_path` passed to a tool
+ * that requires `file_path`, with the correction derived from that schema.
  */
 
 import { strict as assert } from 'node:assert'
@@ -30,7 +29,7 @@ const READ = {
 const MISSING = 'invalid arguments: missing required property "file_path"'
 
 describe('argumentFix', () => {
-  it('reads an MCP server\'s pydantic "Field required" the same way (openviking read, 2026-11-03)', () => {
+  it('reads an MCP server\'s pydantic "Field required" the same way', () => {
     const message = 'Error executing tool read: 1 validation error for readArguments\nuris\n  Field required [type=missing, input_value={\'uri\': \'viking://x\'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.12/v/missing'
     const schema = { type: 'object', properties: { uris: { type: 'array', items: { type: 'string' } } }, required: ['uris'] }
     const fix = argumentFix('mcp__openviking__read', message, { uri: 'viking://x' }, schema)

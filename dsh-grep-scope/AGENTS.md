@@ -13,17 +13,17 @@ DSH 的官方 `dsh-tool-fs-search` 同时提供 `glob` 和 `grep`。本插件不
 
 ## 默认跳过依赖目录，输出太多就提前停
 
-宿主的 20 MB 原始输出上限（`RAW_OUTPUT_MAX_BYTES`）和 30 秒工具时限（`SEARCH_TIMEOUT_MS`）都在宿主 `dsh-tool-fs-search` 里，插件改不了。在一个大型代码仓库里实测：全量 glob 输出 34 MB、23 万个文件、14 秒，其中 32 MB 来自 `node_modules`、`site-packages`、`.venv`；`scope: all` grep `error` 原始输出 127 MB，grep 一个常见词只有 95 KB 却要 18 秒，时间全花在走依赖目录上。
+宿主的 20 MB 原始输出上限（`RAW_OUTPUT_MAX_BYTES`）和 30 秒工具时限（`SEARCH_TIMEOUT_MS`）由 `dsh-tool-fs-search` 控制。依赖和缓存目录可能产生大量文件与匹配，即使最终匹配很少，遍历成本也可能耗尽时限。维护时使用合成目录验证默认排除、显式进入和输出截断，不以私人仓库的测量值作性能保证。
 
-所以 `grep`（两种 scope）和 `glob` 默认不进这些目录：`node_modules`、`.venv`、`site-packages`、`__pycache__`、`.pytest_cache`、`.mypy_cache`、`.ruff_cache`、`.tox`（`src/skip.ts`）。排除后同样三次搜索分别是 1.9 MB、5.1 MB 和 1.5 秒。`path`、`include`（glob 是 `pattern`）里只要出现其中一个名字，这次就一个都不跳过；路径在打包文件、它的副本或 `.asar.unpacked` 里时也不跳过，因为那里面大部分就是 `node_modules`。跳过时 grep 返回值带 `skippedDirectories`，文字结果和 glob 列表末尾都写明跳过了什么、怎么搜进去。
+所以 `grep`（两种 scope）和 `glob` 默认不进这些目录：`node_modules`、`.venv`、`site-packages`、`__pycache__`、`.pytest_cache`、`.mypy_cache`、`.ruff_cache`、`.tox`（`src/skip.ts`）。`path`、`include`（glob 是 `pattern`）里只要出现其中一个名字，这次就一个都不跳过；路径在打包文件、它的副本或 `.asar.unpacked` 里时也不跳过，因为那里面大部分就是 `node_modules`。跳过时 grep 返回值带 `skippedDirectories`，文字结果和 glob 列表末尾都写明跳过了什么、怎么搜进去。
 
-grep 一边跑一边看 ripgrep 已经输出了多少，过了 10 MB（宿主上限的一半）就停掉它，把已经完整输出的匹配交回来，返回值带 `outputCapped: true`，文字结果开头写「Incomplete」、列出命中最多的几个目录，让模型缩小范围。宿主上限先被冲破时（只剩尾部）也一样交回尾部的完整记录，并去掉开头那条被截断的。这不是完整结果，文字和返回值都说明了。超时仍然是宿主报错，插件拿不到半截结果。glob 不做提前停：宿主用 `--sort=modified`，要全部走完才会输出，停了也省不了时间；跳过依赖目录后整个仓库只有 1.9 MB。
+grep 一边跑一边看 ripgrep 已经输出了多少，过了 10 MB（宿主上限的一半）就停掉它，把已经完整输出的匹配交回来，返回值带 `outputCapped: true`，文字结果开头写「Incomplete」、列出命中最多的几个目录，让模型缩小范围。宿主上限先被冲破时（只剩尾部）也一样交回尾部的完整记录，并去掉开头那条被截断的。这不是完整结果，文字和返回值都说明了。超时仍然是宿主报错，插件拿不到半截结果。glob 不做提前停：宿主用 `--sort=modified`，要全部走完才会输出，停了也省不了时间。
 
 ## 长行在搜的时候就截短
 
-官方 `grep` 用 ripgrep 的 JSON 输出，每处匹配都把整行原样带回来，原生结果再截到每行 2000 字节显示。一行很长的文件（压缩过的 JS、单行 JSON 缓存）能把原始输出撑过 20 MB，整次搜索直接报错，模型也看不出该缩小什么。在一个大型仓库里用 `scope: all` 搜索时：一个 2.6 MB 的单行插件缓存，加上各家助手的会话记录，原始输出 33 MB，连着两个会话都卡在这里。
+官方 `grep` 的 ripgrep JSON 输出会为每处匹配携带整行原文，再在显示时截短。压缩 JavaScript 或单行 JSON 中的一条长行可能耗尽原始输出预算，使整次搜索失败。应在搜索时限制行长，并明确说明被截断的结果需要回到文件读取全文。
 
-所以本插件改用 ripgrep 的纯文本输出，让 ripgrep 自己把每行截到 2000 字节（`--max-columns`），再按字节截一次，防止中文超出。同一次搜索，原始输出从 33 MB 降到约 1 MB，在本机 20 秒内返回 1122 处匹配。被截的行以 `(line truncated)` 结尾，返回值带 `clippedLines: true`，文字结果开头也会写明。要看整行就去读文件。文件名按 NUL 分隔，文件名里的换行不会被当成结果换行。只搜一遍、不先试 JSON 再重搜，是因为工具总时限只有 30 秒，搜两遍会超时。
+所以本插件改用 ripgrep 的纯文本输出，让 ripgrep 自己把每行截到 2000 字节（`--max-columns`），再按字节截一次，防止中文超出。被截的行以 `(line truncated)` 结尾，返回值带 `clippedLines: true`，文字结果开头也会写明。要看整行就去读文件。文件名按 NUL 分隔，文件名里的换行不会被当成结果换行。只搜一遍、不先试 JSON 再重搜，是因为工具总时限只有 30 秒，搜两遍会超时。
 
 和 JSON 输出的差别：直接把一个二进制文件当 `path` 搜时，原版会返回里面的匹配行，这里不返回（ripgrep 纯文本模式只说「二进制文件有匹配」，这一行没有文件名分隔符，被跳过）。搜目录时两者一样，都跳过二进制文件。不是 UTF-8 的行，原版显示成 `(line is not valid UTF-8)`，这里按原字节解码。
 
@@ -38,9 +38,9 @@ DSH 的系统提示让模型去 `/Applications/DeepSeek Harness.app/Contents/Res
 
 宿主的 `read` 和 `glob` 也进不去打包文件：`read` 报「Cannot mix BigInt and other types」，`glob` 报「Not a directory」，模型看不出原因（读取会失败）。`glob` 已由本插件接管，路径在打包文件里时直接列副本和 `app.asar.unpacked`，返回的路径能直接读。`read` 仍是宿主的，宿主的前置钩子不能改参数，所以在 `tools/pre-execute` 里拦下，拒绝原因直接写出同一个文件在副本或 `app.asar.unpacked` 里的路径，模型照着再调一次就行；里面没有这个路径时说「路径不存在」。名字叫 `.asar` 但不是打包文件、或者路径就是打包文件本身时不拦，照旧交给宿主。宿主的 `read` 支持进打包文件后删掉这个钩子。
 
-App 更新后旧副本会被删掉，模型手里还拿着旧副本路径（曾遇到 grep 指向已删除的副本目录）。`grep`、`glob` 碰到旧副本路径时自动换成同一个打包文件的当前副本；`read` 被拦下，拒绝原因写出当前副本里的同一路径。缓存被整个删掉时，只有当前 App 自己的 `app.asar` 能按需重建。Python 内核里直接 `Path.read_text` 读打包文件里的路径不经过 DSH 工具，本插件管不到。
+App 更新后旧副本会被删掉，模型手里还拿着旧副本路径。`grep`、`glob` 碰到旧副本路径时自动换成同一个打包文件的当前副本；`read` 被拦下，拒绝原因写出当前副本里的同一路径。缓存被整个删掉时，只有当前 App 自己的 `app.asar` 能按需重建。Python 内核里直接 `Path.read_text` 读打包文件里的路径不经过 DSH 工具，本插件管不到。
 
-实测（`app.asar` 约 121 MB，12973 个文件，其中 1493 个在 unpacked）：首次解包在 App 自带的 Electron 里约 2.4 秒、系统 node 里约 1.3 秒，副本 142 MB、11480 个文件；之后搜整个 `dsh/` 约 1 秒，不再解包。缓存不自动过期，想腾地方直接删 `$DSH_HOME/plugins/grep-scope/asar/`。
+首次搜索需要解包，后续搜索复用缓存；成本取决于归档大小、文件数和执行环境。缓存不自动过期，可在确认没有使用中的副本后清理 `$DSH_HOME/plugins/grep-scope/asar/`。
 
 - 搜副本时加了 `--no-ignore-parent` 等参数：`$DSH_HOME` 本身可能在某个 git 仓库里（可能整个被忽略），不加会什么都搜不到。打包文件内部没有 `.gitignore`，`scope: normal` 和 `all` 的差别只剩隐藏文件。
 - 文件名叫 `.asar` 但不是打包文件时报错说明，不当成空目录；内部路径用 `..` 跳出打包文件的不当作打包路径。

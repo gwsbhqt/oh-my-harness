@@ -45,9 +45,9 @@ describe('run_code row model', () => {
     assert.equal(m.output, 'ToolError: interrupted')
   })
 
-  // A session recorded under 0.2.1: the durable result of a run_code the user
-  // stopped mid-cell, verbatim from a real session log (2026-09-27). Its history
-  // must still render as stopped; 0.2.2 carries ABORTED directly (tests below).
+  // History written under 0.2.1 stores cancellation as CODE_RUN_FAILED with
+  // a text prefix. It must still render as stopped; 0.2.2 results carry
+  // ABORTED directly (tests below).
   const failedRun = (text: string) => codeRowModel({
     kind: 'tool-result', callId: 'c1', call: { argsRaw: args }, isError: true,
     content: [{ type: 'text', text }],

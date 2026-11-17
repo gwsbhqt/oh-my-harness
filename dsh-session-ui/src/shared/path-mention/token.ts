@@ -12,7 +12,7 @@ export const RESOLVE_PATH = '/dsh-path-mention/resolve'
 export const OPEN_PATH = '/dsh-path-mention/open'
 /**
  * 用头栏清单里的某个应用打开。单独一条路由，不复用 OPEN_PATH：旧版宿主半不认 `app` 参数，会把请求当成「打开目录」
- * 一律开成访达（2026-10-08 踩到）。新路由在旧版里根本不存在，请求直接失败，菜单就能如实报「打开失败」。
+ * 一律开成访达。新路由在旧版里根本不存在，请求直接失败，菜单就能如实报「打开失败」。
  */
 export const OPEN_WITH_PATH = '/dsh-path-mention/open-with'
 

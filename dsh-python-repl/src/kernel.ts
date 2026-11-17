@@ -262,11 +262,11 @@ export class PythonKernel {
     }
     const proc = spawn(this.#options.python, [...(this.#options.moduleArgs ?? ['-m', 'rlm.repl'])], {
       // 内核自成一个进程组，它开的程序默认留在组里，内核结束时整组带走（见 #reapGroup）。
-      // 2026-10-13 一个测试用的 headless Chrome 在内核没了以后又跑了 22 小时。
+      // 避免内核结束后，子程序仍留在后台占用资源。
       detached: OWN_GROUP,
-      // Defaulting to `pythonPath[0]` put the kernel INSIDE the vendored tree,
-      // so a cell writing any relative path corrupted files this project
-      // guarantees are untouched upstream. Callers should always pass a cwd;
+      // Defaulting to `pythonPath[0]` would place relative writes inside the
+      // vendored tree, which must stay byte-for-byte upstream. Callers should
+      // always pass a cwd;
       // the fallback is the process cwd, never the vendor root.
       cwd: this.#options.cwd ?? process.cwd(),
       env: pythonProxyEnv(env),

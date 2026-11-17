@@ -180,7 +180,7 @@ export const Config = Schema.object({
     .default(5000)
     .description(
       'Longest a cell waits on one bash command or job, in ms. Past it the command keeps running as a DSH background job and the cell moves on; '
-      + 'DSH wakes the agent when it finishes. 0 = no cap (bash then waits for its own timeout). Default 5000: 95% of bash calls finish sooner. Applies to new session kernels.',
+      + 'DSH wakes the agent when it finishes. 0 = no cap (bash then waits for its own timeout). Default 5000 ms. Applies to new session kernels.',
     ),
   maxCellTimeoutMs: Schema.natural()
     .volatile()
@@ -681,7 +681,7 @@ export class PythonReplRuntime extends PtcRuntime {
       // glob/grep/present/subagent/...) appear as bare names with no
       // description and no parameters — so `tools.describe("bash")` returned
       // nothing useful, which is exactly the case disclosure exists to serve.
-      // Verified in a live session 2026-09-22.
+      // The scoped projection must retain descriptions and parameter schemas.
       // As the PTC executor's renderSdk does: project the visible definitions, then add output types.
       const project = (dshTools as unknown as Record<string, unknown>)['projectToolSchema'] as ((definition: unknown, withCallbacks: boolean) => object) | undefined
       const definitions = registry?.definitions?.(scope, toolSet)
@@ -844,11 +844,10 @@ export class PythonReplRuntime extends PtcRuntime {
       // and the file tools use, so `open("out.csv")` in a cell and `> out.csv`
       // in a shell land in the same place.
       //
-      // `process.cwd()` is only a fallback: under the GUI it is the host
-      // process's directory (observed: `$HOME`), which is neither the
-      // workspace nor anywhere a cell should write by default. And it must
-      // never fall back into `vendor/` — that tree is byte-for-byte upstream
-      // and a relative write would corrupt it (observed 2026-09-22).
+      // `process.cwd()` is only a fallback: the GUI host process directory
+      // may differ from the workspace where cells should resolve relative
+      // paths. Never fall back into `vendor/`: a relative write would corrupt
+      // files that must remain byte-for-byte upstream.
       // Prefer the run's resolved cwd (the host passes session.header.cwd);
       // fall back to the initiator's metadata for direct callers.
       cwd: runCwd ?? this.workspaceCwd(),

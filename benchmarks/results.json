@@ -108,7 +108,7 @@
     "production_sources": {
       "schema": {
         "path": "dsh-compaction-bound/src/index.ts",
-        "sha256": "029f65029ad49305f930f7537518a48e2c35ef4b34f36f8cd1058a69db351dc7"
+        "sha256": "934ec9dd7cbb7836d61ed8abb7316be6c3a07c8535a5aaa1712373a84bc2f701"
       },
       "summary": {
         "path": "dsh-compaction-bound/src/summary.ts",

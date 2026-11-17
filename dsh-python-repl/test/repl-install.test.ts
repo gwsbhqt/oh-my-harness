@@ -1,10 +1,9 @@
 /**
  * `repl.install` / `repl.restart` through a real kernel.
  *
- * The defect this answers (2026-09-29): with no way to add a library to the
- * kernel, a session ran 29 cells as `fish -lc 'uv run --with pymupdf python -'`
- * — a fresh interpreter per cell, so nothing it built could stay in the
- * namespace the REPL exists to keep.
+ * An analysis library installed into a separate interpreter cannot preserve
+ * values in this kernel. Exercise installation and restart here so later
+ * cells use the same persistent environment.
  */
 
 import { strict as assert } from 'node:assert'

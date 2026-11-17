@@ -372,7 +372,7 @@ test('状态读失败：不退出、不执行更新，并保存真实失败状�
 })
 
 test('health 答不了但退出状态能答：按退出状态判断，照常重启', async () => {
-  // 2026-10-17 升 0.2.1：旧插件的 health 报缺调用身份，quit-check 照常；不能因此卡死在「只有重启才能换新插件」
+  // health 接口不兼容而退出状态可用时，仍能核对活动并完成重启。
   const f = await fixture(() => [], { oldHealthBroken: true })
   try {
     assert.equal(await f.cli(['restart', '--notify', 'aaaa1111']), 0, f.err())
@@ -464,7 +464,7 @@ test('restart --kill：有会话在跑也直接结束进程再拉起', async () 
   } finally { await f.close() }
 })
 
-// 2026-10-21 后台启动失败、App 停在崩溃窗口上：通信口没了，restart 连 都拒绝，只能手动强杀。
+// 区分后台已崩溃与仍在运行但暂时不可达，避免把两者当作同一种重启条件。
 test('后台崩了只剩崩溃窗口时直接结束再拉起；后台还在只是连不上照旧拒绝', async () => {
   for (const args of [['restart'], ['restart']]) {
     const f = await fixture(() => [], { socketGone: 'crashed' })
@@ -481,7 +481,7 @@ test('后台崩了只剩崩溃窗口时直接结束再拉起；后台还在只�
     assert.deepEqual(g.appCalls, [])
   } finally { renameSync(join(g.dir, 'dsh-use/dsh.sock.off'), join(g.dir, 'dsh-use/dsh.sock')); await g.close() }
 })
-// 2026-10-21 --before 写 profile 触发热重载，本插件通信口重建要两秒多，restart 正好在空档里查会话，被当成通信口坏了拒绝。
+// profile 更新可触发热重载；通信口重建期间的短暂缺失不应立即判成永久故障。
 test('通信口在热重载中暂时没了：等它回来再查会话，照常重启', async () => {
   const f = await fixture(() => [], { socketGone: 'plugin-broken' })
   try {
@@ -590,7 +590,7 @@ test('启动前检查不过：不重启，原因转告发起的会话', async ()
 
 
 test('只剩开着的监听：退出前先暂停，重启后由插件接回', async () => {
-  // 2026-10-09：开着一条飞书监听，等空闲重启一定 5 分钟后放弃，最后只能手动重启
+  // 可恢复的持久监听应先暂停再接回，不能阻止重启进入退出阶段。
   const f = await fixture(() => [], { jobs: ['monitor-3'], survivable: ['monitor-3'] })
   try {
     const code = await f.cli(['restart', '--notify', 'aaaa1111'], { DSH_USE_JOB_GRACE_MS: '600000' })
@@ -732,7 +732,7 @@ test('强制重启：清场途中才开跑的会话也被中止，重启后同�
 })
 
 test('强制重启：被中止吞掉的消息先原样放回；只中止了它开启的那一轮就不另发「继续」，原来的活也被打断的照发', async () => {
-  // 真实故障（2026-11-03 19:37）：清场途中你刚发的消息开了一轮，宿主已从排队区取走、还没写进记录就被中止。
+  // 合成两种中断：消息出队后未入记录，以及原任务与随后消息分别被中止。
   const lost = {
     'session-eeee5555': { restored: [{ target: 'next-turn', preview: '我批注了以下内容' }], otherAborted: false },
     // 原来在做的那一轮先被中止，排着的消息接着开了一轮又被中止：两件事都没做完。
@@ -896,7 +896,7 @@ test('--before 失败就不重启，原因转告发起的会话；默认可以�
 })
 
 test('只剩定时提醒的退出框：确认没有会话在跑后替用户点「退出」，照常重启', async () => {
-  // 2026-10-17 真实故障：会话都空闲，只剩一条测试提醒，App 退出弹「应用关闭期间，定时任务不会运行」，命令干等 30 秒。
+  // 仅剩持久化提醒且会话均空闲时，普通退出确认不应阻塞整个重启流程。
   const scheduled = [{ sessionId: 'session-424e24d6-e0f0', items: [{ id: 'schedule-de8631b1-0ae6', label: 'dsh-use 验收测试提醒' }] }]
   const f = await fixture(() => [], { scheduled, dialog: 'scheduled' })
   try {
@@ -951,7 +951,7 @@ test('退出框有任务警告或又有会话开跑：不替你点，结束进�
   } finally { await g.close() }
 })
 
-test('--before 真实故障形状：doctor 根因优先，通知与状态一致，完整日志保留 warning，只执行一次', async () => {
+test('--before 合成故障：doctor 根因优先，通知与状态一致，完整日志保留 warning，只执行一次', async () => {
   const f = await fixture(() => [])
   try {
     const script = join(f.dir, 'failure.mjs')
@@ -1076,7 +1076,7 @@ test('restart：被中止时用户的话还没回应完，「继续」通知带�
   } finally { await f.close() }
 })
 
-test('强制重启：等待途中才看到在跑的子代理，停下后也要告诉派它的会话（evolve I-054，11-04 01:00 重启）', async () => {
+test('强制重启：等待途中才看到在跑的子代理，停下后也要告诉派它的会话', async () => {
   const f = await fixture(() => [], {
     parents: { 'session-sub00002': 'session-cccc3333' },
     quitExtra: (n) => (n === 1 ? { running: ['session-sub00002'] } : {}),
@@ -1091,7 +1091,7 @@ test('强制重启：等待途中才看到在跑的子代理，停下后也要�
   } finally { await f.close() }
 })
 
-test('强制重启停掉子代理名下的后台任务：说明送给它的上级，不发给宿主不收的子代理（evolve I-054）', async () => {
+test('强制重启停掉子代理名下的后台任务：说明送给它的上级，不发给宿主不收的子代理', async () => {
   const f = await fixture(() => [], {
     jobs: ['bash-7'],
     wakeOnKill: true,

@@ -4,11 +4,10 @@
  * This plugin replaces the Host-level `ptcRuntime` with the Python kernel, and
  * `@deepseek-ai/dsh-workflow-ptc` throws while loading under any runtime whose
  * language is not `typescript`. The `cordis` and `standard` presets mount it in
- * their `delegation` group, so the whole preset would fail to load. Workflows
- * are not used here (user 2026-11-04: Python cells already start subagents),
- * so each enabled workflow row is switched off, as the shipped PTC preset does;
- * no TypeScript runtime is kept for them. The Host-level rows are switched off
- * in this plugin's cordis.patch.yml.
+ * their `delegation` group, so the whole preset would fail to load. Python
+ * cells provide subagent orchestration here; switch off each enabled workflow
+ * row, as the shipped PTC preset does, without retaining a TypeScript runtime.
+ * The Host-level rows are switched off in this plugin's cordis.patch.yml.
  *
  * A profile patch cannot reach rows inside a preset declaration. So the rewrite
  * happens on the preset registry's own records, and each record is remounted

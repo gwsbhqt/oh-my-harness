@@ -1,13 +1,11 @@
 """Short cell errors: the model's own lines, one line for frames elsewhere, the message once.
 
 A cell's error reaches the model as `Ename: evalue` followed by the traceback,
-whose last line repeats that message. Measured on real sessions (2026-11-03, 330
-sessions): a failed skill call averaged 2,218 characters, 84% of them frames
-inside the skill, asyncio and thread pools; a failed tool call carried bridge
-frames that say nothing about the cell. Kept: every frame in the session's own
-code (cells and functions defined in them). Dropped to one marker line: frames
-elsewhere, except the frame that raised a non-business error inside a library
-or skill, which is where a real bug would be fixed.
+whose last line repeats that message. Bridge, asyncio and thread-pool frames
+can obscure the cell code that needs attention. Keep every frame in the
+session's own code (cells and functions defined in them), and collapse frames
+elsewhere to one marker line. Preserve the frame that raised a non-business
+error inside a library or skill, where the underlying bug can be fixed.
 """
 from __future__ import annotations
 
@@ -215,11 +213,11 @@ def _line_count(path: str) -> int | None:
 
 
 def tool_hint(message: str, args=None) -> str | None:
-    """What the model can do next, for the tool failures seen most on real sessions (2026-11-03).
+    """Suggest a next step for tool argument and file-access failures.
 
-    Read and edit argument mistakes started 417 retry chains there; where the
-    file system can say more (a near path, the closest text, the line count),
-    say it here. None when the host already says what to do.
+    Where the file system can say more (a near path, the closest text, the
+    line count), include that evidence. Return None when the host already
+    says what to do.
     """
     try:
         extra = _next_step(message, args)
@@ -229,14 +227,14 @@ def tool_hint(message: str, args=None) -> str | None:
         return extra
     cap = re.search(r"background job limit reached.*?\(limit: (\d+)\)", message)
     if cap:
-        # 2026-11-11 evolve I-094: one cell gathered dozens of slow bash calls; each became a job and 8 were refused.
+        # Parallel bash calls can each become a job and exhaust the shared job limit.
         return (
             f"A bash call still running after a few seconds becomes a background job, each call in an asyncio.gather included, "
             f"and at most {cap.group(1)} run at once; this call waited for a free slot as long as a cell waits and none came. Run the batch as one command (a shell loop, or xargs -P 4) so it is one job; "
             "jobs left running by earlier cells count too: tools.job_list({}) lists them."
         )
     if re.fullmatch(r"unknown job [\w-]+", message.strip()):
-        # 2026-11-05..13: 13 lookups of a gone job; most came after a DSH restart or a subagent's turn ended.
+        # Job records are ephemeral; a missing record does not prove the external action failed.
         return ("DSH keeps job records in memory only: a DSH restart, the end of a subagent's turn (its jobs are stopped) "
                 "and a bash call that already returned its result all remove them, so this id can no longer be read or stopped. "
                 "Check what the command left behind (files, git status, logs) before deciding to run it again.")
@@ -279,8 +277,8 @@ def skipped_note(exc: BaseException) -> str | None:
     """Which later lines of the failed cell never ran, and what they would have defined.
 
     A cell that fails on line 3 never reaches the `def helper` on line 10, and
-    the next cell's NameError does not say why (52 retry chains on real sessions,
-    2026-11-03). Top-level statements only; None when nothing was skipped.
+    a later NameError does not identify that earlier failure. Inspect only
+    top-level statements; return None when nothing was skipped.
     """
     import ast
     import linecache
@@ -328,7 +326,7 @@ def _next_step(message: str, args) -> str | None:
         return None if near is None else f"{near} await glob('**/<name>', path=<dir>) searches deeper."
     found = re.search(r"offset (\d+) is out of range", message)
     if found:
-        # 2026-11-04 evolve I-065: counting here said 45 lines where the host's own message said (44 lines).
+        # Prefer the host's line count so the hint uses the same trailing-newline convention.
         stated = re.search(r"\((\d+) lines?\)", message)
         quoted = _QUOTED_PATH.search(message)
         total = int(stated.group(1)) if stated else None if quoted is None else _line_count(quoted.group(1))
@@ -340,9 +338,9 @@ def _next_step(message: str, args) -> str | None:
     return None
 
 
-# Hints for the Python mistakes that guessing an interface produces (evolve I-044, 150 occurrences by
-# 2026-11-12): awaiting a synchronous result, using an un-awaited coroutine, treating text or a list as
-# a dict, passing parameters a function does not take, guessing a key, importing from `skills`.
+# Hints for interface mistakes: awaiting a synchronous result, using an un-awaited
+# coroutine, treating text or a list as a dict, passing unsupported parameters,
+# guessing a key, or importing from `skills`.
 # Each hint names the failing expression, found by the exact source position Python 3.11+ records;
 # values are looked up without running user code (no properties, no __getattr__ on user objects), and
 # anything that cannot be confirmed gets the generic sentence or no hint at all.
@@ -498,7 +496,9 @@ def _json_hint(exc) -> str | None:
         return cut
     if pos <= len(doc) - len(doc.lstrip()):
         return (f"The text is not JSON from its first character: it starts {doc.lstrip()[:60]!r}. "
-                "If it came from bash: when stdout.truncated is True, stdout.text keeps only the tail (the full output is at spillPath); "
+                "If it came from bash: when stdout.truncated is True, the collected output may be incomplete; "
+                "check an explicitly reported stdout.spillPath or shared spillPaths for available files, without assuming a stream mapping. "
+                "If stdout.truncated is None, completeness is unknown, not confirmed; "
                 "and a CLI may print a message before or instead of JSON, so check exitCode and stderr.\n")
     if pos >= len(doc.rstrip()):
         return cut
@@ -517,7 +517,7 @@ def _early_hint(exc: BaseException, message: str) -> str | None:
                 + "; inside a cell Python reports that StopIteration as this RuntimeError. "
                 "Write `next(iterator, None)` and check for None.\n")
     if isinstance(exc, OSError) and message in ("could not get source code", "source code not available"):
-        # 2026-11-08..13: 7 of 7 were functions restored from the snapshot after a kernel restart.
+        # Restored functions can remain callable after their cell source cache is gone.
         return ("inspect cannot find this function's source. A function restored from the snapshot after the kernel was replaced "
                 "keeps working but not its source, because the cell that defined it belongs to the old kernel. "
                 "`await repl.describe(\"name\")` gives its signature and where it was defined; to read or change the code, define it again.\n")
@@ -591,7 +591,7 @@ def _exception_hint(exc: BaseException) -> str | None:
         return f"`{_code(node.func)}` takes {getattr(function, '__name__', 'it')}{signature}: pass only these parameters.\n"
 
     if isinstance(exc, KeyError) and len(exc.args) == 1 and isinstance(exc.args[0], slice) and isinstance(node, ast.Subscript):
-        # 2026-11-07..12: `d = await skills.describe(...)` then `d[:4000]`, 11 times; the bare `KeyError: slice(None, 4000, None)` said nothing.
+        # A slice KeyError hides the distinction between a structured result and its text field.
         value = _lookup(node.value, frame)
         if not isinstance(value, dict) or type(value).__module__ not in ("builtins", "dsh_kernel"):
             return None

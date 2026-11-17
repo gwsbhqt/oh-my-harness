@@ -1,11 +1,14 @@
 [中文](README.md) | English
 
-# Recording checklist
+# Diagrams and demo media
 
-This checklist describes how to capture and verify each demo. Component READMEs link the finished recordings and screenshots.
+The home page uses an editable concept diagram and excerpts from the existing log demo. The diagram explains capability groups; it is not a runtime capture. GIFs and screenshots show real operations with fictional inputs.
+
+The table describes existing media and the evidence to retain when recording again. Private source sessions and account data are not distributed. Component READMEs link the corresponding recordings and screenshots.
 
 | Planned file | Real action and evidence to capture | Placement |
 | --- | --- | --- |
+| [overview.en.svg](overview.en.svg) · [Chinese](overview.svg) · [Mobile](overview-mobile.en.svg) · [Mobile Chinese](overview-mobile.svg) | Hand-authored SVG concept diagram: persistent data, session coordination, and computer tools. No performance claims or simulated interface. | [Home page](../../README.en.md). |
 | `python-data-locality.gif` | Pair captured raw terminal output with a real DSH session replay that filters the same fictional log and reuses the in-memory variable. Label the excerpts and show both reproducible text-payload estimates from [results.json](../../benchmarks/results.json). | [dsh-python-repl component README](../../dsh-python-repl/README.en.md). |
 | `controller-worker.gif` | Use two authorized test sessions. The controller sends a concrete brief, records its receipt and stops polling. The worker does the task. Show the resulting notification, controller inspection, and an actual correction or acceptance. Do not invent usage or elapsed-time counters. | [dsh-use component README](../../dsh-use/README.en.md). |
 | `browser-use.gif` | Use a local fictional page or an example page, without account login. Bind a task window and exact page, make a visible change, and inspect the result. | [skills/browser-use component README](../../skills/browser-use/README.en.md). |
@@ -18,4 +21,4 @@ Keep personal windows, notifications, account data, host identifiers, usernames,
 
 Target compact media suitable for the component READMEs. If playback is sped up, show the multiplier in the frame. An interrupted producer stream or unconfirmed action must remain visible as uncertainty, not be cut into a false success. Check all named paths after the recordings are merged. Once a recording passes review, remove the corresponding pending-recording sentences from the relevant documents; leave notices for recordings that remain unfinished.
 
-The CI and release badges in the [README](../../README.en.md) link to GitHub Actions and releases.
+The CI badge in the [README](../../README.en.md) links to GitHub Actions; the license badge links to the MIT license.

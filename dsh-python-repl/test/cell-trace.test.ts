@@ -71,7 +71,7 @@ describe('waiting in a cell', () => {
   })
 
   it('never asks DSH for a zero wait when a job_output wait returns a hair early', async () => {
-    // Field case 2026-11-04: the last wait rounded down to 0 ms and DSH refused it, failing `await r` with a ToolCallError.
+    // Rounding the remaining wait down to zero produces an invalid DSH timeout.
     const s = session(300)
     const waits: number[] = []
     const tools = new Map<string, BoundTool>([

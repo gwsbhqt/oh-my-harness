@@ -18,8 +18,8 @@ const text = (result: unknown) => JSON.stringify(result)
 type Call = (args: Record<string, unknown>, name?: string) => Promise<{ isError: boolean; value?: unknown; content?: unknown }>
 
 /**
- * dotfiles in miniature (evolve I-014): a little real code next to a dependency tree. The one-file
- * node_modules package prints over 20 MB when grepped, the way a whole-tree scope all grep did.
+ * Synthetic project files beside a dependency tree. A single generated node_modules package emits
+ * more than 20 MB of matches, exercising explicit dependency searches and output-budget handling.
  */
 function dotfiles(dir: string): void {
   mkdirSync(join(dir, 'src'))

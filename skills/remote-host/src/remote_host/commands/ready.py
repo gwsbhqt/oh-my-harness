@@ -73,11 +73,9 @@ def app_script(action, app, timeout=30, port=None):
 
 #: Runs on the host with python3 (Command Line Tools). argv: app name, minutes, lines.
 #:
-#: The hard part is WHERE an app logs. Clash Party writes to
-#: ~/Library/Application Support/mihomo-party/logs — a directory named after
-#: none of its app name, executable or bundle id (party.mihomo.app); finding it
-#: took a real session a long detour (2026-09-23). So directories are matched
-#: on the WORDS of those three names, not on any one of them.
+#: Log directories may use words from an app name, executable or bundle ID
+#: rather than matching any one identifier exactly. Consider all three sources
+#: when locating candidate log directories.
 LOGS_PY = r"""
 import glob, os, plistlib, re, subprocess, sys, time
 name, since, lines = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])

@@ -64,7 +64,7 @@ test('dshVolatile：幂等', () => {
 test('isDshPatchFile 只认 profile 补丁层文件名', () => {
   assert.equal(entry.isDshPatchFile('cordis.patch.main.yml'), true)
   assert.equal(entry.isDshPatchFile('cordis.patch.yml'), true)
-  assert.equal(entry.isDshPatchFile('/x/profiles/desktop/cordis.patch.mbp.yml'), true)
+  assert.equal(entry.isDshPatchFile('/x/profiles/desktop/cordis.patch.example.yml'), true)
   assert.equal(entry.isDshPatchFile('cordis.yml'), false)
   assert.equal(entry.isDshPatchFile('conf.yaml'), false)
   assert.equal(entry.isDshPatchFile('cordis.patch.yml.bak-hermes'), false)
@@ -213,7 +213,7 @@ test('collectPatchPaths：归并 .yml 链接、跳过备份、跨 profile 收集
   const home = await mkdtemp(join(tmpdir(), 'collect-patch-'))
   try {
     const desktop = join(home, 'profiles', 'desktop')
-    const other = join(home, 'profiles', 'mbp')
+    const other = join(home, 'profiles', 'secondary')
     await mkdir(desktop, { recursive: true })
     await mkdir(other, { recursive: true })
     await writeFile(join(desktop, 'cordis.patch.main.yml'), 'a: 1\n')

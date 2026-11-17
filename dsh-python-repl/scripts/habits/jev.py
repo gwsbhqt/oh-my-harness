@@ -2,13 +2,12 @@
 
 Used by `label.py … --jev`: every item of a new batch is scored; confident
 answers become labels, the rest (plus an audit sample of the confident ones)
-go to the labelers. Measured 2026-09-23 against 1,506 labeled shapes:
-AUC 0.89 (0.98 on high-confidence labels); p <= 0.30 agreed with "no" 98.8%
-of the time, p >= 0.75 with "yes" 96.4%. ~670 input tokens per item at
-$0.042 per million tokens: 1,500 items cost ~$0.04 and take ~95 s.
+go to the labelers. Confidence thresholds route items for review; they do not
+establish accuracy for a new corpus or model.
 
-Never the only judge: precision is decided on `evaluate.py exact`, which says
-how many of its labels came from Jev; the audit sample re-checks Jev each round.
+Never the only judge: use `evaluate.py exact` with the current labeled corpus
+to measure precision and identify labels from Jev. The audit sample re-checks
+automatic labels each round.
 
 Goes through the Magpie gateway (local 127.0.0.1:3425 by default, so calls are counted in Magpie usage).
 Override with MAGPIE_BASE_URL; key comes from MAGPIE_GATEWAY_KEY / MAGPIE_STUDIO_KEY when a remote

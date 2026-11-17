@@ -102,7 +102,7 @@ computer-use --local owner 计算器 release --scope task-b --lease LEASE --json
 
 ## 配合 browser-use 登录
 
-网页登录先由 browser-use 固定页面，确认停在登录页才调用登录；computer-use 只处理网页外的 1Password 浮层。自动流程失败后需重新观察，手动浮层处理与账号选择见 [共用规则](references/common.md#密码浮层与身份确认) 及 [浏览器共用流程](../browser-use/references/common.md#结果未知与登录)。
+网页登录先由 browser-use 固定页面，确认停在登录页才调用登录；computer-use 只处理网页外的 1Password 浮层。自动流程失败后需重新观察，手动浮层处理与账号选择见 [共用规则](references/common.md#密码浮层与身份确认) 及 [浏览器共用流程](../browser-use/references/common.md#结果未知)。
 
 ```bash
 # 仅在网页已授权、账号框已点击且浮层已观察到后调用。

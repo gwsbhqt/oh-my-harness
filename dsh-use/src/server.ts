@@ -115,7 +115,7 @@ export async function startServer(options: ServerOptions): Promise<{ close(): Pr
     send(res, 404, { ok: false, error: { code: 'not-found', message: `${req.method ?? ''} ${url.pathname}` } })
   }
   // Node（libuv）关监听时按绑定时的路径删文件，不管那个路径上现在是谁的。插件热重载或重启时旧实例晚于新实例关闭，
-  // 就会把新实例刚建的通信口删掉，之后 dsh-use 一直「找不到通信口」（复盘 I-029）。
+  // 可能删掉新实例刚建的通信口，使仍在运行的服务无法接受新连接。
   // 所以先绑在只属于这一次的临时名上，再硬链接到正式路径：关监听只删临时名，正式路径按 inode 认是不是自己的再删。
   // 用硬链接而不是改名：正式路径已被别的 socket 占着时链接失败，不会把它顶掉。
   // 临时名和正式文件名一样长：socket 路径有长度上限（macOS 104 字节），正式路径放得下，临时名也必须放得下。
@@ -152,7 +152,7 @@ export async function startServer(options: ServerOptions): Promise<{ close(): Pr
   let current = await listen()
   const retired: Server[] = []
   writeFileSync(join(dirname(options.socketPath), 'dsh.pid'), `${process.pid}\n`, { mode: 0o600 })
-  // 通信口文件被删后进程还开着它，外面却再也连不上（2026-10-19 起，复盘 I-029）。
+  // 通信口文件被删除后，原监听进程可能仍存活，但新客户端已无法连接。
   // 文件没了就在原路径重新监听；路径上换成了别人的 socket（另一个 DSH、新加载的插件实例）就不抢。
   let rebinding = false
   let closed = false

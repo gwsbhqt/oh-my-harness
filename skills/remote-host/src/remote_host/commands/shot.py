@@ -1,17 +1,14 @@
-"""Screenshots of a remote Mac, taken by the Snipaste already running there.
+"""Screenshots of a remote Mac through an already-running Snipaste instance.
 
-Why Snipaste and not `screencapture`: macOS grants Screen Recording to an app,
-and a command started over ssh belongs to sshd — `screencapture` there fails
-with "could not create image from display" (tested 2026-09-23). Snipaste's CLI
-only messages the Snipaste running in the logged-in session, which holds the
-permission from everyday use, so the capture happens inside that app. The Brewfile
-installs it on every Mac.
+Screen Recording permission belongs to the capturing application. A command
+started over SSH may lack that permission, so the CLI asks Snipaste in the
+logged-in desktop session to capture instead. Snipaste must already be
+installed, running and authorized on the target.
 
-`snip --full` captures the bounding box of all displays (three screens here:
-11456x5120). `--screen N` crops one display out of it with `sips`, from the
-display frames AppKit reports; when those cannot be read, the whole capture is
-returned and remote-host says why. The image is shrunk to a JPEG on the host before it
-travels — a full capture is several MB of PNG.
+`snip --full` captures the bounding box of all displays. `--screen N` crops one
+display using the frames reported by AppKit; if the geometry is unavailable,
+the full capture is returned with an explanation. The host shrinks the image
+to JPEG before transfer unless PNG output was requested.
 """
 
 import os
@@ -67,9 +64,8 @@ def shot_script(max_edge=2400, screen=None, png=False, snipaste=SNIPASTE):
         "fi\n"
         '__d="$HOME/.cache/remote-host/shots"; mkdir -p "$__d"; find "$__d" -type f -mmin +60 -delete 2>/dev/null\n'
         '__f="$__d/shot-$$.png"\n'
-        # --block waits for the app to answer; a Snipaste that never got Screen
-        # Recording never answers (alpha, first run, 2026-09-23), so the CLI is
-        # bounded here instead of trusting it.
+        # Bound the CLI wait because an app without Screen Recording permission
+        # may fail to answer a blocking capture request.
         '"$S" snip --full -o "$__f" --block 15 >/dev/null 2>&1 & __p=$!\n'
         '__i=0; until [ -s "$__f" ]; do sleep 0.5; __i=$((__i+1)); [ $__i -ge 40 ] && { '
         'kill $__p 2>/dev/null; '
@@ -106,8 +102,8 @@ def shot_script(max_edge=2400, screen=None, png=False, snipaste=SNIPASTE):
     return script
 
 
-# Prints "flat" when a tiny BMP (sips -Z 16) has almost no colour spread:
-# measured 2026-09-23, a no-permission capture spreads 6, a real desktop 55.
+# Prints "flat" when a tiny BMP (sips -Z 16) has almost no colour spread.
+# This is a diagnostic hint, not proof of the current Screen Recording permission.
 _FLAT_PY = (
     "import struct,sys\n"
     "b=open(sys.argv[1],'rb').read(); o=struct.unpack_from('<I',b,10)[0]\n"

@@ -13,8 +13,8 @@
 
 ## 改动时注意
 
-- 依赖宿主内部细节：工作规范消息 `source.baseline`、技能目录 `source.kind === 'skill-catalog'`、记忆画像 `source.kind` 为 `plugin:openviking-memory` 且 `form === 'instructions'`、会话的 `snapshotEvents` 与 `inheritedEventCount`（读分叉继承段）、`profileMessage` 的 `consume` 参数（来自 profile 里记忆插件的本地补丁）。主动取画像最多等 2 秒，记忆服务连不上时不再叠加一次健康检查超时。DSH 或记忆插件升级后先核对这几处；认不出就原样放行，不会丢内容。
+- 依赖宿主内部细节：工作规范消息 `source.baseline`、技能目录 `source.kind === 'skill-catalog'`、记忆画像 `source.kind` 为 `plugin:openviking-memory` 且 `form === 'instructions'`、会话的 `snapshotEvents` 与 `inheritedEventCount`（读分叉继承段）、`profileMessage` 的 `consume` 参数（所用记忆插件必须支持该参数）。主动取画像最多等 2 秒，记忆服务连不上时不再叠加一次健康检查超时。DSH 或记忆插件升级后先核对这几处；认不出就原样放行，不会丢内容。
 - 工作规范基线换成指针时，原消息记在 `globalThis[Symbol.for('dsh-prompt-prefix.originals')]` 这张以指针消息为键的 WeakMap 里，dsh-message-tidy 靠它和指针里的 `pin=` 标记接上「指令只发差异」；改指针格式或这张表要同步改那边。不能把原消息挂在指针消息上：宿主记录消息时只收纯 JSON，多一个符号键或不可枚举键整轮报 `non-JSON-serializable`。
-- 固定段放在系统提示词最后，按稳定程度排：工作规范 → 技能目录 → 记忆画像。不要往这里放时间、目录、召回这类每步会变的东西：系统提示词中途变一个字，本机线路会整段缓存作废。
+- 固定段放在系统提示词最后，按稳定程度排：工作规范 → 技能目录 → 记忆画像。不要往这里放时间、目录、召回这类每步会变的东西：系统提示词中途变化可能使依赖稳定前缀的缓存失效，具体行为由模型服务决定。
 - 跨会话命中的前提：同一模型（系统提示词开头有模型名）、同一工作区、三样内容没变。
 - `pnpm run check` = 类型检查 + 构建 + 测试（真实 cordis 瀑布事件）。

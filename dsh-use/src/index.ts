@@ -15,7 +15,7 @@ import { createRouteRegistry } from '../../tooling/runtime/routes.mjs'
  * - `dsh-use`（`src/cli/dsh-use.ts`）：薄命令行，只转发，不懂任何命令。
  * - `skills/dsh-use/SKILL.md`：教外部 agent 怎么用 dsh-use。
  *
- * 额度读 模型额度服务 已注册在本机网页端口上的 `/模型额度服务/usage/report`（同一份两分钟缓存），两个插件不互相导入。
+ * 额度读 模型额度服务 已注册在本机网页端口上的 `/dsh-models/usage/report`（同一份两分钟缓存），两个插件不互相导入。
  * 两档模型优先读 模型额度服务 的 `modelTiers` 服务；未安装时使用本插件明确配置的档位。
  *
  * @module

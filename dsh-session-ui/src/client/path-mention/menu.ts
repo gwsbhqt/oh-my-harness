@@ -16,7 +16,7 @@ export type MenuAction = 'copy-relative' | 'copy-absolute'
 
 /**
  * 相对路径：在会话工作区里就相对工作区（工作区本身写成 `.`）；不在工作区但在家目录里就写成 `~/…`
- * （2026-10-08 用户要求：`~/.agents/skills/shot-sheet` 这种不该灰掉）；都不在才退回绝对路径。
+ * 只有两种范围都不匹配时才使用绝对路径；家目录内的路径仍可用。
  * @param path - 绝对路径。
  * @param cwd - 会话工作区，没有就是 undefined。
  * @param home - 家目录，没有就是 undefined。

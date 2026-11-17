@@ -79,7 +79,7 @@ export function missingModuleHint(ename: string, evalue: string): string {
   if (ename !== 'ModuleNotFoundError') return ''
   const name = /No module named '([^']+)'/.exec(evalue)?.[1]?.split('.')[0]
   if (name === undefined || name.length === 0) return ''
-  // `import skills.demo` (25 cells on real sessions, 2026-11-03): these are bound namespaces, not packages to install.
+  // `skills` and `tools` are bound namespaces, not packages to install.
   if (name === 'skills' || name === 'tools') {
     return `\n\n\`${name}\` is already bound in every cell and is not a package: use \`${name}.<name>\` directly with no import `
       + `(e.g. ${name === 'skills' ? 'skills.demo.open_page(...)' : 'await tools.read_image({...})'}); await ${name}.list() shows what is there.`

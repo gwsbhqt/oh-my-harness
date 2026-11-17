@@ -58,7 +58,7 @@ DSH 原本只有「**先跑完，再去看**」这一种后台任务（`bash run
 - `persistent:false` 在代理下次 idle 时停，即使命令还没跑完。返回说明会明确这一点；不能结束回合后又承诺这条监听稍后唤醒自己。
   命令还没自己退出就被这样停掉时，补一条不唤醒的通知（固定走 inject，不看投递设置），下一轮开始时模型能看到它；命令已经自己退出的不补。这只管 monitor 自己，宿主通用的后台任务结束通知照旧由宿主管。
 
-## 三条容易踩空的地方（都已处理）
+## 流处理约束
 
 1. **stdout / stderr 必须分开**。`ctx.shell`（bash 执行器）的 `readOutput()` 会把 stderr 拼进
    同一个 delta（`[stderr]` 分段）——对「stdout 是事件流、stderr 是诊断」是致命的：一句报错会被
@@ -189,6 +189,4 @@ pnpm run check      # typecheck + build + 单测
   stderr 不进事件流、结束通知的三种触发、`monitor_kill`、非持久监听随 idle 停掉（没跑完补一条不唤醒通知、已跑完不补、持久监听不受影响）
 - `test/delivery.test.ts` —— 真 jobs + 真 subprocess：单条投递、默认实时配置、心跳精确排除但回看保留、重拉设置不变、真实失败及返回说明。
 - `test/integration.test.ts` —— **真** `LocalJobRegistry` + **真** `LocalSubprocessRuntime`
-  跑一条真命令，验插件对两个 seam 的用法与真实现一致。它抓到过一个真 bug：
-  漏写 `export const inject` 时，cordis 的 context Proxy 会让 `ctx.jobs` 直接抛
-  `cannot get property "jobs" without inject`，插件在真宿主里根本起不来
+  跑一条真实命令，验证插件与宿主接口一致。必须覆盖 `inject` 声明；遗漏时 Cordis 的上下文代理会拒绝读取 `ctx.jobs`，报 `cannot get property "jobs" without inject`，插件无法启动。

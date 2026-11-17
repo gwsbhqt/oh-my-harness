@@ -87,12 +87,14 @@ Python 结果保留命令行的 JSON、`exit_code`、`stdout` 和 `stderr`。非
 | `denyNamespaces` | `[credentials, terminal, dynamicCordisRunner, account]` | 禁止访问这些内部接口分组，通用 API 调用也受限。 |
 | `waitSliceMs` | `30000` | 服务端每次等待的上限，范围为 1000 到 120000 ms；命令行会分段继续等。 |
 | `questionGraceMs` | `600000` | 所有界面窗口关闭后，再等待回答助手提问的时间。0 表示不延长，最大 86400000 ms。 |
-| `tiers.normal` / `tiers.fast` | `[]` / `[]` | 按顺序填写 `provider/model`。没有可选的 `optional model/quota provider` 档位服务时，使用这些列表。 |
+| `tiers.normal` / `tiers.fast` | `[]` / `[]` | 按顺序填写 `provider/model`。没有兼容的可选档位服务时，使用这些列表。 |
 | `quotaFromModelPrefix` | `[]` | 哪些服务商的模型 ID 首段表示额度来源。例如只有配置了 `relay`，`relay/vendor/model` 才会对应到 `vendor`。 |
 | `machines` | `[]` | 设置页中的远程机器清单。 |
 | `services` | `[]` | 清单中机器可用的服务和操作。 |
 
-如果 `optional model/quota provider` 提供档位，就优先用它的档位文档和保留比例；它记录的近期失败也会排除暂时停用的模型。否则使用插件自己的列表、10% 保留量和可取得的额度信息。拿不到额度报告会警告，不编造用量。两边都没有配置档位时，错误会说明两种配置方法。选择模型时不会悄悄换档。
+本仓库不包含模型额度服务的实现。会话查看、派发、回执和等待可独立使用；模型选择可以使用上表的档位列表，或明确指定模型。`quota` 命令需要额外的兼容额度集成，缺少报告时返回 `quota-unavailable`。
+
+若安装了兼容的档位服务，插件优先采用它的档位文档和保留比例，并排除近期失败后暂时停用的模型。否则使用自己的列表、10% 保留量和可取得的额度信息。缺少额度会明确提示，不编造用量。两边都未配置档位时说明配置方法，选择时不跨档。
 
 每台机器有 `id`（SSH 别名）、`label`、`hostname`（远端 `scutil --get LocalHostName` 的值）、0 到 9 中唯一的 `slot`，以及可选的 `secondary: false`。本机不会列在远程卡片里。
 

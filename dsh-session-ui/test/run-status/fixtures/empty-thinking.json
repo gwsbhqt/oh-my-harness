@@ -1,10 +1,10 @@
 {
-  "source": "2026-10-16 故障会话第11轮第46步；仅保留无正文的思考事件",
-  "requestStart": 1792091992715,
+  "source": "合成夹具：连续八段无正文的思考事件，时间为相对毫秒",
+  "requestStart": 1000,
   "frames": [
     {
       "type": "chunk",
-      "time": 1792091995418,
+      "time": 2000,
       "chunk": {
         "type": "block-start",
         "index": 0,
@@ -13,7 +13,7 @@
     },
     {
       "type": "chunk",
-      "time": 1792092011195,
+      "time": 3000,
       "chunk": {
         "type": "block-end",
         "index": 0,
@@ -25,7 +25,7 @@
     },
     {
       "type": "chunk",
-      "time": 1792092011201,
+      "time": 4000,
       "chunk": {
         "type": "block-start",
         "index": 1,
@@ -34,7 +34,7 @@
     },
     {
       "type": "chunk",
-      "time": 1792092029209,
+      "time": 5000,
       "chunk": {
         "type": "block-end",
         "index": 1,
@@ -46,7 +46,7 @@
     },
     {
       "type": "chunk",
-      "time": 1792092029333,
+      "time": 6000,
       "chunk": {
         "type": "block-start",
         "index": 2,
@@ -55,7 +55,7 @@
     },
     {
       "type": "chunk",
-      "time": 1792092048024,
+      "time": 7000,
       "chunk": {
         "type": "block-end",
         "index": 2,
@@ -67,7 +67,7 @@
     },
     {
       "type": "chunk",
-      "time": 1792092048025,
+      "time": 8000,
       "chunk": {
         "type": "block-start",
         "index": 3,
@@ -76,7 +76,7 @@
     },
     {
       "type": "chunk",
-      "time": 1792092068575,
+      "time": 9000,
       "chunk": {
         "type": "block-end",
         "index": 3,
@@ -88,7 +88,7 @@
     },
     {
       "type": "chunk",
-      "time": 1792092068691,
+      "time": 10000,
       "chunk": {
         "type": "block-start",
         "index": 4,
@@ -97,7 +97,7 @@
     },
     {
       "type": "chunk",
-      "time": 1792092084154,
+      "time": 11000,
       "chunk": {
         "type": "block-end",
         "index": 4,
@@ -109,7 +109,7 @@
     },
     {
       "type": "chunk",
-      "time": 1792092084155,
+      "time": 12000,
       "chunk": {
         "type": "block-start",
         "index": 5,
@@ -118,7 +118,7 @@
     },
     {
       "type": "chunk",
-      "time": 1792092100500,
+      "time": 13000,
       "chunk": {
         "type": "block-end",
         "index": 5,
@@ -130,7 +130,7 @@
     },
     {
       "type": "chunk",
-      "time": 1792092100785,
+      "time": 14000,
       "chunk": {
         "type": "block-start",
         "index": 6,
@@ -139,7 +139,7 @@
     },
     {
       "type": "chunk",
-      "time": 1792092121606,
+      "time": 15000,
       "chunk": {
         "type": "block-end",
         "index": 6,
@@ -151,7 +151,7 @@
     },
     {
       "type": "chunk",
-      "time": 1792092121723,
+      "time": 16000,
       "chunk": {
         "type": "block-start",
         "index": 7,
@@ -160,7 +160,7 @@
     },
     {
       "type": "chunk",
-      "time": 1792092138560,
+      "time": 17000,
       "chunk": {
         "type": "block-end",
         "index": 7,

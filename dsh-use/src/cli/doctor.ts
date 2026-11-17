@@ -10,7 +10,7 @@ export interface OfflineOptions {
   timeoutMs?: number; entry?: string
 }
 
-/** 只该由 dsh-python-repl 给单个内核设的变量。从内核子进程里重启/试启动 App 会把它带进新宿主：旧值指向已死的进程，内核看门狗读到就自杀（2026-10-09 实测：宿主环境里的死值让所有会话里跑的 vendor 协议测试失败）。 */
+/** 仅属于单个内核的变量不得传入新宿主；过期的 owner PID 会触发内核看门狗退出。 */
 const KERNEL_ONLY_VARS = ['PRIME_AGENT_KERNEL_OWNER_PID'] as const
 
 export function launchEnv(): NodeJS.ProcessEnv {

@@ -329,10 +329,23 @@ class CompleteBashOutput(unittest.TestCase):
             dsh_kernel.require_complete(result)
         self.assertEqual(result["stdout"]["text"], "JSON tail")
 
+    def test_shared_spill_paths_remain_unassigned_and_discoverable(self) -> None:
+        result = dict(BASH_OK, stdout={"text": "tail", "truncated": True}, spillPaths=["/fixture/out.log", "/fixture/err.log"])
+        with self.assertRaisesRegex(ValueError, "stream mapping unavailable.*out.log.*err.log"):
+            dsh_kernel.require_complete(result)
+        self.assertNotIn("spillPath", result["stdout"])
+
     def test_missing_spill_still_rejects_tail(self) -> None:
         result = dict(BASH_OK, stdout={"text": "tail", "truncated": True})
         with self.assertRaisesRegex(ValueError, "not reported"):
             dsh_kernel.require_complete(result)
+
+    def test_unknown_truncation_never_passes_even_when_exit_check_is_disabled(self) -> None:
+        for metadata in ({}, {"truncated": None}, {"truncated": 0}, {"truncated": ""}):
+            result = dict(BASH_OK, stdout={"text": "looks complete", **metadata})
+            for check_exit in (True, False):
+                with self.subTest(metadata=metadata, check_exit=check_exit), self.assertRaisesRegex(ValueError, "completeness is unknown"):
+                    dsh_kernel.require_complete(result, check_exit=check_exit)
 
     def test_failed_and_interrupted_results_need_explicit_inspection(self) -> None:
         for changed in ({"exitCode": 2}, {"timedOut": True}, {"aborted": True}, {"signal": "SIGTERM"}):
@@ -428,7 +441,7 @@ class ToolResultViews(unittest.IsolatedAsyncioTestCase):
         self.assertIn("signal=SIGTERM", text)
         self.assertIn("TIMED OUT after 60000ms", text)
         self.assertIn("[stderr]\nboom", text)
-        self.assertIn("truncated to its tail; full output: /spill/1.txt", text)
+        self.assertIn("marked truncated; full output: /spill/1.txt", text)
 
     async def test_bash_background_view_says_how_to_collect(self) -> None:
         text = repr(await self.call("bash", {"kind": "background", "jobId": "bash-7"}))
@@ -446,7 +459,7 @@ class ToolResultViews(unittest.IsolatedAsyncioTestCase):
         self.assertIn("offset=3", text)
 
     async def test_existing_keys_read_by_attribute_too(self) -> None:
-        # 2026-11-03 maintenance sessions failed on `r.totalLines`, `files.paths`, `g.matches`, `job.jobId`.
+        # Existing public keys must also support attribute access, including nested result values.
         read = await self.call("read", {"path": "/w/a.txt", "offset": 1, "totalLines": 5,
                                         "lines": [{"number": 1, "text": "alpha"}]})
         self.assertEqual(read.totalLines, 5)
@@ -493,7 +506,7 @@ class ToolResultViews(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(list(result), ["matches"])
 
     async def test_big_grep_is_capped_in_the_view_but_complete_in_the_value(self) -> None:
-        # Field regression 2026-09-23: a cell's `grep e` printed all 6519 matches.
+        # A generated result larger than the display cap stays complete in the stored value.
         matches = [{"path": f"f{i % 40}.txt", "lineNumber": i, "line": "e" * (1000 if i == 0 else 3)} for i in range(6519)]
         result = await self.call("grep", {"matches": matches})
         text = repr(result)
@@ -540,7 +553,7 @@ class ToolResultViews(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(repr(clone), repr(result))
 
 class DisplayHint(unittest.TestCase):
-    """`display()` is IPython's; here it is a plain NameError (10 GPT cells, 2026-10-08)."""
+    """`display()` is IPython's; here a NameError explains the supported display methods."""
 
     def module(self):
         import traceback
@@ -586,7 +599,7 @@ class DisplayHint(unittest.TestCase):
 
 
 class BashStdin(unittest.IsolatedAsyncioTestCase):
-    """`bash({"command", "stdin"})`: the host tool has no stdin (field 2026-09-23).
+    """`bash({"command", "stdin"})` adds stdin support around the host tool.
 
     The rewritten command is run by a real /bin/bash here, so the quoting is
     proven rather than pattern-matched.
@@ -825,6 +838,129 @@ class CallForms(unittest.IsolatedAsyncioTestCase):
 class BashJobs(unittest.IsolatedAsyncioTestCase):
     """bash.start returns at once; awaiting the handle gathers all output."""
 
+    async def test_dill_restored_handle_collects_once_into_itself(self) -> None:
+        try:
+            import dill
+        except ImportError:
+            self.skipTest("dill is exercised in the snapshot test environment")
+        import weakref
+        from unittest import mock
+
+        for empty_registry in (False, True):
+            for known_gap in (False, True):
+                with self.subTest(empty_registry=empty_registry, known_gap=known_gap), mock.patch.object(dsh_kernel, "_BASH_JOBS", weakref.WeakValueDictionary()):
+                    original = dsh_kernel.BashJob("restored-fixture", "fixture")
+                    paths = ["/fixture/output.log"] if known_gap else []
+                    original._append_output("prefix\n", truncated=known_gap, spill_paths=paths)
+                    encoded = dill.dumps(original)
+                    if empty_registry:
+                        dsh_kernel._BASH_JOBS.clear()
+                    restored = dill.loads(encoded)
+                    sent = []
+
+                    async def host(payload):
+                        sent.append((payload["tool"], payload["args"]["job_id"]))
+                        return {"status": "ok", "result": {
+                            "text": "authorized fixture output\n",
+                            "job": {"id": restored.id, "status": "completed", "detail": "exit code: 0"},
+                        }}
+
+                    use_cell("run-restored-fixture", host=host)
+                    result = await restored
+                    self.assertEqual(result.text, "prefix\nauthorized fixture output\n")
+                    self.assertIs(dsh_kernel._BASH_JOBS.get(restored.id), restored)
+                    self.assertEqual(original._text, ["prefix\n"], "the original instance must not consume the restored handle's output")
+                    self.assertIs(result.stdout.truncated, True if known_gap else None)
+                    self.assertIs(result.stderr.truncated, True if known_gap else None)
+                    self.assertEqual(result.spillPaths, paths)
+                    self.assertIs(await restored, result)
+                    self.assertEqual(sent, [("job_output", restored.id)])
+
+    async def test_legacy_dill_handles_restore_unknown_completeness(self) -> None:
+        try:
+            import dill
+        except ImportError:
+            self.skipTest("dill is exercised in the snapshot test environment")
+        for completed in (False, True):
+            handle = dsh_kernel.BashJob(f"legacy-{completed}", "fixture")
+            if completed:
+                handle._result = dsh_kernel._BashJobResult(
+                    jobId=handle.id, status="completed", exitCode=0, text="cached\n", detail="exit code: 0",
+                    **dsh_kernel._wrap_nested({"stdout": {"text": "cached\n", "truncated": False}, "stderr": {"text": "", "truncated": False}}),
+                )
+            del handle._truncated
+            del handle._spill_paths
+            restored = dill.loads(dill.dumps(handle))
+            self.assertIsNone(restored._truncated)
+            self.assertEqual(restored._spill_paths, [])
+            if completed:
+                result = await restored
+                self.assertIsNone(result.stdout.truncated)
+                self.assertIsNone(result.stderr.truncated)
+                self.assertIn("completeness is unknown", repr(result))
+                with self.assertRaisesRegex(ValueError, "completeness is unknown"):
+                    dsh_kernel.require_complete(result)
+            else:
+                restored._append_output("available\n")
+                self.assertIsNone(restored._truncated)
+        known = dsh_kernel.BashJob("known-gap-snapshot", "fixture")
+        known._append_output("tail\n", truncated=True, spill_paths=["/fixture/output.log"])
+        restored = dill.loads(dill.dumps(known))
+        restored._append_output("later\n")
+        self.assertIs(restored._truncated, True)
+        self.assertEqual(restored._spill_paths, ["/fixture/output.log"])
+
+    async def test_promoted_gap_and_shared_files_survive_peek_then_collect(self) -> None:
+        for index, paths in enumerate(([], ["/fixture/output.log"], ["/fixture/out.log", "/fixture/err.log"])):
+            job_id = f"gap-{index}"
+            sent = []
+            replies = [
+                {"text": "progress\n", "job": {"id": job_id, "status": "running"}},
+                {"text": "done\n", "job": {"id": job_id, "status": "completed", "detail": "exit code: 0"}},
+            ]
+
+            async def host(payload):
+                sent.append(payload["tool"])
+                return {"status": "ok", "result": replies.pop(0)}
+
+            use_cell(f"run-{job_id}", host=host)
+            receipt = dsh_kernel._BashResult(kind="promoted", jobId=job_id, output="tail\n", truncated=True, spillPaths=paths)
+            self.assertEqual(await receipt.peek(), "tail\nprogress\n")
+            result = await receipt
+            self.assertEqual(result.text, "tail\nprogress\ndone\n")
+            self.assertIs(result.stdout.truncated, True)
+            self.assertIs(result.stderr.truncated, True)
+            self.assertEqual(result.spillPaths, paths)
+            for path in paths:
+                self.assertIn(path, repr(result))
+            self.assertIn("truncated", repr(result))
+            with self.assertRaisesRegex(ValueError, "truncated"):
+                dsh_kernel.require_complete(result, check_exit=False)
+            self.assertIs(await receipt, result)
+            self.assertEqual(sent, ["job_output", "job_output"])
+
+    async def test_unstructured_job_reads_leave_completeness_unknown(self) -> None:
+        for index, text in enumerate(("complete-looking text\n", "[some output was dropped from memory; full output: /fixture/untrusted.log]\n")):
+            job_id = f"unknown-{index}"
+            replies = [
+                {"text": text, "job": {"id": job_id, "status": "running"}},
+                {"text": "done\n", "job": {"id": job_id, "status": "completed", "detail": "exit code: 0"}},
+            ]
+
+            async def host(payload):
+                return {"status": "ok", "result": replies.pop(0)}
+
+            use_cell(f"run-{job_id}", host=host)
+            receipt = dsh_kernel._BashResult(kind="promoted", jobId=job_id, output="prefix\n", truncated=False)
+            await receipt.peek()
+            result = await receipt
+            self.assertIsNone(result.stdout.truncated)
+            self.assertIsNone(result.stderr.truncated)
+            self.assertIn("completeness is unknown", repr(result))
+            self.assertEqual(result.spillPaths, [], "do not parse command text as metadata")
+            with self.assertRaisesRegex(ValueError, "completeness is unknown"):
+                dsh_kernel.require_complete(result)
+
     async def test_start_then_await_collects_streamed_text_and_exit_code(self) -> None:
         sent = []
         replies = [
@@ -846,8 +982,8 @@ class BashJobs(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["text"], "a\nb\n[stderr]\nboom\n")
         self.assertEqual(result.stdout.text, "a\nb\n")
         self.assertEqual(result.stderr.text, "boom\n")
-        self.assertFalse(result.stdout.truncated)
-        self.assertFalse(result.stderr.truncated)
+        self.assertIsNone(result.stdout.truncated)
+        self.assertIsNone(result.stderr.truncated)
         self.assertIsInstance(result.stdout, dict)
         self.assertIs(result.stdout, result["stdout"])
         self.assertEqual(json.loads(json.dumps(result)), result)
@@ -856,8 +992,8 @@ class BashJobs(unittest.IsolatedAsyncioTestCase):
         self.assertIn("exitCode=2", repr(result))
 
     async def test_user_message_ends_the_wait_after_one_call(self) -> None:
-        # Field regression 2026-11-08: with a user message queued, DSH returns every
-        # wait at once; the loop asked again 11737 times in 10 s and froze the session view.
+        # Pending user steering makes DSH return waits immediately. Stop
+        # after one return so retrying cannot become a busy loop.
         sent = []
 
         async def host(payload):
@@ -880,8 +1016,8 @@ class BashJobs(unittest.IsolatedAsyncioTestCase):
         self.assertIn("status=killed", repr(result))
 
     async def test_output_read_outside_the_handle_still_reaches_await_job(self) -> None:
-        # Observed in code review: DSH hands each piece of output out once, so a
-        # direct tools.job_output progress check used to take it from `await job`.
+        # DSH hands each output chunk out once; a direct tools.job_output
+        # progress read must also preserve that chunk for `await job`.
         replies = [
             {"text": "step 1\n", "job": {"id": "j3", "status": "running"}},
             {"text": "step 2\n", "job": {"id": "j3", "status": "running"}},
@@ -909,7 +1045,7 @@ class BashJobs(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(job._text, [])
 
     async def test_only_the_newest_finished_jobs_stay_and_an_old_one_says_why(self) -> None:
-        # Code review 2026-11-09: every promoted job stayed in the kernel, output twice, until the kernel died.
+        # Retaining all completed jobs would keep their output alive for the entire kernel lifetime.
         async def host(payload):
             job_id = payload["args"]["job_id"]
             return {"status": "ok", "result": {"text": f"out {job_id}\n", "job": {"id": job_id, "status": "completed", "detail": "exit code: 0"}}}

@@ -16,6 +16,14 @@ Use fictional fixtures. No real names, account records, credential material, pri
 
 ## Implement and verify
 
+Start with the public-content check, without installing component dependencies:
+
+```sh
+pnpm run check:public
+```
+
+It checks local documentation links, public manifests, licensing, and explicit sensitive-content patterns. Human privacy review and live acceptance remain separate. See the [maintenance roadmap](docs/maintenance.en.md).
+
 Keep installation and component dependencies separate. Follow the component README's package-manager instructions rather than introducing a new workspace or installing everything in the repository root. A typical plugin check is:
 
 ```sh

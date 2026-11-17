@@ -1,14 +1,10 @@
 """Notice a cell that reads a chart by counting pixels, or re-crops one image again and again.
 
-The pattern this answers (2026-09-29, a 36-page paper read by Gemini 3.8 Flash):
-123 cells, 35 of them cropped or zoomed an image with PIL and 18 analysed pixel
-colours with numpy to find axis ticks and bar tops. Each detour is another model
-step carrying the whole context — that session cost $2.41, most of it steps
-like these. A model that can see images reads a chart better by looking at it
-once.
-
-Across 2814 cells of the other local sessions neither shape occurred once, so a
-reminder here is almost never wrong. Each kind is reported once per kernel.
+A chart image should first be inspected as a whole. Repeated crops and
+pixel-colour counting can replace visual interpretation with brittle image
+processing and discard the context around labels, axes and legends. Detect
+these patterns to suggest direct inspection, while allowing a targeted crop
+when text is too small to read. Each kind is reported once per kernel.
 """
 
 from __future__ import annotations

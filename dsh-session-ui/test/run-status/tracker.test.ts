@@ -21,12 +21,12 @@ describe('模型流和重试', () => {
     assert.equal(snap.totals['model-wait'], 5980)
   })
 
-  it('真实空思考流：开始思考后不再算等首字，连续空段不重置计时', () => {
+  it('合成空思考流：开始思考后不再算等首字，连续空段不重置计时', () => {
     const fixture = JSON.parse(readFileSync(new URL('./fixtures/empty-thinking.json', import.meta.url), 'utf8')) as {
       requestStart: number; frames: Array<Extract<StreamFrameLike, { type: 'chunk' }>>
     }
     const t = new RunTracker()
-    t.stream('s', { type: 'start', turn: 11, step: 46 }, fixture.requestStart)
+    t.stream('s', { type: 'start', turn: 1, step: 2 }, fixture.requestStart)
     for (const frame of fixture.frames) t.stream('s', frame, frame.time)
     const first = fixture.frames[0]!.time
     const last = fixture.frames.at(-1)!.time

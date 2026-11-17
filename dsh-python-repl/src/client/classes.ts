@@ -2,12 +2,10 @@
  * The host ToolRow's CSS-module class names, read from the stylesheet the
  * host injects at load instead of hard-coded.
  *
- * Why: the hashed prefix changes with every host build (0.1.7-rc.2 shipped
- * `_5Tb7VW_`, 0.2.0-rc.1 `qefBqa_`, 0.2.0-rc.2 `Q2dzhW_`). A stale prefix matched nothing, so
- * the run_code card lost all its styling — including the visually-hidden
- * status, which then showed as a bare "失败" / "运行中" line (2026-09-29).
- * The `<style data-plugin-css>` tag id is stable across builds; only the
- * prefix inside it moves.
+ * The hashed prefix changes with host builds. A stale prefix matches nothing,
+ * so the run_code card loses its styling, including visually-hidden status
+ * text. The `<style data-plugin-css>` tag id is stable across builds; only
+ * the prefix inside it moves.
  *
  * Delete together with CodeRow.tsx once the host exports its ToolRow or picks
  * the code language from the code runtime.

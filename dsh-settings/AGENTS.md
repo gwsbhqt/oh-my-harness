@@ -68,7 +68,7 @@
 - 模式偏好：`preferences.json` 的 `presetPreferences` 段；全局默认仍是宿主的 `agent-preset-registry.selectedDefault`。
 - 快捷回复：`preferences.json` 的 `quickReplies` 段（`{ presets: string[], action: 'send' | 'insert' }`）。
   文件缺失时默认 `{ presets: ['继续'], action: 'send' }`；不改动已有用户的已存预设。
-- 技能：`~/.agents/skill-exposure.json`（dotfiles 跟踪）。
+- 技能：用户级规则文件 `~/.agents/skill-exposure.json`。
 
 三块各自的 store 都沿用统一读写规则：按修改时间缓存、原子写、顺着符号链接写真实文件、保留未知顶层段、
 只改自己那一段。`src/presets/store.ts` 与 `src/skills/store.ts` 是同一套规则，`src/quick-reply/quick-replies-file.ts`

@@ -174,8 +174,7 @@ async function cacheRoots(cacheRoot: string): Promise<string[]> {
 
 /**
  * `path` moved into the current copy when it points into a copy that was replaced after an App update, else
- * undefined. Models keep copy paths from earlier answers; the old directory is deleted when the new copy is built
- * (evolve I-003: a grep aimed at a copy directory that no longer existed).
+ * undefined. Models may retain paths from earlier answers after the old directory has been replaced.
  */
 export async function currentCopyPath(path: string, workdir: string, cacheRoot = asarCacheRoot()): Promise<string | undefined> {
   const absolute = resolve(workdir, path)

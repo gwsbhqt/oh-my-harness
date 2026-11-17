@@ -9,9 +9,9 @@
 - `runStatus`（`src/host/run-status/` + `src/client/run-status/` + `src/shared/run-status/`）：宿主只听公开事件和插件钩子计时，开只读路由 `/dsh-run-status/state`，登记会话投影 `runStatusTotals`；浏览器半分状态和统计。
 - `copySessionId`（`src/host/copy-session-id/` + `src/client/copy-session-id/`）：头栏按钮复制本会话编号；机器代号由本包自己的 `/api/session-ui.machine` 给出，不依赖 dsh-session-link。这条只读路由**常驻注册**（输入框粘贴识别会话引用也向它取本机代号），`copySessionId` 开关只决定头栏按钮。
 
-## magpie 分段用时（去私人化）
+## Magpie 分段用时
 
-`src/host/run-status/magpie-gateway.ts` 自己决定用哪台网关：本机装了 Magpie 用本机 `127.0.0.1:3425`，没装才用 `session-ui` 显式配置的 `magpieBaseUrl` / `magpieKeyRef`；都没有就不记分段用时、不显示那一区，其余照常。公开代码里不写死任何网关地址或钥匙，私人地址/引用由 profile 的 cordis 补丁注入。不要改成「显式配置优先」：那样本机装了 Magpie 的机器会改用远端。
+`src/host/run-status/magpie-gateway.ts` 自己决定用哪台网关：本机装了 Magpie 用本机 `127.0.0.1:3425`，没装才用 `session-ui` 显式配置的 `magpieBaseUrl` / `magpieKeyRef`；都没有就不记分段用时、不显示那一区，其余照常。公开代码不得硬编码远端网关地址或凭据，部署地址和凭据引用由 profile 的 cordis 补丁注入。不要改成「显式配置优先」：那样本机装了 Magpie 的机器会改用远端。
 
 ## 配置
 

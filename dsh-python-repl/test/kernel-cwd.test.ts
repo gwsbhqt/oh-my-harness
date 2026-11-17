@@ -1,11 +1,9 @@
 /**
  * The kernel must not run inside `vendor/`.
  *
- * Found in a real session (2026-09-22): `os.getcwd()` reported
- * `.../dsh-python-repl/vendor/prime`, so any `open("out.csv", "w")` a cell
- * wrote landed in the one directory this project says must stay byte-for-byte
- * upstream. It was not hypothetical — `vendor/prime/rlm/__pycache__/` was
- * already there, created by the kernel importing its own vendored module.
+ * The working directory controls relative writes and must stay outside the
+ * byte-for-byte upstream tree. Python imports must also avoid adding
+ * `__pycache__/` there.
  *
  * Two separate failures made that possible and both are covered here:
  *
@@ -106,9 +104,8 @@ describe('output that belongs to no cell must not vanish silently', () => {
   it('surfaces raw fd1 writes instead of discarding them', async () => {
     // `print()` goes through the kernel's stream wrapper and carries a cell id.
     // A raw `os.write(1, ...)` — and anything a subprocess inherits — does not,
-    // so the frame arrives with `id: null`. The host used to drop those without
-    // a word: the model saw a command produce nothing and concluded it had no
-    // output (found 2026-09-22).
+    // so the frame arrives with `id: null`. Dropping it would make real
+    // subprocess output look empty to the caller.
     const session = newSession()
     const result = await session.runCell(
       'import os, time\nos.write(1, b"RAW-FD1-OUTPUT\\n")\ntime.sleep(0.3)\n"done"',
@@ -352,8 +349,8 @@ describe('the kernel follows the session when it changes directory', () => {
   }
 
   it('moves only when DSH reports a new directory, and a cell\'s own chdir survives until then', async () => {
-    // Found 2026-10-17: after the session cd'd into a subdirectory, read() used the new
-    // directory while Python stayed in the old one, so relative paths split between them.
+    // After a session directory change, file tools and Python must resolve
+    // relative paths from the same directory.
     const first = await realpath(await mkdtemp(join(tmpdir(), 'dsh-repl-first-')))
     const second = await realpath(await mkdtemp(join(tmpdir(), 'dsh-repl-second-')))
     const own = await realpath(await mkdtemp(join(tmpdir(), 'dsh-repl-own-')))

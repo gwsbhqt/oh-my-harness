@@ -1,7 +1,7 @@
-"""Hints for the interface guesses that fail cells most (evolve I-044) and the read line count (I-065).
+"""Hints for interface mistakes and consistent read line counts.
 
-Each case runs the original failing shape as a real cell (`<cell-N>` source in linecache), so the
-hint is built from the same traceback position the kernel sees.
+Each case runs a failing expression as a real cell (`<cell-N>` source in
+linecache), so the hint uses the same traceback position the kernel sees.
 """
 import asyncio
 import linecache
@@ -170,7 +170,7 @@ class ReadOffsetLineCount(unittest.TestCase):
         self.dir = Path(tempfile.mkdtemp())
 
     def test_uses_the_hosts_count_not_one_more(self):
-        # 2026-11-04 evolve I-065: the host said (44 lines), the hint said 45.
+        # A trailing newline must not add a line beyond the count reported by the host.
         path = self.dir / "notes.md"
         path.write_text("x\n" * 44)
         text = cell_errors.tool_hint(f'offset 45 is out of range for "{path}" (44 lines)')
@@ -187,7 +187,7 @@ class ReadOffsetLineCount(unittest.TestCase):
 
 class SlicingADict(unittest.TestCase):
     def test_slicing_a_skills_describe_result_points_at_the_instructions(self):
-        # Field shape 2026-11-07..12: `d = await skills.describe("sync_up")` then `print(d[:4000])`.
+        # A skills description is structured data; point slicing at its instructions text.
         described = {"items": [{"id": "sync_up", "status": "candidate", "instructions": "# sync-up"}]}
         text = hint("d = described\nprint(d[:4000])\n", described=described)
         self.assertIn("`d` is a dict, not text or a list, so it cannot be sliced; its keys are 'items'", text)
@@ -199,7 +199,7 @@ class SlicingADict(unittest.TestCase):
 
 class JsonThatIsNotJson(unittest.TestCase):
     def test_tail_of_truncated_output(self):
-        # Field shape 2026-11-10: bash kept only the tail of a large JSON reply; stdout.truncated was True.
+        # Truncated stdout can start in the middle of JSON instead of at its opening token.
         text = hint("import json\njson.loads(tail)\n", tail='n":null,"Layout":null}]}')
         self.assertIn("not JSON from its first character: it starts 'n\":null", text)
         self.assertIn("stdout.truncated is True", text)

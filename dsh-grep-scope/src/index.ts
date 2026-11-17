@@ -36,18 +36,16 @@ export type GrepValue = {
 const VCS_DIRECTORIES = ['.git', '.hg', '.svn', '.jj']
 
 /**
- * ripgrep is stopped once it has printed this much, half the host's 20 MB raw cap: past the cap the host keeps only
- * the tail and fails the whole call, and ripgrep would still run to the end (127 MB and 18 s for "error" across
- * dotfiles on 2026-11-13, evolve I-014).
+ * Stop ripgrep at half the host's raw-output cap. Beyond that cap the host retains only the tail
+ * and fails the call; stopping early preserves complete records and exposes the incomplete result.
  */
 export const EARLY_STOP_BYTES = 10_000_000
 const EARLY_STOP_POLL_MS = 200
 
 /**
- * ripgrep argv; `roots` replaces the input path, e.g. with an archive's extracted copy. Text output with each
- * line cut at GREP_MAX_LINE_BYTES, not the official --json: --json repeats every matched line whole, so one
- * minified file (2026-10-10: a 2.6 MB one-line plugin cache in dotfiles) overflows the 20 MB raw cap, and a
- * second clipped pass would blow the 30 s tool budget (evolve I-014).
+ * Build ripgrep arguments; `roots` can substitute an archive's extracted copy. Text output clips each
+ * line at GREP_MAX_LINE_BYTES because JSON repeats full matched lines and can exhaust the raw-output
+ * budget on minified files. Use a single pass so clipping does not require another timed search.
  */
 export function grepArgv(input: ScopedGrepInput, roots?: string[], skip: readonly string[] = []): string[] {
   const { pattern, path, include } = parseGrepArgs(input)
@@ -327,9 +325,8 @@ function relativeMatches(stdout: string, workdir: string, asar: AsarSearch | und
 const ARCHIVE_BLIND: Record<string, string> = { read: 'file_path' }
 
 /**
- * Denial text for a host read/glob aimed inside an `.asar` file, pointing at the readable copy; undefined otherwise.
- * The host read fails there with "Cannot mix BigInt and other types" and glob with "Not a directory", which
- * tells the model nothing (2026-10-09: 12 failed reads across three sessions, evolve I-003).
+ * Redirect unsupported reads inside an `.asar` archive to its readable copy. The host's filesystem
+ * error alone does not identify that copy; return undefined for paths that need no redirection.
  */
 export async function archiveRedirect(name: string, args: unknown, workdir: string): Promise<string | undefined> {
   const key = ARCHIVE_BLIND[name]

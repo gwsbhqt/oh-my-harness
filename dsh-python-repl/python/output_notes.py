@@ -1,10 +1,9 @@
 """What the model is told about `_` when a cell's output was cut.
 
-The host cuts a cell's output to its budget and saves the whole text, but
-only 2% of cut cells on real sessions (2026-11-03) went on to use `_` or the saved
-file; 21% rewrote the cell and ran it again. Saying what `_` holds right
-there (type, length, first keys) makes slicing it the obvious next step. Only
-exact builtin types are described: no user `repr`, `len` or attribute access.
+The host cuts a cell's output to its budget and saves the whole text. Explain
+what `_` holds (type, length, first keys) so callers can inspect the stored
+value or saved output without repeating side effects. Only exact builtin
+types are described: no user `repr`, `len` or attribute access.
 """
 from __future__ import annotations
 

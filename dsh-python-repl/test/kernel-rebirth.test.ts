@@ -1,10 +1,8 @@
 /**
  * After a kernel is retired, the NEXT cell must start a fresh one.
  *
- * The defect this pins, found in a real GUI session (2026-09-22): a kernel
- * the host had to retire — correct so far — made the session refuse every
- * later cell with the same retirement message, forever. Six cells over several minutes all came
- * back identical.
+ * Retiring an unhealthy kernel must not permanently retire the session.
+ * A later cell needs a new kernel rather than the same retirement error.
  *
  * Under PTC, `run_code` is the agent's ONLY tool. A permanently retired
  * kernel therefore does not degrade the session, it ends it: the agent can

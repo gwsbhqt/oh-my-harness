@@ -1,9 +1,8 @@
-"""Detour notices, calibrated on a real session.
+"""Detour notices distinguish analysis-library work from project execution.
 
-Every positive case is the shape of a cell from session-e7455d7c (2026-09-29),
-where 25 cells reached pymupdf through a second interpreter. Every negative
-case is a cell shape that ran in real sessions and must NOT be flagged: test
-runs, script files, stdlib-only probes, and text written to files.
+Positive cases reach an analysis library through a second interpreter.
+Negative cases cover project tests, script files, stdlib-only probes, and
+text written to files, none of which should trigger this notice.
 """
 
 from __future__ import annotations
@@ -86,7 +85,7 @@ class DoesNotFlag(unittest.TestCase):
 
 
 class FileWrites(unittest.TestCase):
-    """Writing files from Python gets no note at all (user 2026-11-05: any way of writing is fine)."""
+    """File writes do not trigger subprocess-detour notices."""
 
     def setUp(self) -> None:
         self.workspace = Path(tempfile.mkdtemp(prefix="dsh-detours-"))
@@ -108,10 +107,7 @@ class FileWrites(unittest.TestCase):
 
 
 class ShellHabits(unittest.TestCase):
-    """`| head`/`| tail` and `cat <source>` in bash (session analysis 2026-10-08); `2>/dev/null` is not flagged.
-
-    Every case is a command shape from the 297 analysed sessions.
-    """
+    """Check output-cutting pipes and shell source reads; do not flag stderr redirection alone."""
 
     def notes(self, command: str) -> list[str]:
         detours._REPORTED.clear()

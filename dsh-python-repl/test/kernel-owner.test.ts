@@ -1,10 +1,9 @@
 /**
  * 内核看门狗的「主人」必须是本进程，不能从环境继承。
  *
- * 2026-09-27 真机：DSH 是从 Prime Agent 里启动的，继承了 pa 工作进程的
- * PRIME_AGENT_KERNEL_OWNER_PID。pa 重启后那个进程没了，之后每个新内核都在启动时
- * 自杀（kernel exited during startup, code=1），run_code 在所有新会话里全挂，
- * 而报错里没有任何原因——内核启动前的 stderr 没人读。
+ * 从父环境继承 PRIME_AGENT_KERNEL_OWNER_PID 可能指向无关或已退出的进程，
+ * 导致新内核被看门狗立即终止。测试应验证主人进程归属，并保留启动前的 stderr，
+ * 使启动失败能报告实际原因。
  */
 
 import { strict as assert } from 'node:assert'
@@ -52,9 +51,9 @@ describe('kernel owner and inherited agent environment', () => {
   })
 
   it('keeps proxy settings but uses the bare IPv6 loopback form for HTTPX', async () => {
-    // 2026-10-29: the host adds [::1] for undici; HTTPX rejects that token
-    // while parsing NO_PROXY, before it sends the request. Only that exact
-    // Python-facing token changes here; the host and other clients stay intact.
+    // The host uses [::1] for undici; HTTPX rejects that token while parsing
+    // NO_PROXY, before it sends the request. Only that exact Python-facing
+    // token changes here; the host and other clients stay intact.
     Object.assign(process.env, {
       HTTP_PROXY: 'http://proxy.example:8080',
       HTTPS_PROXY: 'https://proxy.example:8443',

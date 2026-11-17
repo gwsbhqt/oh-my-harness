@@ -6,7 +6,13 @@ The Chinese README is the primary, default documentation; the paired English doc
 
 ## Start
 
-- [Overview and installation](README.en.md): Host/extension boundary, quick start, comparisons, security, and documentation map.
+- [Overview](README.en.md): Purpose, main capabilities, recorded example, and trust boundary.
+- [Documentation](docs/README.en.md): Scenario-based reading paths.
+- [Getting started](docs/getting-started.en.md): Build, link a profile, and verify variable reuse.
+- [Component catalog](docs/components.en.md): All public components grouped by problem.
+- [Architecture](docs/architecture.en.md): Host, upstream kernel, extension responsibilities, and source map.
+- [Dotfiles integration](docs/dotfiles.en.md): Public code, private configuration, and optional integrations.
+- [Maintenance](docs/maintenance.en.md): Checks, contribution priorities, and release review.
 - [中文说明](README.md): Primary Chinese introduction.
 - [Security](SECURITY.en.md): Trust boundaries and GitHub private vulnerability reporting.
 - [Contributing](CONTRIBUTING.en.md): Scope, component environments, evidence, and review.
@@ -28,6 +34,8 @@ The Chinese README is the primary, default documentation; the paired English doc
 
 - [Runtime maintenance](dsh-runtime/README.en.md): Login environment, symlink-preserving saves, and profile YAML normalization.
 - [Startup diagnostics](dsh-doctor/README.en.md): CLI, tool, and remote checks with actual App startup auditing.
+
+- [Screenshot and media review](skills/shot-sheet/README.en.md): Contact sheets, extracted frames, before/after comparisons, and annotations from fictional media.
 
 ## Design and evidence
 

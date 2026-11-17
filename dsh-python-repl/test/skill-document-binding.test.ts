@@ -144,8 +144,8 @@ it('uses an explicitly selected SKILL document when no Python document was disco
   assert.equal(result.content, rendered('demo', f.directory, expected))
 })
 
-it('a cell that prints content sees the base directory, as the model does through the skill tool (evolve I-062)', async () => {
-  // Field shape 2026-11-09: the cell printed `r['content']`, saw no directory, then read `references/...` from a guessed root.
+it('a cell that prints content sees the base directory, as the model does through the skill tool', async () => {
+  // Displaying only `content` must still provide the base for resolving relative resources.
   const f = fixture()
   const original = { ...f.result, name: 'de"m<o', resourceBase: { kind: 'directory', path: f.directory } }
   const record = { ...f.record, skill: 'de"m<o' }

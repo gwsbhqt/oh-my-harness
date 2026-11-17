@@ -1,10 +1,8 @@
 """Notice when a cell repeats code an earlier cell already ran.
 
-A persistent kernel is only worth its keep if the model builds on it: a
-function written once and called from then on. In practice models re-type the
-same call-parse-check block cell after cell with new literals, and a prompt
-rule alone does not change that (field reports, 2026-09-23). This module makes
-the repetition visible at the moment it happens.
+A persistent kernel lets a model define a function once and reuse it. Repeating
+the same call-parse-check block with new literals misses that benefit. This
+module identifies repeated structure and makes it visible when it happens.
 
 After each SUCCESSFUL cell (a failed cell's retry is not repetition), every
 statement and every run of 2-3 consecutive sibling statements is reduced to a
@@ -13,7 +11,7 @@ become `_` unless they name a function, class or module (calling your own
 helper again IS reuse and stays small). Code inside `def`/`class`/`lambda`
 is skipped for the same reason. Occurrences are counted for every shape;
 `Policy` then decides which repeat earns a note — at most one per cell and
-once per shape. What it filters out, each measured on real sessions:
+once per shape. It filters out:
 
 - echo code: a unit must process data (loop, branch, comprehension, slice or
   a parsing/collecting method) — "call a tool, print it" repeats constantly
@@ -129,9 +127,8 @@ def _has_logic(stmts: list[ast.stmt]) -> bool:
     """Whether a unit does something with data: a loop, branch, comprehension,
     try, slice, or a parsing/collecting method. Echo-style code ("call a tool,
     print the result") repeats constantly and wrapping it saves nothing; the
-    repetition worth a function is the processing around calls. The same gate
-    cut false positives from 62 to 8 on real transcripts in an earlier
-    prototype, and it is what separates hits from noise in this corpus too.
+    repetition worth a function is the processing around calls. Requiring
+    that processing keeps display-only wrappers out of the suggestions.
     """
     display = {id(n) for stmt in stmts for call in ast.walk(stmt) if _is_print(call)
                for arg in [*call.args, *(k.value for k in call.keywords)] for n in ast.walk(arg)}
@@ -139,8 +136,7 @@ def _has_logic(stmts: list[ast.stmt]) -> bool:
         for node in ast.walk(stmt):
             if id(node) in display:
                 # `print(r.stdout[-300:])`, `print(x.strip())`: trimming for
-                # display, not processing (7 of 28 false positives in the
-                # first verification round).
+                # display, not processing that benefits from a reusable helper.
                 continue
             if isinstance(node, (ast.For, ast.AsyncFor, ast.While, ast.If, ast.IfExp, ast.Try,
                                  ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp, ast.Slice)):
@@ -235,40 +231,30 @@ class Unit:
 class Policy:
     """When a repeated unit earns a note.
 
-    Calibrated 2026-09-23 on 12,819 successful kernel cells from DSH, Prime
-    and Claude Code sessions (calibration tools in scripts/habits/): ~3.1% of cells
-    get a note. Of the "make it a function" notes 81% were judged right (every
-    note of this policy labeled; 95% CI 75-86%) and ~44% of the repeats worth
-    wrapping get one; the hand-edit note was right 96% of the time. Each knob
-    trades false positives against misses; false positives cost more, because
-    a model that is nagged wrongly learns to skip every note.
+    Each threshold trades false positives against missed repetitions.
+    Requiring enough structure and repeated occurrences limits reminders for
+    trivial wrappers or deliberate one-off checks. The calibration utilities
+    in scripts/habits/ can evaluate a supplied labeled corpus; these defaults
+    do not establish an accuracy guarantee for other workloads.
 
-    2026-11-16: added R1 (redundant import, incl. pre-bound names) and R2
-    (identical top-level re-definition) notes in Tracker._structure_notes.
-    Each fires at most once per distinct imported binding / redefined name
-    per kernel, so they add a small, bounded number of notes on top of the
-    shape policy above. R1/R2 are deterministic (a repeated import binding, or
-    a byte-identical top-level definition), so unlike the shape heuristic they
-    have almost no false positives by construction. The census corpus is not in
-    this checkout, so evaluate.py exact was not re-run; instead the added
-    categories were measured on real transcripts: over 300 real multi-cell
-    sessions (38.5k cells) R1 fired on 1.2% of cells and R2 on 0.3% (a 1.2k-cell
-    Prime corpus: 0.6% / 0%) — a small, bounded share below the shape note rate
-    (~2-5%). The shape thresholds themselves are unchanged.
+    Tracker._structure_notes also detects redundant imports (including
+    pre-bound names) and identical top-level re-definitions. Each fires at
+    most once per distinct imported binding or redefined name per kernel.
+    These checks use exact bindings or source equality rather than the shape
+    heuristic, and do not change its thresholds.
     """
 
-    #: Shaped AST nodes below which a unit is never noted. 14 → 39% false
-    #: positives; 28 → 71% missed.
+    #: Minimum shaped AST size; small wrappers rarely benefit from extraction.
     min_size: int = 20
     #: At or above this size a unit is noted at its `big_occurrence`, else at
-    #: its `small_occurrence`. Flat between 40 and "never".
+    #: its `small_occurrence`. Larger repeated units are worth surfacing earlier.
     big_size: int = 50
     big_occurrence: int = 2
-    #: 2nd → 40% false positives, 3rd → 23%, 4th → 19% but 66% missed.
+    #: Smaller units must repeat more often before earning a note.
     small_occurrence: int = 3
-    #: Loop/branch/comprehension/slice/parsing method required. Off: 23% → 37%.
+    #: Require a loop, branch, comprehension, slice or parsing method.
     require_logic: bool = True
-    #: Above this share of string literal the literal is the substance. None: 23% → 33%.
+    #: Above this share of string literal, the literal is the substance.
     max_literal: float = 0.7
     #: A hand-rolled file edit is noted from its 2nd occurrence.
     edit_occurrence: int = 2

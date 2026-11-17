@@ -16,7 +16,7 @@ class UsageNotes(unittest.TestCase):
         return detours.observe(code)
 
     def test_writing_files_gets_no_note(self):
-        # User 2026-11-05: writing with open()/write_text is fine; no reminder to use write/edit.
+        # File writes are outside the subprocess-detour checks.
         with tempfile.TemporaryDirectory() as root:
             with mock.patch.dict(os.environ, {"DSH_PYTHON_REPL_WORKSPACE": root}):
                 html = str(Path(root) / "a.html")

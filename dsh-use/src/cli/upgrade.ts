@@ -166,7 +166,7 @@ export function swapBack(swap: Swap, exec: Exec = realExec): void {
   move(swap.backup, swap.target, exec)
 }
 
-/** 新版就绪后删掉换下来的旧版、下载和解包目录：不留备份（用户 2026-11-13 定，旧版每份约 1 GB，用不着）。 */
+/** 新版确认就绪后清理旧版、下载和解包目录；失败回滚阶段不得提前清理。 */
 export function pruneUpgrade(dir: string): void {
   for (const name of existsSync(dir) ? readdirSync(dir) : []) rmSync(join(dir, name), { recursive: true, force: true })
 }

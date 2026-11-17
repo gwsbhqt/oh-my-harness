@@ -87,12 +87,14 @@ Override the `dsh-use` entry in the profile patch. A `config` override replaces 
 | `denyNamespaces` | `[credentials, terminal, dynamicCordisRunner, account]` | Block these internal API namespaces, including generic API calls. |
 | `waitSliceMs` | `30000` | Maximum server wait slice, from 1000 to 120000 ms; the CLI continues waiting in slices. |
 | `questionGraceMs` | `600000` | Grace period for answering agent questions after all UI windows close; 0 disables the extension, maximum 86400000 ms. |
-| `tiers.normal` / `tiers.fast` | `[]` / `[]` | Ordered `provider/model` lists used when the optional `optional model/quota provider` tier service is absent. |
+| `tiers.normal` / `tiers.fast` | `[]` / `[]` | Ordered `provider/model` lists used when a compatible optional tier service is absent. |
 | `quotaFromModelPrefix` | `[]` | Provider names whose model ID's first segment identifies its quota source, for example `relay/vendor/model` maps to `vendor` only if `relay` is configured. |
 | `machines` | `[]` | Remote machine inventory for the settings page. |
 | `services` | `[]` | Services and actions available on inventory machines. |
 
-If `optional model/quota provider` supplies tiers, its tier document and reserve percentage take precedence; its recent-failure records also exclude temporarily paused models. Otherwise the plugin uses its own lists, a 10% reserve, and available quota information. Missing quota reports produce warnings, not invented usage data. If neither source configures tiers, the error explains both configuration options. Selection never silently switches tiers.
+This repository does not ship a model quota service implementation. Session discovery, dispatch, receipts, and waiting work independently. Model selection can use the tier lists above or an explicitly selected model. The `quota` command needs an additional compatible integration and returns `quota-unavailable` without a report.
+
+When a compatible tier service is installed, its tier document and reserve percentage take precedence; recent failures can temporarily exclude a model. Otherwise the plugin uses its own lists, a 10% reserve, and available quota information. Missing quota is reported without inventing usage. When neither source configures tiers, the error explains how to configure them. Selection does not switch tiers.
 
 Each machine has `id` (SSH alias), `label`, `hostname` (the remote `scutil --get LocalHostName` value), unique `slot` from 0 to 9, and optional `secondary: false`. The local machine is omitted from remote cards.
 

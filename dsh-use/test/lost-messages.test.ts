@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { findInterruptedUser, findLostMessages, scanLostMessages, UNTERMINATED_GRACE_MS } from '../src/lost-messages.ts'
 import type { RawEvent } from '../src/transcript.ts'
 
-// 形状照抄 2026-11-03 19:37 重启时真实丢消息那段日志（seq 1970~1973），文字换成占位。
+// 合成事件序列覆盖消息已出队、尚未写入对话记录时被中止的恢复边界。
 const RESTART = 1_000_000
 const userMessage = (id: string, text: string) => ({ content: [{ type: 'text', text }], source: { kind: 'user', rpcId: `rpc-${id}`, clientTimeZone: 'Asia/Shanghai' }, role: 'user', id })
 const queued = (id: string, text: string, time: number): RawEvent => ({ type: 'agent/inbox/spliced', time, data: { target: 'next-turn', start: 0, inserted: [userMessage(id, text)] } })

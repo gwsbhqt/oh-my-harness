@@ -1,11 +1,10 @@
 """Notice a cell that reached a library through a second interpreter.
 
-The pattern this answers (2026-09-29, 29 cells in one session): a library was
-missing from the kernel, so the model ran `bash("uv run --with pymupdf python -")`
-with the script on stdin. Each such cell cold-starts another Python, re-opens
-the same file, and throws away everything it computed — the opposite of what
-a persistent kernel is for. `repl.install` removes the reason; this makes the
-detour visible the moment it happens, once per kind per kernel.
+Starting a second interpreter just to access a missing analysis library
+cold-starts Python, re-opens inputs, and discards computed values when it
+exits. Installing that library with `repl.install` keeps the work in the
+persistent kernel. Make the detour visible when it happens, once per kind
+per kernel.
 
 Only text that actually reaches a `bash` call counts: string literals in its
 arguments, plus string values assigned in the same cell to names those
@@ -122,12 +121,10 @@ def _python_detour(tree: ast.AST) -> list[str]:
 
 # ── Shell habits that throw away what the cell already has ────────────────────
 #
-# Session analysis 2026-10-08: Claude cut 30% and DeepSeek 61% of their bash
-# output with `| head`/`| tail`, and source files were read with `cat`. A prompt
-# rule alone changed little, so the cell that does it gets one line, once per
-# kind per kernel. Nothing is blocked. `2>/dev/null` is NOT flagged: 3 of 40
-# sampled hits only probed whether something exists, where dropping stderr is right.
-# Calibrated against 297 real sessions to avoid warning on ordinary library usage.
+# Piping output through `head` or `tail` can hide failures and completeness
+# metadata; shell reads also bypass the structured file helpers. Give one
+# reminder per kind per kernel without blocking execution. Do not flag
+# stderr redirection on its own: it can be part of an existence probe.
 
 #: Command text inside `$(...)` or backticks computes a value (`f=$(ls -t | head -1)`);
 #: cutting it is not hiding output from the model.
@@ -242,7 +239,7 @@ SUBAGENT_SLEEP_POLL_NOTE = (
 
 
 def _sleep_poll(tree: ast.AST) -> list[str]:
-    """A loop that sleeps between checks: 569 cells on real sessions (2026-11-03), 12+ hours of waiting."""
+    """Detect sleep-based polling that holds a cell instead of awaiting completion."""
     for loop in ast.walk(tree):
         if not isinstance(loop, (ast.For, ast.AsyncFor, ast.While)):
             continue
@@ -259,8 +256,7 @@ def _sleep_poll(tree: ast.AST) -> list[str]:
 def _usage(tree: ast.AST) -> list[str]:
     """subprocess calls only, judged on the syntax tree: text that merely mentions
     subprocess inside a string (a script handed to bash) is not this cell doing it.
-    Writing files with open()/write_text gets no note: the user does not mind how
-    files are written (2026-11-05)."""
+    File writes with open()/write_text are outside this subprocess check."""
     modules = {"subprocess": {"subprocess"}, "os": {"os"}}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):

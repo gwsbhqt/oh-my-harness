@@ -16,10 +16,10 @@ function escapeText(value: string): string {
 /**
  * The text DSH's skill tool shows the model for a directory skill
  * (dsh-skill `renderSkillContent`, directory case), with the selected body.
- * A cell gets the structured value instead, whose `content` is the bare body:
- * the base directory was only in `resourceBase`, and a model that printed
- * `content` resolved `references/…` against a guessed directory (evolve
- * I-062, 2026-11-09). Keep in step with that function when DSH changes it.
+ * A cell gets the structured value instead, whose `content` is the bare body.
+ * Include the base directory there so displaying `content` preserves the
+ * information needed to resolve relative resource paths. Keep in step with
+ * `renderSkillContent` when DSH changes it.
  */
 function renderDirectorySkill(name: string, directory: string, body: string): string {
   return [

@@ -58,7 +58,7 @@ const flowYaml=v=>Array.isArray(v)?`[${v.map(flowYaml).join(', ')}]`
   :JSON.stringify(v);
 /**
  * 试启动的补丁。补丁会整块替换条目的 config，所以网页服务和网页入口照抄实际组合出的 config，只把端口换成随机、不开浏览器；
- * 用户补丁漏掉的必填项照样缺着，试启动才会和真实启动一样失败（2026-10-21 webserver 缺 host 曾被这里写死的 host 盖住）。
+ * 保留实际配置缺失的必填项，使试启动与真实启动一致失败，不能用探针默认值掩盖缺项。
  */
 export function startupOverlay(entries,readyProbe) {
   const pinned={'@deepseek-ai/dsh-host-webserver':{port:0},'@deepseek-ai/dsh-web-app':{openBrowser:false}};

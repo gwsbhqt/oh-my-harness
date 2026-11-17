@@ -467,8 +467,7 @@ export class ReplSession {
    * same class of event as a crash, which already recovers by lazily starting
    * a fresh kernel. It must not mean "this session is over": under PTC
    * `run_code` is the agent's only tool, so refusing every later cell ends the
-   * session outright. A real session hit exactly that on 2026-09-22: six
-   * cells over several minutes all came back with the same message.
+   * session outright.
    */
   #retirementNotice: string | undefined
   readonly #teardownGraceMs: number
@@ -784,7 +783,7 @@ export class ReplSession {
     if (signal?.aborted) return abortedResult()
     // Listen BEFORE starting: a handshake, a slow skill import or a state
     // restore can each take seconds, and a cancel must stop the process
-    // now rather than after it finishes (a slow skill import alone was measured at 2.4 s).
+    // now rather than after it finishes, since skill imports can be slow.
     const onStartAbort = (): void => {
       this.#leases.revokeAll()
       this.#clearToolReplies()
@@ -1135,7 +1134,7 @@ export class ReplSession {
       // cells, and the fix (restore_binding) is not guessable.
       // `repl` needs its own advice: telling someone to call
       // `await repl.restore_binding("repl")` when `repl` is now a string is a
-      // recipe that cannot work (found 2026-09-22). Recover it by importing
+      // recipe that cannot work. Recover it by importing
       // the bootstrap module, which no rebinding can hide.
       const first = teardown.shadowed[0] ?? ''
       const replIsGone = teardown.shadowed.includes('repl')
@@ -1618,7 +1617,7 @@ export class ReplSession {
     }
     const lookup = this.#leases.resolve(request.runId, request.epoch, request.tool)
     // `repl.background` work calls through its job's own grant (src/background-tools.ts), even while its cell
-    // still runs: a call sent through the cell's lease loses its reply when the cell settles (evolve I-074).
+    // still runs: a call sent through the cell's lease loses its reply when the cell settles.
     const job = request.jobId === undefined ? undefined : this.#backgroundJobs.get(request.jobId)
     const grant = job?.grant
     const bound = grant !== undefined && grant.runId === request.runId && grant.epoch === request.epoch ? job?.tools?.get(request.tool) : undefined
@@ -1786,7 +1785,7 @@ function withCollected(tool: string, fn: BoundTool, host: HostJobs): BoundTool {
   }
 }
 
-/** 95% of bash calls in kernels in real sessions finished within 5 s (2026-11-03, 36k calls); 1 s would send one in six to the background. */
+/** Bound foreground waits so longer commands can return a background receipt and finish via notification. */
 export const DEFAULT_CELL_WAIT_MS = 5_000
 
 function withArgumentFix(tool: string, fn: BoundTool, parameters: unknown): BoundTool {

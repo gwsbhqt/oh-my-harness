@@ -1,11 +1,10 @@
 """Name lifecycle for long sessions: archive what a user cell has not used for a while, delete it later.
 
-Measured on 219 long sessions (2026-11-03): 96% of reuses happen within 100
-cells and 98% within 200, while a long session ends with about 68% of its
-names untouched for 100+ cells. So a name unused for `archive_after` user cells
-leaves the namespace for its own archive file and stops being restored; one
-unused for `delete_after` cells is dropped, leaving only a tombstone line.
-Pinned names (repl.keep) are never touched.
+A long-lived namespace can retain values that later cells no longer use.
+A name unused for `archive_after` user cells leaves the namespace for its own
+archive file and stops being restored; one unused for `delete_after` cells is
+dropped, leaving only a tombstone line. Pinned names (repl.keep) are never
+touched.
 
 "Used" is read from the cell's source before it runs: every global name it
 reads or writes, plus the globals of the session's own functions it calls

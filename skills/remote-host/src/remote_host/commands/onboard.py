@@ -1,10 +1,8 @@
 """First contact with a machine: find it on the LAN, get SSH working, pin it.
 
-The 2026-09-23 session spent ~45 cells before its first successful login to a
-home Mac — guessing which IP was which, reading ports with an unreliable `nc`,
-probing usernames, writing an expect script to type a password, deriving a
-missing .pub, adding the ssh alias by hand — then did it all again for the
-next Mac. `discover` and `onboard` are that work, done once and idempotently.
+Discovery and onboarding share the same checks for host identity, SSH
+reachability, account selection and key setup. Repeating onboarding must not
+duplicate an existing alias or authorized public key.
 """
 
 import os
@@ -101,7 +99,7 @@ def to_ip(hostname):
 
 
 def port_open(addr, port=22, timeout=3):
-    """A real TCP connect — `nc -z` exit codes proved unreliable on this Mac."""
+    """Use the shared TCP probe to classify SSH reachability and read its banner."""
     from agentkit.remote.reach import tcp_probe
 
     state, detail = tcp_probe(addr, port, timeout, banner=True)
@@ -112,8 +110,8 @@ def guess_user(label):
     """`alexdeMac-alpha` / `alex的Mac alpha` → `alex`
     (macOS names a machine after its first account)."""
     m = re.match(r"(.+?)(?:de|的|'s[- ])\s*(?:Mac|MacBook|iMac)", label)
-    # A Chinese display name (示例用户的Mac mini) is not the account name — the
-    # account there is pinyin; only an ASCII guess is worth offering.
+    # A non-ASCII display name does not establish the account name.
+    # Offer only the ASCII candidate accepted by this heuristic.
     user = re.sub(r"[^A-Za-z0-9_.-]", "", m.group(1)).lower() if m else ""
     return user or None
 
@@ -249,8 +247,7 @@ def cmd_onboard(args):
             cmd_discover(args)
             return 1
         ip, label = match[0]["ip"], match[0]["name"]
-        # The alias names the machine, not today's DHCP lease: a router moved
-        # alpha from .11 to .10 mid-session (2026-09-23) and a fixed-IP alias died.
+        # Prefer the discovered hostname so the alias survives DHCP address changes.
         host = match[0]["host"]
         name_for_alias = f"{host}.local" if host and not host.endswith(".local") else host
     addr = to_ip(ip) or ip

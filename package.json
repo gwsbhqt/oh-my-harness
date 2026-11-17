@@ -7,7 +7,8 @@
     "list": "node tooling/cli.mjs list",
     "build": "node tooling/cli.mjs build",
     "create": "node tooling/cli.mjs create",
-    "test:tooling": "node --test tooling/test/*.test.mjs"
+    "test:tooling": "node --test tooling/test/*.test.mjs",
+    "check:public": "node --test tooling/test/public-repository.test.mjs"
   },
   "license": "MIT"
 }

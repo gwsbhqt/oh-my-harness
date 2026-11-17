@@ -858,7 +858,7 @@ test('新进程起来：按暂停记录接回监听，用主人会话现算环�
     sessionController: { resolveAgent: async (id: string) => { resolved.push(id); return { agent: owner } } },
   })
   await eventually(() => assert.equal(sub.children.length, 1, '接回的监听要真的拉起'))
-  // 2026-10-09 真实重启：新进程编号从头数，正好又是 monitor-1，原文案说「旧编号 monitor-1 已经不存在」自相矛盾
+  // 新进程可能复用同样的编号；恢复说明不能仅凭字符串相同就认定仍是原任务。
   assert.deepEqual(resolved, ['session-test'], '按记录里的会话找主人，没加载就先加载')
   assert.equal(existsSync(suspendedFile()), false, '确认接回成功后才删除记录')
   const list = await after.run('monitor_list', {}) as { monitors: { id: string; status: string; label: string }[] }

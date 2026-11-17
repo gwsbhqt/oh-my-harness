@@ -120,10 +120,8 @@ class VendorIsUnmodified(unittest.TestCase):
         file and the note silently goes stale. So `vendor/prime/rlm/` must
         contain nothing but what upstream shipped.
         """
-        # Directories count too. The original check said `is_file()`, so a
-        # `__pycache__/` the kernel wrote while importing its own vendored
-        # module walked straight past the test whose whole job is catching
-        # that — only .gitignore kept it out of git (found 2026-09-22).
+        # Directories count too: checking only files would overlook generated
+        # `__pycache__/` entries and fail to enforce an untouched upstream tree.
         present = sorted(
             entry.name for entry in (VENDOR / "rlm").iterdir() if not entry.name.startswith(".")
         )

@@ -1,9 +1,9 @@
 /**
  * Programs a cell starts end with the kernel unless the cell detached them.
  *
- * Field 2026-10-13: a cell's `subprocess.Popen` started a headless Chrome for
- * a benchmark and never stopped it. DSH restarted, the kernel went away, and
- * the browser plus a local http server kept running for 22 hours.
+ * A child launched with `subprocess.Popen` can outlive its parent unless
+ * process-group cleanup reaps it. Cover real child processes so closing or
+ * replacing the kernel cannot leave those children running unintentionally.
  *
  * Real Python kernels and real child processes throughout; every wait is
  * bounded, so a regression fails instead of hanging the suite.

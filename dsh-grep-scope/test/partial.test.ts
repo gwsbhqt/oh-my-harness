@@ -108,7 +108,7 @@ test('a malformed regex is still reported as a rejected pattern', () => harness(
 }))
 
 test('a one-line file bigger than the raw cap still returns every match, with long lines cut', () => harness(async (call, dir) => {
-  // 2026-10-10: a 2.6 MB one-line plugin cache in dotfiles pushed `grep scope: all` over the 20 MB cap and the model gave up (evolve I-014).
+  // Synthetic long lines exceed the raw cap without clipping; every matching file must remain visible.
   const huge = 'x'.repeat(3_000_000)
   mkdirSync(join(dir, 'cache'))
   for (let i = 0; i < 8; i++) writeFileSync(join(dir, 'cache', `blob${i}.json`), `${huge} clip_needle ${huge}\n`)

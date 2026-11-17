@@ -1,12 +1,10 @@
 /**
  * A kernel that dies on its own must never hang the cell that was running.
  *
- * Field 2026-09-27: a cell ran `os.kill(os.getpid(), signal.SIGKILL)`. The
- * process was gone, yet `run_code` never returned and the user's Stop button
- * could not end the turn — the app had to be restarted. Node reports a
- * signal death as `exitCode === null` (only `signalCode` is set), and the
- * kernel's "already exited?" checks read `exitCode`, so shutdown waited for an
- * `exit` event that had already fired.
+ * Node reports a signal death as `exitCode === null` with `signalCode` set.
+ * Shutdown must recognize that the process has exited instead of waiting
+ * for an `exit` event that already fired. A cell that sends SIGKILL to its
+ * own process exercises this path.
  *
  * Every assertion here is bounded: a regression must show up as a failed
  * race against a deadline, not as a suite that never finishes.

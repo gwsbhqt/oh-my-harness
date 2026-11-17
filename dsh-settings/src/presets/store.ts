@@ -1,6 +1,5 @@
 /**
  * 规则文件的读写：共用偏好文件 `$DSH_HOME/preferences.json` 的 `presetPreferences` 段
- * （dotfiles 的 packages/dsh/.dsh/preferences.main.json / preferences.mm.json，换机跟着走）。
  * 按修改时间和大小缓存：手改、git pull、设置页保存后，下次读就拿到新的。
  *
  * 文件不存在等于什么都没写（全部跟随全局默认），不报错；写错了就报错，不悄悄当成没写。

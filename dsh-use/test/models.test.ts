@@ -116,7 +116,7 @@ test('中继 多账号不取第一份额度，也不把百分比相加', () => {
 
 test('normal 档按顺序挑，额度不紧时排前面的先用；5h 窗口不参与（claude 5h 只剩 1% 也照样可选）', () => {
   const r = pick('normal', DEFAULT_TIERS, report({ codex: [{ label: '7d', left: 95, expectedLeft: 50, resetsAt: NOW + 3 * DAY }] }), opts)
-  assert.equal(r.chosen?.provider, 'claude', 'Codex 余量更多也不抢先（用户 2026-10-12 定）')
+  assert.equal(r.chosen?.provider, 'claude', '余量更多不应覆盖额度正常时的档位优先顺序')
   assert.equal(r.candidates.every((v) => v.usable), true)
 })
 

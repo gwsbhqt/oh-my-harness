@@ -151,7 +151,7 @@ describe('bash runs as a job the cell waits on', () => {
   }
 
   it('a gather larger than the job cap waits for slots instead of being refused', async () => {
-    // Field shape 2026-11-05..11: a dozen commands gathered in one cell, the 11th and later refused at DSH's cap of 10.
+    // More concurrent commands than available slots must wait for capacity within the deadline.
     const h = capped(2, 100, 2_000)
     const results = await Promise.all(['a', 'b', 'c', 'd', 'e'].map((c) => h.bash()({ command: c, description: c }))) as Array<Record<string, any>>
     assert.deepEqual(results.map((r) => [r['kind'], r['exitCode'], r['stdout'].text]), ['a', 'b', 'c', 'd', 'e'].map((c) => ['foreground', 0, `${c} out\n`]))
@@ -175,12 +175,68 @@ describe('bash runs as a job the cell waits on', () => {
     assert.ok(Date.now() - started < 100)
   })
 
+
+  it('marks producer-side gaps even when the registry ring is lossless', () => {
+    const source = Array.from({ length: 5_000 }, (_, i) => `line-${String(i).padStart(5, '0')}:${'x'.repeat(120)}\n`).join('')
+    const tail = source.slice(-64_000)
+    assert.equal(source.length, 660_000)
+    assert.ok(!tail.startsWith('line-'), 'the retained tail begins inside a line')
+    for (const channel of ['stdout', 'stderr'] as const) {
+      const job = { id: 'j', status: 'completed', detail: 'exit code: 0' }
+      const read = { chunks: [{ channel, text: tail, gapBefore: true as const }], lossy: false, job }
+      const r = foregroundResult(job, read, '/fixture', 5000) as Record<string, any>
+      assert.equal(r[channel].truncated, true)
+      assert.equal(r[channel === 'stdout' ? 'stderr' : 'stdout'].truncated, true, 'a chronological gap may include either stream')
+      assert.ok(r[channel].text.startsWith(tail))
+      assert.equal(r[channel].spillPath, undefined)
+      assert.match(r['stderr'].text, /some output was dropped from memory/)
+      assert.match(r['stderr'].text, /full output: \(unavailable\)/)
+    }
+  })
+
+  it('reports all actual spill paths without guessing their stream', () => {
+    const job = { id: 'j', status: 'completed', output: { spillPaths: ['/fixture/stdout.log', '/fixture/stderr.log'] } }
+    const read = { chunks: [{ channel: 'stdout', text: 'out tail\n', gapBefore: true as const }, { channel: 'stderr', text: 'err tail\n', gapBefore: true as const }], lossy: false, job }
+    const r = foregroundResult({ ...job, output: { spillPaths: ['/fixture/stale.log'] } }, read, '/fixture', 5000) as Record<string, any>
+    assert.equal(r['stdout'].truncated, true)
+    assert.equal(r['stderr'].truncated, true)
+    assert.equal(r['stdout'].spillPath, undefined)
+    assert.equal(r['stderr'].spillPath, undefined)
+    assert.deepEqual(r['spillPaths'], job.output.spillPaths)
+    assert.match(r['stderr'].text, /\/fixture\/stdout\.log, \/fixture\/stderr\.log/)
+    assert.doesNotMatch(r['stderr'].text, /stale\.log/)
+  })
+
+  it('preserves missing-output notices and recovery paths in promoted receipts', async () => {
+    const h = harness(1)
+    const read = h.jobs.read.bind(h.jobs)
+    h.jobs.read = (id) => ({
+      ...read(id),
+      chunks: [{ channel: 'stdout', text: 'tail\n', gapBefore: true as const }],
+      lossy: false,
+      job: { id, status: 'running', output: { spillPaths: ['/fixture/output.log'] } },
+    })
+    try {
+      const r = await h.bash()({ command: 'mid', description: 'fixture' }) as Record<string, any>
+      assert.equal(r['kind'], 'promoted')
+      assert.equal(r['truncated'], true)
+      assert.deepEqual(r['spillPaths'], ['/fixture/output.log'])
+      assert.ok(r['output'].startsWith('tail\n'))
+      assert.match(r['output'], /some output was dropped from memory/)
+      assert.match(r['output'], /\/fixture\/output\.log/)
+    } finally {
+      h.notices.dispose()
+    }
+  })
+
   it('reports a signal, and keeps DSH notes after the exit code', () => {
-    const read = { chunks: [{ channel: 'stdout', text: 'x' }], lossy: true, job: { id: 'j', status: 'completed' } }
-    const r = foregroundResult({ id: 'j', status: 'completed', detail: 'exit code: 1; sandbox denied a write', output: { spillPaths: ['/s'] } }, read, '/w', 5000)
+    const read = { chunks: [{ channel: 'stdout', text: 'x' }], lossy: true, job: { id: 'j', status: 'completed', output: { spillPaths: ['/fixture/output.log'] } } }
+    const r = foregroundResult({ ...read.job, detail: 'exit code: 1; sandbox denied a write' }, read, '/w', 5000)
     assert.equal(r['exitCode'], 1)
-    assert.deepEqual(r['stdout'], { text: 'x', truncated: true, spillPath: '/s' })
+    assert.deepEqual(r['stdout'], { text: 'x', truncated: true })
+    assert.deepEqual(r['spillPaths'], ['/fixture/output.log'])
     assert.match((r['stderr'] as { text: string }).text, /\[sandbox denied a write\]/)
+    assert.match((r['stderr'] as { text: string }).text, /\/fixture\/output\.log/)
   })
 })
 
@@ -188,6 +244,51 @@ describe('a still-running bash result in the kernel', () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), '..')
   const session = new ReplSession({ python: process.env['DSH_PY'] ?? 'python3', vendorRoot: join(root, 'vendor', 'prime'), pythonRoot: join(root, 'python'), cellWaitMs: 400 })
   after(() => session.dispose())
+
+  it('keeps a promoted gap through peek and collection in a real kernel', async () => {
+    const h = harness(1)
+    const read = h.jobs.read.bind(h.jobs)
+    let reads = 0
+    h.jobs.read = (id) => {
+      const value = read(id)
+      reads += 1
+      return reads === 1 ? {
+        ...value,
+        chunks: [{ channel: 'stdout', text: 'tail\n', gapBefore: true as const }],
+        job: { ...value.job, output: { spillPaths: ['/fixture/output.log'] } },
+      } : value
+    }
+    const tools = new Map<string, BoundTool>([
+      ['bash', h.bash()],
+      ['job_output', async (args) => {
+        const a = args as { job_id: string; wait?: boolean }
+        if (a.wait) await h.jobs.wait(a.job_id, 1_000, 'agent-1')
+        const result = h.jobs.read(a.job_id)
+        return { text: result.chunks.map((c) => c.text).join(''), job: result.job }
+      }],
+    ])
+    try {
+      const cell = await session.runCell([
+        "r = await bash('mid', 'fixture')",
+        'preview = await r.peek()',
+        'collected = await r',
+        'assert collected.stdout.truncated is True and collected.stderr.truncated is True',
+        "assert collected.spillPaths == ['/fixture/output.log']",
+        'try:',
+        '    await repl.require_complete(collected)',
+        'except ValueError as e:',
+        "    assert 'truncated' in str(e)",
+        'else:',
+        "    raise AssertionError('partial output was accepted')",
+        "print('metadata survived')",
+      ].join('\n'), tools)
+      assert.equal(cell.error, undefined, cell.logs.join('\n'))
+      assert.match(cell.logs.join('\n'), /metadata survived/)
+      assert.equal(reads, 3, 'one consuming read per receipt, peek and final collection')
+    } finally {
+      h.notices.dispose()
+    }
+  })
 
   it('is awaitable and gives stdout and stderr like a finished call', async () => {
     let reads = 0

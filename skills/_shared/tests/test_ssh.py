@@ -60,8 +60,7 @@ class AuthHint(unittest.TestCase):
 
 
 class Reach(unittest.TestCase):
-    """Why ssh got no further — each cause told apart (field report 2026-09-23:
-    away from home, asleep, a changed IP and Remote Login off all looked like a timeout)."""
+    """Distinguish DNS, route, host reachability and SSH availability failures."""
 
     def setUp(self):
         self.config_home = tempfile.TemporaryDirectory()
@@ -158,8 +157,7 @@ class Reach(unittest.TestCase):
 
 
 class LocalNetworkPrivacy(unittest.TestCase):
-    """An Electron desktop app, 2026-09-23: python sockets got EHOSTUNREACH for every LAN
-    host while ssh worked, so doctor said "turn on Remote Login"."""
+    """Interpreter network denial must not be diagnosed as a remote SSH outage."""
 
     def setUp(self):
         blocked = mock.patch.dict(reach.LOCAL_NETWORK_BLOCKED, python=False)

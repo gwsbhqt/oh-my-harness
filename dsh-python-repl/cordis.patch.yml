@@ -7,8 +7,8 @@
 # 而 dsh-tools 只会拿到 ctx.get('ptcRuntime') 的那一个。
 #
 # 影响范围：Host 这一层只剩 Python 后端，PTC 模式的 run_code 走它。
-# workflow-ptc（工作流引擎）一加载就要求 TypeScript 后端，否则报错，所以工作流整个不用
-# （用户 2026-11-04 定：Python 代码格里已经能派子代理，不留 TypeScript 后端）：
+# workflow-ptc（工作流引擎）要求 TypeScript 后端，因此 Python 组合禁用工作流；
+# 子代理编排由 Python 代码格承担：
 #   - Host 这一层的 workflow-ptc、tool-workflow 在下面关掉；
 #   - cordis、standard 模式 delegation 组里的那两条，补丁层够不着，
 #     插件启动后在模式注册表的记录上关掉再按宿主的方式重新挂载（src/preset-workflow.ts），

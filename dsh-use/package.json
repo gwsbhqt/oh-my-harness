@@ -26,7 +26,11 @@
   "files": [
     "lib/*.js",
     "bin/dsh-use",
-    "skills",
+    "skills/*/*.md",
+    "skills/*/references/**/*.md",
+    "skills/dsh-use/pyproject.toml",
+    "skills/dsh-use/src/dsh_use/**/*.py",
+    "skills/dsh-supervise/scripts/*.py",
     "cordis.patch.yml",
     "README.md",
     "README.en.md",

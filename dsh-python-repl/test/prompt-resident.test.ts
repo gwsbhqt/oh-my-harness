@@ -1,9 +1,9 @@
 /**
  * Frequently used non-top-level tools carry their full contract in the prompt.
  *
- * Field regression (2026-09-23): `job_output` was called 84 times from a
- * one-line summary, so the model never saw `timeout_ms`; half its waits timed
- * out at the 30 s default and it fell back to sleep-and-poll loops.
+ * A one-line summary can omit `job_output` wait parameters. Keeping the
+ * contract resident exposes the timeout controls needed to await completion
+ * without sleep-and-poll loops.
  */
 
 import { strict as assert } from 'node:assert'

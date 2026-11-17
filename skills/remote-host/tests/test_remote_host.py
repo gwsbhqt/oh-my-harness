@@ -199,18 +199,18 @@ class OnboardProbe(unittest.TestCase):
 
 # ── screenshot ───────────────────────────────────────────────────────────────
 
-# This machine's three displays (2026-09-23): 5K main, portrait on the left,
-# the laptop on the right — points, origin bottom-left, scale 2.
-FRAMES = [(0, 0, 2560, 1440, 2), (2560, 0, 1728, 1117, 2), (-1440, -516, 1440, 2560, 2)]
+# Synthetic display geometry: main, right landscape and left portrait screens.
+# Coordinates are points with a bottom-left origin and a uniform scale of 2.
+FRAMES = [(0, 0, 1920, 1080, 2), (1920, 0, 1280, 800, 2), (-1080, -300, 1080, 1920, 2)]
 
 
 class ScreenCrop(unittest.TestCase):
-    def test_boxes_match_a_real_capture(self):
-        # A full capture of these displays is 11456x5120; the crops below were
-        # checked against it by eye on the real machine.
-        self.assertEqual(shot.crop_box(FRAMES, 0), (1208, 2880, 2880, 5120))
-        self.assertEqual(shot.crop_box(FRAMES, 1), (1854, 8000, 2234, 3456))
-        self.assertEqual(shot.crop_box(FRAMES, 2), (0, 0, 5120, 2880))
+    def test_boxes_match_synthetic_display_geometry(self):
+        # The union spans x=-1080..3200 and y=-300..1620 points.
+        # Expected boxes are (top, left, height, width) in the scaled capture.
+        self.assertEqual(shot.crop_box(FRAMES, 0), (1080, 2160, 2160, 3840))
+        self.assertEqual(shot.crop_box(FRAMES, 1), (1640, 6000, 1600, 2560))
+        self.assertEqual(shot.crop_box(FRAMES, 2), (0, 0, 3840, 2160))
 
     def test_unknown_geometry_means_no_crop(self):
         self.assertIsNone(shot.crop_box(FRAMES, 3))
@@ -444,8 +444,7 @@ class Jobs(TempHome):
         return code, "".join(out), args
 
     def test_start_follow_is_one_call_ending_with_the_jobs_exit_code(self):
-        # Field report 2026-09-23: jobs were started, then a background shell
-        # was wrapped around `job follow` to get notified — or a sleep loop.
+        # start --follow must stream and return the job's exit status in one call.
         code, out, args = self.cmd("start", "jf", ["echo first; sleep 1; echo second; exit 3"],
                                    follow=True)
         self.assertEqual(code, 3)
@@ -665,7 +664,7 @@ class Transfer(TempHome):
         self.assertEqual((missing, extra, changed), (["sub/deep/c d.txt"], ["new"], ["a.txt"]))
 
     def test_sockets_and_fifos_are_left_out(self):
-        # git's fsmonitor--daemon.ipc crashed the manifest (2026-09-23).
+        # Filesystem manifests must skip sockets and FIFOs rather than reading them as files.
         root = self.tree(self.home / "src")
         os.mkfifo(root / "fifo")
         sock = socket.socket(socket.AF_UNIX)
@@ -725,7 +724,7 @@ class Transfer(TempHome):
         self.assertEqual(transfer.split_loc("mini:"), ("mini", "~"))
 
     def test_mac_to_linux_drops_appledouble_but_mac_to_mac_keeps_xattrs(self):
-        # Caught by --verify on the first live Mac → Linux copy: `._name` files.
+        # AppleDouble metadata must be excluded for Mac-to-Linux transfers.
         sender, _, _ = transfer.copy_scripts("/x", "/y", "x", "bsdtar", "gnu", False)
         self.assertIn("--no-mac-metadata", sender)
         self.assertIn("COPYFILE_DISABLE=1", sender)
@@ -740,9 +739,9 @@ class Onboard(TempHome):
     def test_guess_user_from_mac_names(self):
         self.assertEqual(onboard.guess_user("alexdeMac-alpha"), "alex")
         self.assertEqual(onboard.guess_user("alex的Mac alpha"), "alex")
-        self.assertEqual(onboard.guess_user("bihaiqingtiandeMac-mini.local"), "bihaiqingtian")
+        self.assertEqual(onboard.guess_user("sampleUserdeMac-mini.local"), "sampleuser")
         self.assertEqual(onboard.guess_user("Ann's MacBook Pro"), "ann")
-        self.assertIsNone(onboard.guess_user("L6D14YLF21"))
+        self.assertIsNone(onboard.guess_user("SAMPLE0001"))
         self.assertIsNone(onboard.guess_user("示例用户的Mac mini"))
 
     def test_parse_dns_sd_and_avahi(self):

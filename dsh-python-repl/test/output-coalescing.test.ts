@@ -3,10 +3,8 @@
  *
  * CPython's `print` calls `write()` once per argument AND once per separator:
  * `print("x:", 42)` produces `"x:"`, `" "`, `"42"`, `"\n"` — four calls. The
- * kernel emits one frame per call, so the model used to receive four separate
- * log entries for a single print. In a long task every `print("label:", v)`
- * became a cluster of short lines with blank gaps between them (reported from
- * a real session, 2026-09-22).
+ * kernel emits one frame per call. Displaying each frame as a separate log
+ * entry would split one print into short lines with blank gaps between them.
  *
  * The fix joins CONSECUTIVE stream frames. The boundaries that must survive:
  *

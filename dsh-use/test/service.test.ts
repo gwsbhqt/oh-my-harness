@@ -603,7 +603,7 @@ test('send --interrupt 对没在跑的会话不中止，直接发', async () => 
 })
 
 test('notice、send 不往已存档的会话送：宿主不让它开新一轮，明说送不到；查不到存档名单时照常送', async () => {
-  // 2026-10-19：重启放弃的通知送进已存档的 5d27c6fd，那一轮直接 blocked，没人重排（复盘 I-018）
+  // 存档会话不能处理新轮次，发送前应拒绝并给出可操作的原因。
   const fake = makeFake()
   fake.archived = ['session-aaaa1111-0000']
   const notices: string[] = []
@@ -1624,7 +1624,7 @@ test('通信口权限：目录 0700、socket 0600', async () => {
 
 
 test('通信口文件被删后自动在原路径重新监听；路径被别的 socket 占了不抢', async () => {
-  // 2026-10-19 03:01 起 ~/.dsh/dsh-use/dsh.sock 被删，DSH 进程还开着它，dsh-use 全部连不上（复盘 I-029）
+  // 删除 socket 路径不会自动关闭原监听；自检须恢复路径且不能抢占其他实例。
   const socketPath = join(dir, 'heal', 'dsh.sock')
   const health = (path: string) => new Promise<number>((resolve, reject) => {
     const req = request({ socketPath: path, path: '/v1/health', agent: false }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode ?? 0)) })
@@ -1656,7 +1656,7 @@ test('通信口文件被删后自动在原路径重新监听；路径被别的 s
 
 test('旧实例晚于新实例关闭时，不删新实例的通信口文件', async () => {
   // 插件热重载、或重启时旧 DSH 还没退干净：新实例已在原路径监听，旧实例随后关闭，按路径删文件把新的删了，
-  // 之后 dsh-use 一直「找不到通信口」（复盘 I-029，2026-10-21 重启完成后和等待重启时都撞上）。
+  // 关闭旧实例时必须按 inode 检查归属，保留新实例的通信口。
   const socketPath = join(dir, 'reload', 'dsh.sock')
   const health = (path: string) => new Promise<number>((resolve, reject) => {
     const req = request({ socketPath: path, path: '/v1/health', agent: false }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode ?? 0)) })
@@ -1879,7 +1879,7 @@ test('new --if-idle CLI 真正解析裸开关，拒绝带值和重复值', async
 })
 
 test('goal hold：只收回自动续跑，不调会打断这一轮的 goals/pause；目标不在进行中、宿主不支持都报用法错误', async () => {
-  // 2026-10-18 8191aefd：重启等待里用 goals/pause 让路，宿主当场中止了正在跑的这一轮
+  // hold 只能收回后续自动续跑，不得触发 pause 对当前轮次的中止。
   const fake = makeFake()
   let goal: Record<string, unknown> | null = { id: 'goal-1', revision: 3, phase: 'active', activation: 'armed', objective: '把升级做完' }
   const held: string[] = []

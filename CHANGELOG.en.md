@@ -2,6 +2,17 @@
 
 # Changelog
 
+## Unreleased
+
+- Focus the home page on main capabilities and entry points. Add paired documentation navigation, getting-started, architecture, configuration-boundary, and maintenance guides, with desktop and mobile overview diagrams.
+- Add `shot-sheet` for screenshot contact sheets, GIF and video frame extraction, before/after comparisons, and annotations, with independent packaging and fictional-media checks.
+- Add a public-content check that needs no component dependency installation, covering documentation links, licensing, release boundaries, and general sensitive-content patterns. Discover plugins automatically in CI.
+- Use neutral maintenance guidance and synthetic regression inputs while retaining technical constraints and original failure shapes.
+- Clarify the boundary between session control and optional model quota integrations.
+- Correct Bash output completeness: preserve upstream gaps and shared log paths, and report background results as unknown when completeness cannot be proven.
+- Exclude Python caches from the session-control package and verify the actual package file list in a regression test.
+- Fix the platform boundary in Linux CI: always run rebuild checks and explicitly skip only the actual desktop-app startup check when its required environment is unavailable.
+
 ## 0.1.0
 
 ### Added

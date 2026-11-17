@@ -4,9 +4,8 @@
  * Why this exists: the host's generic tool card hard-codes
  * `<CodeBlock lang="typescript">` for every `run_code` call
  * (`dsh-client-ui-tool`, ToolRow), whatever language the code runtime runs.
- * With this plugin the runtime is Python, so every cell was labelled
- * "typescript" and coloured as TS — which read as "the session switched to
- * TS" (2026-09-23), though every cell ran in the Python kernel.
+ * This plugin runs Python, so the generic label and syntax highlighting do
+ * not represent the active runtime.
  *
  * A keyed `tool.call.toolview` entry replaces the generic card for one tool
  * name; the fallback is not handed to the entry, so the card is rebuilt here

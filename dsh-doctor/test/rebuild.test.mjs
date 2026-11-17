@@ -6,9 +6,10 @@ import os from 'node:os';
 import {fileURLToPath} from 'node:url';
 import {fixture,put} from '../../tooling/test-support/rebuild-fixture.mjs';
 import {run,appPnpm} from '../../tooling/doctor.mjs';
+import {app,available} from '../../tooling/test-support/doctor-fixture.mjs';
 const source=fileURLToPath(new URL('../',import.meta.url));
 
-test('共享 doctor 核心变化：只重建私有注册包，再跑完整真实试启动',async()=>{
+test('共享 doctor 核心变化只重建对应注册包，其他插件保持已验证',async(t)=>{
   const f=await fixture('doctor-regression');
   const dir=f.dir('dsh-doctor');
   for(const name of ['package.json','pnpm-lock.yaml','cordis.patch.yml','scripts/build.mjs','src/index.js','bin/doctor.mjs'])await put(dir,name,await fs.readFile(path.join(source,name),'utf8'));
@@ -21,14 +22,16 @@ test('共享 doctor 核心变化：只重建私有注册包，再跑完整真实
   assert.deepEqual(report.plugins.filter(p=>p.built).map(p=>p.name),['dsh-doctor']);
   const row=report.plugins.find(p=>p.name==='dsh-doctor');assert.match(row.before.message,/tooling\/doctor.mjs/);assert.equal(row.after.status,'verified');
   assert(report.plugins.filter(p=>p.name!=='dsh-doctor').every(p=>p.action==='skip'&&!p.build));
-  const app='/Applications/DeepSeek Harness.app',pnpm=await appPnpm(app);assert(pnpm,'完整 doctor 回归需要实际 App');
-  const version=(await fs.readFile(pnpm.dist,'utf8')).match(/STORE_VERSION = "(v[0-9]+)"/)[1];
-  await put(f.profile,'node_modules/.modules.yaml',JSON.stringify({storeDir:path.join(os.homedir(),'Library/pnpm/store',version)}));
-  const dependencies=Object.fromEntries(Object.entries(f.manifest.dependencies).map(([name,specifier])=>[name,{specifier,version:specifier}]));
-  await put(f.profile,'pnpm-lock.yaml',JSON.stringify({lockfileVersion:'9.0',importers:{'.':{dependencies}}}));
-  const result=await run(process.execPath,[path.join(dir,'bin/doctor.mjs'),'--home',f.home,'--profile','probe','--json','--sanitize-env'],{env:{...process.env,PNPM_HOME:path.join(os.homedir(),'Library/pnpm')}});
-  assert.equal(result.code,0,result.stdout+result.stderr);
-  const doctor=JSON.parse(result.stdout);assert.equal(doctor.ok,true,JSON.stringify(doctor));
-  assert.equal(doctor.checks.find(c=>c.id==='link-build-freshness').status,'verified');assert.equal(doctor.checks.find(c=>c.id==='isolated-startup').ok,true);
+  await t.test('重建后通过实际 App 的完整隔离试启动',{skip:available?false:'需要已安装的 macOS DSH App'},async()=>{
+    const pnpm=await appPnpm(app);assert(pnpm,'实际 App 必须包含 pnpm');
+    const version=(await fs.readFile(pnpm.dist,'utf8')).match(/STORE_VERSION = "(v[0-9]+)"/)[1];
+    await put(f.profile,'node_modules/.modules.yaml',JSON.stringify({storeDir:path.join(os.homedir(),'Library/pnpm/store',version)}));
+    const dependencies=Object.fromEntries(Object.entries(f.manifest.dependencies).map(([name,specifier])=>[name,{specifier,version:specifier}]));
+    await put(f.profile,'pnpm-lock.yaml',JSON.stringify({lockfileVersion:'9.0',importers:{'.':{dependencies}}}));
+    const result=await run(process.execPath,[path.join(dir,'bin/doctor.mjs'),'--home',f.home,'--profile','probe','--json','--sanitize-env'],{env:{...process.env,PNPM_HOME:path.join(os.homedir(),'Library/pnpm')}});
+    assert.equal(result.code,0,result.stdout+result.stderr);
+    const doctor=JSON.parse(result.stdout);assert.equal(doctor.ok,true,JSON.stringify(doctor));
+    assert.equal(doctor.checks.find(c=>c.id==='link-build-freshness').status,'verified');assert.equal(doctor.checks.find(c=>c.id==='isolated-startup').ok,true);
+  });
 });
 

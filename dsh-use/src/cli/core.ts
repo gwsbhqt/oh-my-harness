@@ -615,7 +615,7 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
   /** 会话、排队消息和后台任务清场的最长等待；提前清干净会立即继续。 */
   const QUIT_CLEAR_MS = Number(env['DSH_USE_QUIT_CLEAR_MS'] ?? 5_000)
   const KEEP_LOGS = 20
-  // profile 改动（常见是 --before 写的）会让宿主热重载本插件，通信口要过一两秒才在原路径重建（2026-10-21 18:20 撞上过）。
+  // profile 改动可触发插件热重载；给通信口重建留出宽限，避免把暂时不可达判成永久故障。
   const RELOAD_GRACE_MS = Number(env['DSH_USE_RELOAD_GRACE_MS'] ?? 30_000)
   /** 强制重启时，同一个会话中止后又跑起来，隔多久再中止一次。 */
   const RECANCEL_MS = 2_000
@@ -635,8 +635,7 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
   /** 用户原话最多带多少字进通知；全文在会话记录里。 */
   const QUOTE_LIMIT = 800
   /**
-   * 被中止的那一轮里用户的话还没回应完时的版本。不能再说「任务没变、不用解释」：那会把用户刚问的事盖掉
-   * （2026-11-04 会话 cac50301：用户问「你是不是不会主动停止目标」，重启后模型照旧干活）。
+   * 被中止轮次仍有未回应的用户输入时，恢复通知必须先处理该输入，再决定是否继续原任务。
    */
   const resumeForUser = (said: string): string => [
     'This turn was interrupted by the system (to restart DSH), not stopped by the user.',
@@ -652,7 +651,7 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
   const stamp = (text: string) => print(`${new Date().toLocaleString('zh-CN', { hour12: false })} ${text}`)
 
   /**
-   * restart：一律强制重启（用户 2026-10-27 定：没有「等空闲」这一档，也不必再写 `--force`）。
+   * restart 使用强制重启流程，不提供等待空闲的模式，也不要求额外的 `--force`。
    * - 在跑的会话先中止、后台任务停掉、子代理记下来，正常退出没走成就结束进程再拉起；被中止的会话重启后逐个发消息让它们继续。
    * - `--detach`：自己转到后台独立进程里做（DSH 会话里自动带上：前台命令是 DSH 的子进程，DSH 一退出就跟着没了）。
    * - `--kill`：直接结束进程再拉起，不先试正常退出。
@@ -823,7 +822,7 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
 
   /**
    * 已有重启在进行：不再另起，把发起的会话记进名单，那次结束时一起通知它。
-   * 以前直接拒绝，后来的会话收不到「重启完成」，只能请用户重启完回来说一声（2026-10-09 四个会话这样，复盘 I-008）。
+   * 附着等待者也要收到同一次执行的终态，但不能悄悄合并新的更新命令。
    */
   async function joinQueue(holder: number, notify: string | undefined, before?: string, quitVia: QuitStrategy = 'apple-event'): Promise<number> {
     if (holder <= 0) fail('无法确认重启执行者，本次没有登记通知或安排重启', EXIT.usage)
@@ -1146,7 +1145,7 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
     try {
       running = await runningNow()
     } catch {
-      // health 走宿主会话接口，旧插件在新宿主上可能答不了（2026-10-17 升 0.2.1：缺调用身份）；退出状态另一条路，能答就用它。
+      // health 依赖宿主会话接口；版本不兼容时可使用独立的退出状态接口核对活动。
       // 两条都不通而后台还在，多半是插件正在热重载，等通信口回来再下结论。
       let blockers: Blockers | undefined
       let recovered: string[] | undefined
@@ -1173,7 +1172,7 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
       else if (appRunning()) fail(`DSH 在运行，但通信口 ${Math.round(RELOAD_GRACE_MS / 1000)} 秒都没答话，无法确认有没有会话在跑，所以没有重启：硬重启会让在跑的会话收不到「继续」。先跑 dsh-use doctor 看 dsh-use 插件有没有加载；插件正常而通信口一直不回来，只能在 DSH 菜单里手动退出再打开。`, EXIT.error)
     }
     if (running.length > 0) print(`重启会打断 ${running.length} 个在跑的会话，已记下，重启后让它们继续：${running.map(shortId).join(', ')}`)
-    // 正常退出走不通（清不干净、退出命令失败、30 秒没退）就结束进程再拉起，不报失败（用户 2026-10-27 同意）。
+    // 强制重启中，普通退出未完成就结束进程再拉起；最终结果仍需核对新实例就绪。
     const forceKill = async (why: string): Promise<{ code: number; interrupted: string[] }> => {
       stamp(`${why}；这是强制重启，改为结束 DSH 进程再拉起`)
       try {
@@ -1217,7 +1216,7 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
       // 0.2.1 起挂着定时提醒也会弹框（「应用关闭期间，定时任务不会运行」）。提醒没有暂停接口、等不掉，但关机期间到点的开机后补发，点「退出」没有损失。
       const now = await quitBlockers()
       const holds = now?.scheduled ?? []
-      // 屏幕锁着就点不到提醒框，普通退出只会干等 30 秒。只剩提醒挡着时用户同意改为结束进程（2026-10-22）：提醒存在磁盘上，关着时到点的开机后补发。
+      // 锁屏时无法操作提醒框；强制重启可结束进程，持久化提醒在下次启动后继续处理。
       if (holds.length > 0 && app.screenLocked()) {
         if (now === undefined || !now.clear) return forceKill(`屏幕锁着，退出框点不到，此刻${now === undefined ? '查不到退出状态' : `还有${blockerText(now)}`}`)
         stamp(`${scheduledText(holds)}。屏幕锁着，退出时弹的「应用关闭期间，定时任务不会运行」点不到；此刻没有会话在跑，改为结束进程再拉起，提醒不会丢`)

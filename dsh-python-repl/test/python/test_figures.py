@@ -1,8 +1,7 @@
-"""Figure-reading notices, calibrated on the 2026-09-29 paper session.
+"""Figure-reading notices distinguish repeated inspection detours from ordinary image work.
 
-Positive cases are cell shapes from session-60cd02e8 (Gemini 3.8 Flash reading a
-36-page paper: 35 cropping cells, 18 pixel-counting cells). Negative cases are
-shapes that are ordinary image work and must not be flagged.
+Positive cases cover repeated crops and pixel-colour analysis. Negative cases
+cover other image operations that must not be flagged.
 """
 
 from __future__ import annotations

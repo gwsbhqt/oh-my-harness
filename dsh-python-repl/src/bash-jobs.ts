@@ -8,8 +8,7 @@
  * here starts a job and waits on it through DSH's own job service, exactly
  * as DSH's foreground bash does internally (register, wait, remove): the
  * model gets the same result shape, `await bash; await bash` stays serial,
- * and gathering several runs them at once (real sessions 2026-11-03: three 1 s
- * commands took 1.0 s instead of 3.1 s).
+ * and gathering several runs them at once.
  *
  * A job still running at the cap is handed to the model as DSH's own
  * `promoted` receipt. Its end is announced by {@link JobNotices}, which
@@ -31,7 +30,7 @@ export interface JobView {
 }
 export interface JobsService {
   wait(id: string, timeoutMs: number, caller: string, signal?: AbortSignal): Promise<JobView>
-  read(id: string, caller: string): { chunks: Array<{ channel?: string; text: string }>; lossy: boolean; job: JobView }
+  read(id: string, caller: string): { chunks: Array<{ channel?: string; text: string; gapBefore?: true }>; lossy: boolean; job: JobView }
   remove(id: string, caller: string): unknown
   /** Jobs visible to `caller` (dsh-jobs-local `list`); used to see when a job slot is free again. */
   list?(caller: string): JobView[]
@@ -61,6 +60,16 @@ function split(chunks: ReadonlyArray<{ channel?: string; text: string }>): { out
   }
 }
 
+/** Gaps can originate in a source or in the ring; neither identifies every affected stream. */
+function outputInfo(read: ReturnType<JobsService['read']>): { truncated: boolean; spillPaths: string[]; notice: string } {
+  const truncated = read.lossy || read.chunks.some((chunk) => chunk.gapBefore === true)
+  const spillPaths = read.job.output?.spillPaths ?? []
+  const location = spillPaths.length > 0
+    ? `available output files (stream mapping unavailable): ${spillPaths.join(', ')}`
+    : 'full output: (unavailable)'
+  return { truncated, spillPaths, notice: truncated ? `[some output was dropped from memory; ${location}]` : '' }
+}
+
 /** DSH's foreground bash result, rebuilt from a settled job (dsh-tool-bash canonicalBashResult). */
 export function foregroundResult(view: JobView, read: ReturnType<JobsService['read']>, cwd: unknown, timeoutMs: number): Record<string, unknown> {
   const { out, err } = split(read.chunks)
@@ -69,8 +78,9 @@ export function foregroundResult(view: JobView, read: ReturnType<JobsService['re
   const signal = /signal: (\w+)/.exec(detail)
   // Notes DSH appends after "; " (sandbox denials and the like) would otherwise be lost.
   const notes = detail.includes('; ') ? detail.slice(detail.indexOf('; ') + 2) : ''
-  const spill = view.output?.spillPaths?.[0]
-  const stream = (text: string) => ({ text, truncated: read.lossy, ...(read.lossy && spill !== undefined ? { spillPath: spill } : {}) })
+  const output = outputInfo(read)
+  const suffix = [notes === '' ? '' : `[${notes}]`, output.notice].filter(Boolean).join('\n')
+  const stream = (text: string) => ({ text, truncated: output.truncated })
   return {
     kind: 'foreground',
     cwd,
@@ -80,7 +90,8 @@ export function foregroundResult(view: JobView, read: ReturnType<JobsService['re
     aborted: view.status === 'killed' && signal === null,
     timeoutMs,
     stdout: stream(out),
-    stderr: stream(notes === '' ? err : `${err}${err === '' || err.endsWith('\n') ? '' : '\n'}[${notes}]\n`),
+    stderr: stream(suffix === '' ? err : `${err}${err === '' || err.endsWith('\n') ? '' : '\n'}${suffix}\n`),
+    ...(output.spillPaths.length > 0 ? { spillPaths: output.spillPaths } : {}),
   }
 }
 
@@ -102,11 +113,10 @@ function messageOf(error: unknown): string {
 /**
  * Start the job; refused at DSH's per-owner cap, wait for a slot until `deadline` and start it then.
  *
- * Every command here becomes a job, so gathering more than the cap used to
- * get the rest refused although DSH's own foreground bash (one at a time)
- * never would: 2026-11-05..11, 8 refusals in 7 sessions, and in each a slot
- * freed within 2.7 s. The count is read from `list`, not by waiting on other
- * jobs: a wait on a job someone else started makes DSH skip its notice.
+ * Every command here becomes a job, so gathering more than the cap can
+ * temporarily exhaust capacity that a sequential caller would not need. Read
+ * the count from `list`, rather than waiting on unrelated jobs: a wait on a
+ * job someone else started makes DSH skip its notice.
  */
 async function startInSlot(start: () => Promise<unknown>, jobs: JobsService, owner: string, deadline: number, signal: AbortSignal | undefined): Promise<unknown> {
   try {
@@ -190,7 +200,14 @@ export function withJobBash(fn: BoundTool, schema: ToolSchemaLike | undefined, c
     if (LIVE.has(view.status)) {
       notices.watch(id, owner, label)
       const { out, err } = split(read.chunks)
-      return { kind: 'promoted', cwd: receipt['cwd'], jobId: id, timeoutMs: wanted, output: out + (err === '' ? '' : `${out === '' || out.endsWith('\n') ? '' : '\n'}[stderr]\n${err}`) }
+      const output = outputInfo(read)
+      const text = out + (err === '' ? '' : `${out === '' || out.endsWith('\n') ? '' : '\n'}[stderr]\n${err}`)
+      return {
+        kind: 'promoted', cwd: receipt['cwd'], jobId: id, timeoutMs: wanted,
+        output: text + (output.notice === '' ? '' : `${text === '' || text.endsWith('\n') ? '' : '\n'}${output.notice}\n`),
+        truncated: output.truncated,
+        ...(output.spillPaths.length > 0 ? { spillPaths: output.spillPaths } : {}),
+      }
     }
     jobs.remove(id, owner)
     return foregroundResult(view, read, receipt['cwd'], wanted)

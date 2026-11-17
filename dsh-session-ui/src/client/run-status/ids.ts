@@ -10,7 +10,7 @@ export const RUNNING_CONTENT = ':scope > span:last-of-type'
 /**
  * 输入框下方的统计插槽和宿主自带「会话统计」卡的 id、order。同 id、同 order、更低的 priority 才顶替自带卡：
  * 宿主只给动态插件自动分配优先级，本插件走 profile 静态加载，不写 priority 就和自带卡同为 0，
- * 宿主直接抛「already has an entry with id "activity" at priority 0」，整个网页半跟着失效（2026-11-09 踩过）。
+ * 宿主直接抛「already has an entry with id "activity" at priority 0」，导致客户端插件无法激活。
  */
 export const STATS_SLOT = 'conversation.composer.dock'
 export const STATS_ENTRY_ID = 'activity'

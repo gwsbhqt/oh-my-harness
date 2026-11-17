@@ -1,9 +1,8 @@
 """Why ssh could not get through, told apart in a few seconds.
 
-Away from home, asleep, a changed address and Remote Login switched off all
-look the same from ssh: a timeout or `exit 255`. A real session spent several
-rounds guessing which (2026-09-23). One name lookup, one TCP connect and the
-route this machine would use tell them apart without running `doctor`.
+An unreachable network, a sleeping host, a changed address and disabled Remote
+Login can all produce an SSH timeout or exit 255. Combine name resolution,
+TCP reachability and route evidence before recommending a repair.
 """
 
 import errno
@@ -17,11 +16,9 @@ from pathlib import Path
 
 from .ssh import SSH_OPTS, relay, ssh_config
 
-#: Set once a probe had to go around Python: macOS Local Network privacy
-#: blocks LAN connects from interpreters started under an app that was not
-#: granted it (an Electron desktop app, 2026-09-23: python and node got EHOSTUNREACH for
-#: every private-network host while the router, the internet, ssh and /bin/bash
-#: all worked). Apple's own binaries are exempt, so /bin/bash is the witness.
+#: macOS Local Network permissions can make interpreter socket probes disagree
+#: with system tools. Record when an independent /bin/bash probe succeeds so
+#: that an interpreter-specific denial is not reported as a remote SSH outage.
 LOCAL_NETWORK_BLOCKED = {"python": False}
 
 _BASH_PROBE = (

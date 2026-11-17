@@ -57,7 +57,7 @@ test('锁文件新增删除与dev spec漂移',()=>{assert.equal(lockMismatch({de
 test('模型只接受真实final回答，不接受echo prompt',()=>{assert.equal(modelAnswer({ok:true,stdout:'DSH_DOCTOR_OK'}),false);assert.equal(modelAnswer({ok:true,stdout:JSON.stringify({type:'user',text:'DSH_DOCTOR_OK'})}),false);assert.equal(modelAnswer({ok:true,stdout:JSON.stringify({type:'final',text:'DSH_DOCTOR_OK'})}),true);assert.equal(modelAnswer({ok:false,stdout:JSON.stringify({type:'final',text:'DSH_DOCTOR_OK'})}),false);});
 test('日志脱敏',()=>{assert.equal(redact('secret-text Bearer abcdef sk-abcdefghijklmnop',['secret-text']),'[REDACTED] Bearer [REDACTED] [REDACTED]');});
 test('子进程timeout与真实exit code',async()=>{let r=await run(process.execPath,['-e','setInterval(()=>{},1000)'],{timeoutMs:100});assert.equal(r.timedOut,true);assert.equal(r.ok,false);r=await run(process.execPath,['-e','process.exit(3)']);assert.equal(r.code,3);assert.equal(r.ok,false);});
-// 2026-10-14 试启动 120 秒超时被停掉，报告只剩一条 Node 废弃警告，会话照着警告查了 35 步才发现是超时。
+// 超时原因必须排在子进程诊断前，避免普通警告掩盖真正的终止条件。
 test('子进程失败说明：超时排在输出前面，正常退出码与输出过多成对',async()=>{
  const slow=await run(process.execPath,['-e','process.emitWarning("fs.Stats constructor is deprecated","DeprecationWarning","DEP0180");setInterval(()=>{},1000)'],{timeoutMs:300});
  assert.equal(slow.timedOut,true);
@@ -89,7 +89,7 @@ test('实际App启动审计：正常、apply抛错、依赖服务缺失',{skip:!
  const good=await startupFixture('healthy','export function apply(){}');assert.equal(good.ok,true,good.stderr);assert.match(good.stdout,/DSH_DOCTOR_READY:/);
  for(const [label,source] of [['throw','export function apply(){throw Error("fixture apply failed")}'],['inject','export const inject=["fixtureMissingService"];export function apply(){}']]){const bad=await startupFixture(label,source);assert.equal(bad.ok,false,bad.stdout+bad.stderr);assert.match(bad.stdout,/"ready":false/);}
 });
-// 2026-10-21 profile 补丁给 webserver 只写了 port，整块替换掉 App 自带的 host，桌面端起不来；试启动曾用写死的 host 盖住它。
+// profile config 整块替换时，试启动必须保留缺失的 host，不能自行补值使故障夹具通过。
 test('实际App启动审计：webserver 补丁漏 host 与写全成对',{skip:!available},async()=>{
   const bad=await startupFixture('web-port-only','export function apply(){}',false,'','- id: webserver\n  config:\n    port: 3080\n');
   assert.equal(bad.ok,false,bad.stdout+bad.stderr);assert.match(bad.stdout+bad.stderr,/host missing required value/);

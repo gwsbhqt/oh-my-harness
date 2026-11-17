@@ -1,12 +1,11 @@
 /**
  * Common standard-library names are bound before the first cell.
  *
- * The defect (sessions 2026-10-07/08, e.g. 9af1638d): a model imported `json`
- * in a `bash` subprocess, or in a kernel that was later replaced, then used it
- * in this kernel and got `NameError: name 'json' is not defined` — one wasted
- * cell each time. These names must just work, without turning into "system"
- * names: the model may import or rebind them and nothing may warn, list them as
- * its own variables, save them for revival or report them as lost.
+ * Imports made in a subprocess or a replaced kernel do not bind names in
+ * the current kernel. The prelude provides common names without claiming
+ * user ownership: untouched prelude bindings must not be listed as user
+ * variables, saved for revival or reported as lost. The model may still
+ * import or rebind them without a warning.
  */
 
 import { strict as assert } from 'node:assert'

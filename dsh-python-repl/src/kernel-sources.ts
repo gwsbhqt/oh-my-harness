@@ -1,13 +1,11 @@
 /**
  * The kernel's Python sources, copied out of the checkout when the host starts.
  *
- * The host's `lib/` is loaded into memory once, but every new kernel used to
- * read `python/` and `vendor/` straight from the checkout. Moving, deleting or
- * editing the checkout under a running DSH then broke every later kernel start,
- * and with it `run_code` — the only way the model could restart DSH to recover
- * (2026-11-13: moving the plugin repository left a session unable to run any
- * cell until a manual restart). Kernels now load a copy taken at host start,
- * keyed by content, so they always match the `lib/` that is running.
+ * The host's `lib/` is loaded into memory once. Loading Python sources from
+ * a mutable checkout could pair it with different code or make later kernel
+ * starts fail after the checkout is moved or removed. Kernels load a
+ * content-keyed copy taken at host start so their sources match the running
+ * `lib/`.
  *
  * @module
  */
