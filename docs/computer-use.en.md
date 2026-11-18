@@ -4,6 +4,8 @@
 
 Use computer-use for native macOS applications, browser chrome, and dialogs outside a web page. Typical tasks include inspecting an application’s controls, changing a setting through its interface, or checking a native dialog after a browser action. For content inside a web page, start with browser-use.
 
+For the design choices behind this workflow, follow the case of two Mac windows with the same title. [Choosing a desktop tool](design/desktop-control.en.md)
+
 ## Prepare the destination
 
 The tool combines an asynchronous Python interface with a locally compiled Swift executor. It supports macOS and requires Python 3.12 or newer plus Xcode Command Line Tools with a working Swift compiler. Compile on the destination rather than copying a cached executable from another architecture.

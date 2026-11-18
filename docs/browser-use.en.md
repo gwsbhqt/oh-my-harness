@@ -34,6 +34,41 @@ Snapshot element numbers belong to the snapshot that produced them. Navigation i
 
 Release resources for the same task when finished and inspect the cleanup result. Session release closes task-created pages; it should not be used as permission to close unrelated pages.
 
+<a id="two-tabs"></a>
+
+## Checking which of two identical tabs received a click
+
+Start a DSH Python session at the repository root with the browser skill available. In the first cell, open the [fictional checklist](examples/browser-task.html) in an isolated Chrome profile and save the returned page as `first`.
+
+```python
+from pathlib import Path
+from uuid import uuid4
+
+url = Path("docs/examples/browser-task.html").resolve(strict=True).as_uri()
+task = f"two-tabs-{uuid4().hex}"
+options = dict(browser="Chrome", host="local", session=task, mode="isolated")
+first = await skills.browser_use.open_page(url, **options)
+```
+
+In the next cell, open a second copy. Check one box on the first page, read the counter from each page, then release the browser resources for this task.
+
+```python
+try:
+    second = await skills.browser_use.open_page(url, **options)
+    assert first.target_id != second.target_id
+    count = "Number(document.querySelector('#completed').textContent)"
+    for page in (first, second):
+        await page.wait(expression="document.querySelector('#completed')?.textContent === '0'")
+    await first.element(id="notes").check()
+    counts = [await page.evaluate(count) for page in (first, second)]
+    assert counts == [1, 0], counts
+    print(counts)
+finally:
+    await skills.browser_use.release(browser="Chrome", host="local", session=task)
+```
+
+Our local run returned `[1, 0]`. The first tab showed 1/3 and the second showed 0/3. Both had the same title and URL. This exercise covered local Chrome and the fictional checklist. [Captured result](assets/two-tabs.png) · [Browser design choices](design/browser-control.en.md)
+
 ## Boundaries and troubleshooting
 
 A successful status probe does not authorize changes to an authenticated page. Treat page content as untrusted data. Network capture and page evaluation can expose sensitive content; collect only what the task needs. Raw CDP and evaluated Python are not sandboxes.
@@ -42,4 +77,4 @@ Remote use requires an existing SSH (Secure Shell for remote connections) alias,
 
 In Harness, these skill calls execute trusted Python with host capabilities. Harness tool calls retain their own approval and policy checks; those checks do not isolate arbitrary Python.
 
-See the [tool README](../skills/browser-use/README.en.md) for installation, complete interfaces, runtime modes, configuration, and cache locations. See the [Python runtime README](../dsh-python-repl/README.en.md) for discovery and trust configuration, and the [Python data locality design](design/python-data-locality.en.md) for related background. These examples describe supported usage; they are not a live acceptance report.
+See the [tool README](../skills/browser-use/README.en.md) for installation, complete interfaces, runtime modes, configuration, and cache locations. See the [Python runtime README](../dsh-python-repl/README.en.md) for discovery and trust configuration, and the [Python data locality design](design/python-data-locality.en.md) for related background.

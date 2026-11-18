@@ -18,11 +18,12 @@ Start with a problem. Component READMEs own installation, options, and limits. G
 
 | Scenario | Guide | Design |
 | --- | --- | --- |
-| Keep large results in Python and analyze them again | [Persistent kernel](dsh-python-repl.en.md) | [Data and display](design/python-data-locality.en.md) |
+| Keep large results in Python and analyze them again | [Persistent kernel](dsh-python-repl.en.md) | [DSH tool calls and Prime’s persistent kernel](design/python-data-locality.en.md) |
 | Let one session dispatch work to another | [Control a running DSH](dsh-use.en.md) | [Receipts, state, and acceptance](design/controller-worker.en.md) |
 | Wake an agent when a background source changes | [Monitoring](dsh-monitor.en.md) | [Output and event boundaries](design/output-guard.en.md) |
 | Preserve user requirements through compaction | [Bounded compaction](dsh-compaction-bound.en.md) | [Three generations of compaction](design/three-generations-of-compaction.en.md) |
-| Operate a page, desktop, or remote host | [Browser](browser-use.en.md) · [Desktop](computer-use.en.md) · [SSH](remote-host.en.md) | [Task and target isolation](design/task-isolation.en.md) |
+| Give an existing agent control of a page or Mac window | [Browser](browser-use.en.md) · [Desktop](computer-use.en.md) | [Choosing a browser tool](design/browser-control.en.md) · [Choosing a desktop tool](design/desktop-control.en.md) |
+| Share a device across tasks or reach a remote machine | [SSH](remote-host.en.md) | [Task and target isolation](design/task-isolation.en.md) |
 
 More guides: [message tidy](dsh-message-tidy.en.md) · [image budgets](dsh-image-cap.en.md) · [history pagination](dsh-history-cap.en.md) · [output guards](dsh-output-guard.en.md).
 

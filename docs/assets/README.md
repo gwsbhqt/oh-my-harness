@@ -11,6 +11,7 @@
 | [overview.svg](overview.svg) · [英文版](overview.en.svg) · [手机](overview-mobile.svg) · [手机英文](overview-mobile.en.svg) | 手写 SVG 结构示意：持久数据、多会话协作、电脑操作。没有性能数值或伪造界面。 | [首页](../../README.md)。 |
 | `python-data-locality.gif` | 把真实终端输出节选与真实 DSH 会话回放放在一起。两边筛选同一份虚构日志，会话中复用内存变量。标明节选，并展示 [results.json](../../benchmarks/results.json) 中两项可重复的文本量估算。 | [dsh-python-repl 部件说明](../../dsh-python-repl/README.md)。 |
 | `controller-worker.gif` | 使用两个已授权的测试会话。主控发送明确任务，记录回执后停止轮询。长工执行任务。展示通知送达、主控检查，以及实际的纠正或验收。不要编造用量或耗时计数。 | [dsh-use 部件说明](../../dsh-use/README.md)。 |
+| [two-tabs.png](two-tabs.png) | 同一份虚构清单打开两次。只在先打开的页勾一项，分别读取计数，再把两页实际截图拼在一起。 | [复现实验](../browser-use.md#two-tabs) · [浏览器设计](../design/browser-control.md)。 |
 | `browser-use.gif` | 使用本地虚构页面或示例页面，不登录账号。绑定任务窗口和确切页面，做一个看得见的改动，再检查结果。 | [browser-use 部件说明](../../skills/browser-use/README.md)。 |
 | `computer-use.gif` | 已录制并审查：绑定 macOS 文本编辑窗口，使用虚构清单，修改两项，并通过原生文字读回核对。16 秒动图展示八个标有节选说明的截图步骤。 | [computer-use 部件说明](../../skills/computer-use/README.md)。 |
 | `monitor.gif` | 跟随一个本地事件来源，产生已知示例事件。结束 Agent 当前轮次，再发出事件，展示会话被唤醒并采取行动。说明使用哪种投递模式。不能让模型轮询、重复启动监控器或伪造事件到达。 | [dsh-monitor 部件说明](../../dsh-monitor/README.md)。 |

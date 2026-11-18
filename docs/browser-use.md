@@ -34,6 +34,41 @@ snapshot = await page.snap(shot=True)
 
 结束时释放同一任务的资源，并检查清理结果。释放会话会关闭任务创建的页面，但这不代表有权关闭无关页面。
 
+<a id="two-tabs"></a>
+
+## 两个标签页同名时，怎样验出点对了
+
+在仓库根目录打开装有本技能的 DSH Python 会话。第一格用独立的 Chrome 资料打开[虚构清单](examples/browser-task.html)，把返回的页面保存在 `first`。
+
+```python
+from pathlib import Path
+from uuid import uuid4
+
+url = Path("docs/examples/browser-task.html").resolve(strict=True).as_uri()
+task = f"two-tabs-{uuid4().hex}"
+options = dict(browser="Chrome", host="local", session=task, mode="isolated")
+first = await skills.browser_use.open_page(url, **options)
+```
+
+第二格再打开一份相同清单，只勾选第一份的第一项。程序从两页分别读取计数，然后释放本次任务的浏览器资源。
+
+```python
+try:
+    second = await skills.browser_use.open_page(url, **options)
+    assert first.target_id != second.target_id
+    count = "Number(document.querySelector('#completed').textContent)"
+    for page in (first, second):
+        await page.wait(expression="document.querySelector('#completed')?.textContent === '0'")
+    await first.element(id="notes").check()
+    counts = [await page.evaluate(count) for page in (first, second)]
+    assert counts == [1, 0], counts
+    print(counts)
+finally:
+    await skills.browser_use.release(browser="Chrome", host="local", session=task)
+```
+
+本地实跑读回 `[1, 0]`。左页显示 1/3，右页仍是 0/3，两页标题和网址都相同。实验覆盖本地 Chrome 和这个虚构页面。[实拍对照](assets/two-tabs.png) · [为什么自建浏览器工具](design/browser-control.md)
+
 ## 边界与排查
 
 状态探测成功，不代表有权修改已登录页面。页面内容是不可信数据。网络捕获和页面求值可能暴露敏感内容，只采集任务所需部分。原始 CDP 和执行的 Python 都不是沙箱。
@@ -42,4 +77,4 @@ snapshot = await page.snap(shot=True)
 
 在 DSH 中，这些技能调用作为受信任的 Python 代码执行，能直接访问运行它的机器上的资源。通过 DSH 工具发起的调用仍需经过审批和策略检查。这些检查不会把任意 Python 操作隔离起来。
 
-安装、完整接口、运行模式、配置和缓存位置见[工具说明](../skills/browser-use/README.md)。技能发现和信任配置见 [Python 运行环境说明](../dsh-python-repl/README.md)，相关背景见 [Python 数据留在本地的设计](design/python-data-locality.md)。这些示例说明支持的用法，不是真实环境验收报告。
+安装、完整接口、运行模式、配置和缓存位置见[工具说明](../skills/browser-use/README.md)。技能发现和信任配置见 [Python 运行环境说明](../dsh-python-repl/README.md)，相关背景见 [Python 数据留在本地的设计](design/python-data-locality.md)。

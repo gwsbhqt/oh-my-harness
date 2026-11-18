@@ -4,6 +4,8 @@
 
 操作原生 macOS 应用、浏览器外壳，以及网页之外的对话框时，使用 computer-use。常见任务包括查看应用控件、通过界面修改设置，或在浏览器操作后检查原生对话框。网页内部的内容优先使用 browser-use。
 
+想给已有 Agent 选桌面工具，可以从两个同名窗口的例子开始。[Mac 桌面工具的设计取舍](design/desktop-control.md)
+
 ## 准备目标机器
 
 工具将异步 Python 接口与本地编译的 Swift 执行程序组合使用。它支持 macOS，需要 Python 3.12 或更新版本，以及带有可用 Swift 编译器的 Xcode Command Line Tools。应在目标机器上编译，不要复制其他架构的缓存可执行文件。

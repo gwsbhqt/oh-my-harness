@@ -40,7 +40,8 @@
 
 ## 值得研究什么
 
-- **数据和展示分开。** 完整结果留在程序里；展示有限长，仍能追到原始数据。[设计](docs/design/python-data-locality.md)
+- DSH 已经能让模型写程序调用工具，为什么还接入了 Prime Agent 的 Python 内核？[从一次统计说起](docs/design/python-data-locality.md)
+- 两个标签页同名，两个窗口也可能同名。已有 Agent 怎样找到指定的那个？[为什么自建浏览器工具](docs/design/browser-control.md) · [为什么自建 Mac 桌面工具](docs/design/desktop-control.md)
 - **任务交接有依据。** 发送回执、执行状态、结果验收分别记录；等待交给后台通知。[设计](docs/design/controller-worker.md)
 - **长任务能收口。** 上下文有预算，压缩保留用户原话，失控输出能被拦下。[设计](docs/design/three-generations-of-compaction.md)
 

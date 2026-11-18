@@ -18,11 +18,12 @@
 
 | 场景 | 教程 | 深入设计 |
 | --- | --- | --- |
-| 大批结果留在 Python，反复分析 | [持久内核](dsh-python-repl.md) | [数据与展示](design/python-data-locality.md) |
+| 大批结果留在 Python，反复分析 | [持久内核](dsh-python-repl.md) | [DSH 的程序化调用与 Prime 的持久内核](design/python-data-locality.md) |
 | 一个会话派活，另一个会话执行 | [控制现有 DSH](dsh-use.md) | [回执、状态和验收](design/controller-worker.md) |
 | 后台有变化，再唤醒 Agent | [事件监听](dsh-monitor.md) | [输出与事件边界](design/output-guard.md) |
 | 长对话压缩后保留用户要求 | [有界压缩](dsh-compaction-bound.md) | [三代压缩方案](design/three-generations-of-compaction.md) |
-| 操作网页、桌面或远程机器 | [浏览器](browser-use.md) · [桌面](computer-use.md) · [SSH](remote-host.md) | [任务与目标隔离](design/task-isolation.md) |
+| 给已有 Agent 操作网页或 Mac 窗口 | [浏览器](browser-use.md) · [桌面](computer-use.md) | [网页工具的选择](design/browser-control.md) · [桌面工具的选择](design/desktop-control.md) |
+| 多个任务共用设备或操作远程机器 | [SSH](remote-host.md) | [任务与目标隔离](design/task-isolation.md) |
 
 其他使用指南：[消息整理](dsh-message-tidy.md) · [图片预算](dsh-image-cap.md) · [历史分页](dsh-history-cap.md) · [输出防护](dsh-output-guard.md)。
 

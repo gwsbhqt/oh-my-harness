@@ -41,7 +41,7 @@ This is a responsibility map, not a security isolation diagram. Python and trust
 | Computer operations | Browser debugging, macOS accessibility, and OpenSSH | Explicit targets, callable interfaces, errors, and result inspection. |
 | Long-task context | DSH messages and compaction | Exact user-text appendices, length budgets, message cleanup, and output guards. |
 
-The [Prime provenance record](../dsh-python-repl/vendor/PROVENANCE.md) identifies original files and hashes. Local work focuses on integration and execution boundaries, retaining upstream attribution.
+DSH already lets a model call several tools in one program. This project keeps that entry point and integrates Prime’s Python execution and snapshot code so the next cell can reuse a variable. The variable might hold the first of two tabs with identical titles and URLs. In a native Mac app, sending input also requires identifying the receiving process and window. [Kernel design](design/python-data-locality.en.md) · [Two-tab experiment](browser-use.en.md#two-tabs) · [Choosing a window](design/desktop-control.en.md) · [Prime sources and hashes](../dsh-python-repl/vendor/PROVENANCE.md)
 
 ## Follow a result
 

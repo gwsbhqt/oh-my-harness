@@ -40,7 +40,8 @@ Excerpts from recorded results. Text-size measurements use fixed fictional input
 
 ## What is worth exploring
 
-- **Separate data from display.** Full results stay in the program; bounded output still points back to evidence. [Design](docs/design/python-data-locality.en.md)
+- DSH can already call tools from code. What made Prime Agent’s Python kernel worth integrating? [Follow a result across two cells](docs/design/python-data-locality.en.md).
+- Two tabs or windows can have the same title. How does an agent act on the one its user picked? [Why build a browser tool?](docs/design/browser-control.en.md) · [Why build a Mac desktop tool?](docs/design/desktop-control.en.md)
 - **Make handoffs observable.** Track send receipts, execution state, and acceptance separately; let background notifications handle waiting. [Design](docs/design/controller-worker.en.md)
 - **Give long work a stopping point.** Budget context, retain the user's exact words during compaction, and stop runaway output. [Design](docs/design/three-generations-of-compaction.en.md)
 

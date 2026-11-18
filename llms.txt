@@ -39,7 +39,9 @@ The Chinese README is the primary, default documentation; the paired English doc
 
 ## Design and evidence
 
-- [Data locality](docs/design/python-data-locality.en.md): Values, displays, persistence, and recovery.
+- [Python on DSH](docs/design/python-data-locality.en.md) explains how programmatic tool calling, Prime Agent’s execution core, and the DSH bridge fit together.
+- [Choosing a browser tool](docs/design/browser-control.en.md) compares ways to control an exact tab and includes a two-tab readback.
+- [Choosing a Mac desktop tool](docs/design/desktop-control.en.md) compares screen-driven interaction with addressing a native window.
 - [Three generations of compaction](docs/design/three-generations-of-compaction.en.md): Historical choices and the current bounded host extension.
 - [Controller and worker](docs/design/controller-worker.en.md): Receipts, observation, and independent acceptance.
 - [Task isolation](docs/design/task-isolation.en.md): Shared accounts/desktops and target ownership.

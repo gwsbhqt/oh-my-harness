@@ -41,7 +41,7 @@ flowchart TB
 | 设备操作 | 浏览器调试接口、macOS 辅助功能、OpenSSH | 固定目标、调用入口、错误与结果核对。 |
 | 长任务上下文 | DSH 的消息和压缩机制 | 用户原话附录、长度预算、消息整理和输出防护。 |
 
-[Prime 来源清单](../dsh-python-repl/vendor/PROVENANCE.md)记录原件与哈希。自有代码围绕接入和执行边界展开，保留上游署名。
+DSH 已经可以让模型在一段程序里调用多个工具。这个项目沿用 DSH 的工具入口，接入 Prime 的 Python 执行与快照代码，同一会话下一段程序可以继续用刚才的变量。具体到浏览器，变量可以指向先打开的那个标签页，即使两页的网址和标题都一样。换到 Mac 应用，技能还要确认接收输入的进程和窗口。[内核如何分工](design/python-data-locality.md) · [两页同名的实验](browser-use.md#two-tabs) · [输入怎样送到指定窗口](design/desktop-control.md) · [Prime 来源和哈希](../dsh-python-repl/vendor/PROVENANCE.md)
 
 ## 跟着一份结果走
 

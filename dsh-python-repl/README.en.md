@@ -31,6 +31,8 @@ These are real recordings using fictional data and local example pages. No accou
 
 ## How this differs from DSH's built-in code mode and Prime Agent
 
+Follow one dataset through two cells to see why this project chose the Python backend. [Design decisions and a worked example](../docs/design/python-data-locality.en.md)
+
 All three do the same kind of thing: the model writes a piece of code and calls tools from it. They differ in the language, in whether anything survives after the code runs, and in who is in charge.
 
 - **DSH's built-in code mode** is officially called PTC (programmatic tool calling). The model writes TypeScript and calls tools from it. By default every call starts a new Node process and closes it afterwards, so whatever one call computed is gone for the next. DSH can also keep memory between calls, but that is lost when DSH restarts.
@@ -41,7 +43,7 @@ All three do the same kind of thing: the model writes a piece of code and calls 
 | --- | --- | --- | --- |
 | What it is | Built into DSH | A standalone AI assistant | A DSH plugin |
 | What the model writes | TypeScript | Python | Python |
-| Is the previous step's variable still there? | Not by default. With memory kept on, it still does not survive a DSH restart | Yes, restored from a snapshot after a restart | Yes, restored from a snapshot after DSH restarts |
+| Can the next call reuse a variable? | A fresh process by default. Optional per-agent memory retains top-level variables until the host restarts | Top-level variables persist across cells. A snapshot can restore savable values | The next cell in the session can reuse its variables. A snapshot can restore savable values after restart |
 | Who owns the conversation, permissions and approvals | DSH | Prime itself | DSH |
 | Which tools it can call | DSH's tools | Prime's own files, commands, subagents and MCP connections, all called from Python | DSH's tools plus trusted Python skills, such as the browser, desktop and remote tools in this repository |
 
