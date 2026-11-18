@@ -13,6 +13,7 @@ test('会话离开宿主后清除其运行状态，其他会话不受影响', ()
     effect: (effect: () => unknown) => effect(),
     inject: (_services: string[], callback: (scope: unknown) => void) => callback({
       effect: (effect: () => unknown) => effect(),
+      get: () => ({ requestRejection: () => undefined }),
       webServer: { register: (entry: { handler: typeof route }) => { route = entry.handler; return () => {} } },
       sessionProjections: { register: async (definition: { key: string }) => { projections.push(definition) } },
     }),

@@ -1,7 +1,6 @@
 /**
  * 在宿主技能注册表（`ctx.skills`，`@deepseek-ai/dsh-skill`）上装一层过滤：
- * `list` / `snapshot` / `get` 返回前按规则改写，三处出口用同一份判档，
- * 所以模型的技能清单、`skill` 工具、你的 `/` 菜单、各处技能列表看到的都一致。
+ * 宿主的 `list` 从 `snapshot` 取清单，两者共用过滤后的结果。`get` 独立加载正文，单独应用调用权限。
  *
  * ## 为什么要包注册表的方法
  *
@@ -83,19 +82,13 @@ export function isRegistry(value: unknown): value is RegistryLike {
  */
 export function installFilter(target: object, deps: FilterDeps): FilterHandle {
   const obj = target as Record<string, unknown>
-  const keys = ['list', 'snapshot', 'get'] as const
+  const keys = ['snapshot', 'get'] as const
   const own = Object.fromEntries(keys.map((k) => [k, Object.getOwnPropertyDescriptor(obj, k)]))
   // 取原始函数，调用时把调用方的 this 原样交回去（注册表方法里要用 this 的私有状态）。
   const inner = Object.fromEntries(keys.map((k) => [k, (own[k]?.value ?? findMethod(obj, k)) as (...args: unknown[]) => Promise<unknown>]))
   let active = true
 
-  // 宿主的 list 内部调 this.snapshot（已被包过），list 再过滤一遍结果不变：每一档改写都是幂等的。
   const wrappers = {
-    list: async function (this: unknown, options?: LookupOptions) {
-      const skills = await inner['list']!.call(this, options) as CandidateLike[]
-      if (!active) return skills
-      return filterSummaries(skills, deps.document(), rootOf(options, deps), deps.home)
-    },
     snapshot: async function (this: unknown, options?: LookupOptions) {
       const snap = await inner['snapshot']!.call(this, options) as { skills: CandidateLike[]; complete: boolean }
       if (!active) return snap

@@ -1,5 +1,5 @@
 /** 纯函数：时长和汇总怎么说。网页半和测试共用。 */
-import type { BlockerKind, RequestTiming, RunSnapshot } from './types.ts'
+import type { BlockerKind, GatewayRequestSpeed, GatewaySpeed, RequestTiming, RunSnapshot } from './types.ts'
 
 export function formatDuration(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000))
@@ -45,15 +45,15 @@ export function describeRequest(r: RequestTiming): string {
  */
 export function describeRequestSegments(r: RequestTiming): string {
   if (r.state === 'pending') return '请求刚结束，正在向 magpie 要各段用时'
-  if (r.state === 'missing') return 'magpie 的请求记录里没找到这一次，拆不开'
+  if (r.state === 'missing') return 'Magpie 的请求记录未能唯一匹配这一次，拆不开'
   if (r.state === 'error') return `读不到 magpie 的请求记录${r.note === undefined ? '' : `（${r.note}）`}`
   if (r.firstTokenMs === undefined) return r.note ?? '拆不开'
   const parts: string[] = []
   if (r.uploadMs !== undefined) parts.push(`上传 ${formatSeconds(r.uploadMs)}${r.retriedMs === undefined ? '' : `（其中失败重试 ${formatSeconds(r.retriedMs)}）`}`)
-  parts.push(r.uploadMs === undefined ? `发出到首字 ${formatSeconds(r.firstTokenMs)}` : `等首字 ${formatSeconds(r.firstTokenMs)}`)
+  parts.push(r.uploadMs === undefined ? `发出到首段内容 ${formatSeconds(r.firstTokenMs)}` : `等首段内容 ${formatSeconds(r.firstTokenMs)}`)
   if (r.returnMs !== undefined) parts.push(`返回 ${formatSeconds(r.returnMs)}`)
   if (r.outsideMs !== undefined) parts.push(`到 magpie 来回 ${formatSeconds(r.outsideMs)}`)
-  // 不记上传完的时刻时不再解释「上传算在首字里」：每条都带一遍会把这一栏撑爆，需要时看悬停提示
+  // 不记上传完的时刻时不再解释「上传算在首段等待里」：每条都带一遍会把这一栏撑爆，需要时看悬停提示
   return parts.join('，')
 }
 
@@ -71,6 +71,32 @@ export function formatSpeed(tokens: number, ms: number): string {
   if (ms <= 0) return '0'
   const v = tokens / (ms / 1000)
   return v >= 10 ? String(Math.round(v)) : v.toFixed(1)
+}
+
+/** 统计卡把 Magpie 可实测的平均、取样范围和最近几次单项速率放在一起。 */
+export function gatewaySpeedLines(stats: GatewaySpeed | undefined): { key: string; label: string; value: string; title?: string; wrap?: boolean }[] {
+  const label = 'Magpie 平均输出'
+  if (!stats) return [{ key: 'gateway', label, value: '正在读取网关…' }]
+  if (stats.state === 'unconfigured') return []
+  if (stats.state !== 'ready') return [{ key: 'gateway', label, value: '暂时读不到网关实时记录' }]
+  if (!stats.requests) return [{ key: 'gateway', label, value: stats.windowSize ? `网关最近 ${stats.windowSize} 次里没有本会话` : '网关实时列表暂无请求' }]
+  const scope = `网关最近 ${stats.windowSize} 次中，本会话 ${stats.requests} 次，已完成 ${stats.completed} 次。`
+  const measured = `实测 ${stats.measured} 次` + (stats.floors ? `，仅下限 ${stats.floors} 次` : '')
+  const rows = [
+    { key: 'gateway', label, value: stats.tps === null ? '暂无可实测速率' : `${stats.tps} tok/s`,
+      title: '与 Magpie「路由」页未筛选的实时列表一致。按可实测回复的输出 token 总数除以生成总时长。可见推理从最早的输出信号起计，隐藏推理没有起点时只计有首段文字的答案。' },
+    { key: 'gateway-coverage', label: '网关取样', value: `${scope}${measured}`, wrap: true,
+      title: '整个网关最多保留最近 60 次路由。失败、在途、只有下限或缺少可靠计时的回复均不计入平均。' },
+  ]
+  const rate = (r: GatewayRequestSpeed) => {
+    if (r.kind === 'measured' || r.kind === 'floor') return `${r.kind === 'floor' ? '≥' : ''}${r.tps} tok/s`
+    return r.kind === 'running' ? '进行中' : r.kind === 'unanswered' ? '无回复' : '未测速'
+  }
+  if (stats.recent.length) rows.push({
+    key: 'gateway-recent', label: `最近 ${stats.recent.length} 次`, value: stats.recent.map(rate).join(' · '), wrap: true,
+    title: ['按网关请求从新到旧排列。≥ 表示下限。', ...stats.recent.map(r => `${r.time === null ? '' : new Date(r.time).toLocaleTimeString() + ' '}${rate(r)}`)].join('\n'),
+  })
+  return rows
 }
 
 export function kindName(kind: BlockerKind): string {
@@ -106,6 +132,6 @@ export function recentRequestLines(requests: readonly RequestTiming[] | undefine
     key: `req-${r.responseId}-${String(i)}`,
     label: r.step === undefined ? `最近请求 ${String(i + 1)}` : `第 ${String(r.step)} 步`,
     value: describeRequestSegments(r),
-    title: `${r.model ?? '未知模型'}，整次 ${formatStatDuration(r.totalMs)}；按 magpie 请求记录拆成上传、等首字、返回。`,
+    title: `${r.model ?? '未知模型'}，整次 ${formatStatDuration(r.totalMs)}；按 Magpie 请求记录拆分。首段内容可以是文字、推理或工具调用。`,
   }))
 }

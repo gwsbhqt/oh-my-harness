@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, renameSync, rmSync, writeFileSync, readFileSync, readdirSync, existsSync, utimesSync } from 'node:fs'
 import { join } from 'node:path'
 import { createCli, type AppControl } from '../src/cli/core.ts'
-import { appVersion, parseFeed } from '../src/cli/upgrade.ts'
+import { appVersion, parseFeed, type stageRelease } from '../src/cli/upgrade.ts'
 import { startServer } from '../src/server.ts'
 import { CommandFailure, UsageError } from '../src/gateway.ts'
 
@@ -66,11 +66,12 @@ async function fixture(runningByCall: (call: number) => string[], options: { ope
       const owners = options.parents ?? {}
       return { text: '', data: { running: r, queued: options.queueDrained?.() ? [] : options.queued ?? [], queuedDetails: options.queuedDetails, parents: options.parents ?? {}, jobs: j.map((id) => ({ id, label: 'x', owner: owners[id] ?? 's', ...(options.survivable?.includes(id) ? { survivable: true } : {}) })), clear: r.length === 0 && j.length === 0, ...(options.scheduled === undefined ? {} : { scheduled: options.scheduled }) } }
     }
-    if (command === 'api' && args[0] === 'call' && args[1] === 'subagents/interruptByParent') {
-      const body = JSON.parse(args[2]!) as { childSessionId: string; parentSessionId: string; mode: string }
-      assert.equal(body.parentSessionId, options.parents?.[body.childSessionId])
-      assert.equal(body.mode, 'continuable')
-      if (options.refusedCancel?.includes(body.childSessionId)) throw new UsageError('该子代理不能由上级中止', 'subagent-owned')
+    if (command === 'api' && args[0] === 'call' && args[1] === 'subagents/interruptByUser') {
+      const body = JSON.parse(args[2]!) as { childSessionId: string }
+      assert.deepEqual(Object.keys(body), ['childSessionId'])
+      assert.equal(typeof body.childSessionId, 'string')
+      assert.ok(body.childSessionId.trim())
+      if (options.refusedCancel?.includes(body.childSessionId)) throw new UsageError('目标子代理拒绝中止', 'subagent-owned')
       cancelled.push(body.childSessionId)
       return { text: '', data: { accepted: true } }
     }
@@ -161,9 +162,9 @@ async function fixture(runningByCall: (call: number) => string[], options: { ope
   // 默认模拟用户终端，不能继承运行测试的模型 shell 来源；会话用例通过 extra 显式传入。
   delete env['DSH_SESSION_ID']
   delete env['DSH_SHELL']
-  const cli = (args: string[], extra: NodeJS.ProcessEnv = {}) => {
+  const cli = (args: string[], extra: NodeJS.ProcessEnv = {}, prepareRelease?: typeof stageRelease) => {
     out = ''; err = ''
-    return createCli({ ...env, ...extra }, (t) => { out += t }, (t) => { err += t }, (a, e, log) => { spawned.push({ args: a, env: e, log }); return 4242 }, app)(args)
+    return createCli({ ...env, ...extra }, (t) => { out += t }, (t) => { err += t }, (a, e, log) => { spawned.push({ args: a, env: e, log }); return 4242 }, app, prepareRelease)(args)
   }
   return { dir, sent, spawned, appCalls, quitStrategies, goals, goalCalls, cancelled, killedJobs, monitors, prepared, requeueCalls, aborted: () => aborted, cli, out: () => out, err: () => err, health: () => healthCalls, close: async () => { await server.close(); rmSync(dir, { recursive: true, force: true }) } }
 }
@@ -327,6 +328,12 @@ test('已有排队不能静默丢弃第二个更新命令', async () => {
     assert.equal(await f.cli(['restart', '--detach', '--before', `touch ${mark}`]), 2)
     assert.match(f.err(), /更新命令没有执行/)
     assert.equal(existsSync(mark), false)
+    const staged = fakeApp(join(f.dir, 'stage/DeepSeek Harness.app'), '1.1.0')
+    for (const flags of [[], ['--detach']]) {
+      assert.equal(await f.cli(['restart', '--install-app', staged, '--json', ...flags]), 2)
+      assert.match(JSON.parse(f.out()).error.message, /换 App 没有执行/)
+      assert.ok(existsSync(staged))
+    }
     assert.equal(f.spawned.length, 0)
   } finally { await f.close() }
 })
@@ -791,7 +798,7 @@ test('强制重启 已中止会话、连进程都结束不掉：被中止的会�
   } finally { await f.close() }
 })
 
-test('--before：用上级身份中止子代理，保留后台通知并执行更新', async () => {
+test('--before：按目标会话中止子代理，保留后台通知并执行更新', async () => {
   const parent = 'session-parent01'
   const child = 'session-child001'
   const quiet = 'session-quiet001'
@@ -843,6 +850,8 @@ test('--before 遇到无法中止的子代理：不执行更新、不重启，�
     assert.equal(state.phase, 'failed')
     assert.equal(state.failure.stage, 'before')
     assert.equal(state.failure.executed, false)
+    assert.deepEqual(state.blockers.running, [subagent])
+    assert.match(state.message, /sub00001/)
   } finally { await f.close() }
 })
 
@@ -958,7 +967,11 @@ test('--before 合成故障：doctor 根因优先，通知与状态一致，完�
     const mark = join(f.dir, 'count')
     const report = { ok: false, checks: [{ id: 'link-build-freshness', ok: false, message: '多项正常; dsh-example: 构建内容已变化: inputs: core/doctor.mjs' }] }
     writeFileSync(script, `import {appendFileSync} from 'node:fs';appendFileSync(${JSON.stringify(mark)},'once\\n');console.log(${JSON.stringify(JSON.stringify(report))});console.log(JSON.stringify({event:'部署未完成，已恢复本轮写入',reason:'Command ... exited1'}));console.error('WARN external/noExternal 已弃用\\n'.repeat(10));process.exitCode=1`)
-    assert.equal(await f.cli(['restart', '--notify', 'aaaa1111', '--before', `exec '${process.execPath}' '${script}'`]), 1)
+    assert.equal(await f.cli(['restart', '--notify', 'aaaa1111', '--before', `exec '${process.execPath}' '${script}'`, '--json']), 1)
+    const reply = JSON.parse(f.out())
+    assert.equal(reply.ok, false)
+    assert.equal(reply.data.failedStage, 'before')
+    assert.match(f.err(), /部署未完成/)
     assert.deepEqual(f.appCalls, [])
     assert.equal(readFileSync(mark, 'utf8'), 'once\n')
     const state = JSON.parse(readFileSync(join(f.dir, 'dsh-use/restart-state.json'), 'utf8'))
@@ -1084,7 +1097,7 @@ test('强制重启：等待途中才看到在跑的子代理，停下后也要�
   try {
     const code = await f.cli(['restart'])
     assert.equal(code, 0, f.err())
-    assert.ok(f.cancelled.includes('session-sub00002'), '子代理要用上级身份中止')
+    assert.ok(f.cancelled.includes('session-sub00002'), '子代理要经宿主的子代理中止接口停止')
     const told = f.sent.find((s) => s.session === 'session-cccc3333')
     assert.ok(told !== undefined, '派子代理的会话要收到说明')
     assert.match(told.text, /Your subagent\(s\) sub00002 were interrupted during the restart/)
@@ -1118,6 +1131,45 @@ function fakeApp(path: string, version: string): string {
   return path
 }
 
+test('upgrade --json：最新、已备好、后台受理和检查失败都只写一份回执', { skip: process.platform !== 'darwin' }, async () => {
+  const f = await fixture(() => [])
+  try {
+    const target = fakeApp(join(f.dir, 'Apps/DeepSeek Harness.app'), '1.0.0')
+    const staged = fakeApp(join(f.dir, 'stage/DeepSeek Harness.app'), '1.1.0')
+    const feed = join(f.dir, 'latest.yml')
+    const env = { DSH_APP: target, DSH_USE_UPGRADE_DIR: join(f.dir, 'upgrade') }
+    const command = ['upgrade', '--json', '--feed', `file://${feed}`]
+    const setVersion = (version: string) => writeFileSync(feed, `version: ${version}\npath: app.zip\nsha512: YQ==\n`)
+    const prepare: typeof stageRelease = async (_entry, options) => { options.print('校验安装包'); return staged }
+
+    setVersion('1.0.0')
+    assert.equal(await f.cli(command, env), 0, f.err())
+    assert.deepEqual(JSON.parse(f.out()), { ok: true, status: 'up-to-date', data: { currentVersion: '1.0.0', targetVersion: '1.0.0' } })
+    setVersion('1.1.0')
+    assert.equal(await f.cli([...command, '--check'], env, prepare), 0, f.err())
+    assert.deepEqual(JSON.parse(f.out()), { ok: true, status: 'prepared', data: { currentVersion: '1.0.0', targetVersion: '1.1.0', stagedApp: staged } })
+    assert.match(f.err(), /校验安装包/)
+    assert.match(f.err(), /通过 \[fixture\]/)
+    assert.equal(f.spawned.length, 0)
+    assert.equal(await f.cli([...command, '--detach'], env, prepare), 0, f.err())
+    const queued = JSON.parse(f.out())
+    assert.equal(queued.ok, true)
+    assert.equal(queued.status, 'queued')
+    assert.equal(queued.data.requestId, f.spawned[0]!.env.DSH_USE_RESTART_REQUEST_ID)
+    assert.deepEqual(f.appCalls, [])
+
+    const bad = { ok: false, checks: [{ id: 'fixture', ok: false, message: '检查未通过' }] }
+    writeFileSync(join(f.dir, 'profiles/desktop/node_modules/tooling/doctor-cli.mjs'), `console.log(JSON.stringify(${JSON.stringify(bad)}))`)
+    assert.equal(await f.cli([...command, '--detach'], env, prepare), 1)
+    const failed = JSON.parse(f.out())
+    assert.equal(failed.ok, false)
+    assert.equal(failed.error.code, 'preflight-failed')
+    assert.deepEqual(failed.data.checks, bad.checks)
+    assert.equal(f.spawned.length, 1)
+    assert.deepEqual(f.appCalls, [])
+  } finally { await f.close() }
+})
+
 test('restart --install-app：旧 App 退出后才换，拉起的是新版；新版就绪后删掉旧版，不再有 --rollback', { skip: process.platform === 'darwin' ? false : 'requires macOS plutil' }, async () => {
   let atOpen: string[] = []
   const f = await fixture(() => [], { onOpen: () => { atOpen.push(appVersion(join(f.dir, 'Apps/DeepSeek Harness.app'))) } })
@@ -1125,13 +1177,17 @@ test('restart --install-app：旧 App 退出后才换，拉起的是新版；新
     const target = fakeApp(join(f.dir, 'Apps/DeepSeek Harness.app'), '0.2.1-rc.5')
     const staged = fakeApp(join(f.dir, 'stage/DeepSeek Harness.app'), '0.2.2-rc.1')
     const extra = { DSH_APP: target, DSH_USE_UPGRADE_DIR: join(f.dir, 'upgrade') }
-    assert.equal(await f.cli(['restart', '--install-app', staged], extra), 0, f.err())
+    assert.equal(await f.cli(['restart', '--install-app', staged, '--json'], extra), 0, f.err())
+    const completed = JSON.parse(f.out())
+    assert.equal(completed.ok, true)
+    assert.equal(completed.status, 'completed')
+    assert.equal(completed.data.requestId, JSON.parse(readFileSync(join(f.dir, 'dsh-use/restart-state.json'), 'utf8')).requestId)
     assert.deepEqual(f.appCalls, ['quit', 'open'])
     assert.deepEqual(atOpen, ['0.2.2-rc.1'], '拉起时已经是新版')
     assert.equal(appVersion(target), '0.2.2-rc.1')
     assert.equal(existsSync(staged), false)
     assert.deepEqual(readdirSync(join(f.dir, 'upgrade')), [], '新版就绪后旧版和下载目录都删掉')
-    assert.match(f.out(), /已删掉旧版 0\.2\.1-rc\.5/)
+    assert.match(f.err(), /已删掉旧版 0\.2\.1-rc\.5/)
     assert.notEqual(await f.cli(['upgrade', '--rollback'], extra), 0, '没有退回旧版的命令')
     assert.equal(appVersion(target), '0.2.2-rc.1')
   } finally { await f.close() }
@@ -1160,8 +1216,10 @@ test('upgrade：安装包 sha512 和更新源对不上就删包、不退出 DSH�
     writeFileSync(join(f.dir, 'feed/app.zip'), 'not the real package')
     writeFileSync(join(f.dir, 'feed/latest.yml'), `version: 0.2.2-rc.1\nfiles:\n  - url: >-\n      app.zip\n    sha512: >-\n      ${Buffer.from('x'.repeat(64)).toString('base64')}\n    size: 20\npath: app.zip\nsha512: abc=\n`)
     const extra = { DSH_APP: target, DSH_USE_UPGRADE_DIR: join(f.dir, 'upgrade') }
-    assert.equal(await f.cli(['upgrade', '--feed', `file://${join(f.dir, 'feed/latest.yml')}`], extra), 1)
-    assert.match(f.err(), /sha512 与更新源不符/)
+    assert.equal(await f.cli(['upgrade', '--json', '--feed', `file://${join(f.dir, 'feed/latest.yml')}`], extra), 1)
+    const rejected = JSON.parse(f.out())
+    assert.equal(rejected.ok, false)
+    assert.match(rejected.error.message, /sha512 与更新源不符/)
     assert.equal(existsSync(join(f.dir, 'upgrade/0.2.2-rc.1/app.zip')), false)
     assert.deepEqual(f.appCalls, [])
     assert.equal(appVersion(target), '0.2.1-rc.5')

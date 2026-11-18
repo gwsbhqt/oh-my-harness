@@ -18,8 +18,9 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { IconGaugeOutlineRegular, useDismissOnOutsidePointer } from '@deepseek-ai/dsh-client-ui-primitives'
-import { breakdown, formatDuration, formatSpeed, formatStatDuration, recentRequestLines } from '../../shared/run-status/format.ts'
-import { STATE_PATH, type BlockerKind, type RunSnapshot } from '../../shared/run-status/types.ts'
+import { breakdown, formatDuration, formatSpeed, formatStatDuration, gatewaySpeedLines, recentRequestLines } from '../../shared/run-status/format.ts'
+import type { BlockerKind, GatewaySpeed, RunSnapshot } from '../../shared/run-status/types.ts'
+import { fetchRunStatus } from './request.ts'
 import type { TotalsView } from '../../host/run-status/totals.ts'
 import { DOCK_SLOT, RUNNING_CONTENT, RUNNING_ROW, SESSION_ROOT, STATS_ENTRY_ID, STATS_ENTRY_ORDER, STATS_ENTRY_PRIORITY, STATS_SLOT, TOTALS_KEY } from './ids.ts'
 
@@ -102,7 +103,7 @@ function startPoller(sessionId: string): Poller {
   pollers.set(sessionId, poller)
   const tick = async () => {
     try {
-      const res = await fetch(`${STATE_PATH}?session=${encodeURIComponent(sessionId)}`, { cache: 'no-store', headers: { accept: 'application/json' } })
+      const res = await fetchRunStatus(document.baseURI, sessionId)
       if (res.ok) {
         const snap = await res.json() as RunSnapshot
         poller.state = { snap, skew: Date.now() - snap.now }
@@ -136,10 +137,41 @@ function useSnapshot(sessionId: string | undefined, running: boolean): PollState
       pollers.delete(sessionId)
     }
   }, [sessionId, running])
-  return state
+  return state.snap?.sessionId === sessionId ? state : { snap: null, skew: 0 }
 }
 
-/** 每半秒重画一次：让秒数自己走，也顺便重新找宿主那一行（它随会话起停挂载、卸载）。 */
+/** 网关可以离线或较慢，单独读取以免阻塞运行状态行的一秒刷新。 */
+function useGatewaySpeed(session: string | undefined, open: boolean): GatewaySpeed | undefined {
+  const [latest, setLatest] = useState<{ session: string; data: GatewaySpeed }>()
+  useEffect(() => {
+    setLatest(undefined)
+    if (!open || !session) return
+    const controller = new AbortController()
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    const refresh = async () => {
+      if (!document.hidden) {
+        let data: GatewaySpeed = { state: 'unavailable' }
+        try {
+          const response = await fetchRunStatus(document.baseURI, session, 'magpie', controller.signal)
+          if (response.ok) {
+            const result = await response.json() as GatewaySpeed
+            if (result?.state === 'unconfigured' || (result?.state === 'ready' && Array.isArray(result.recent))) data = result
+          }
+        } catch { /* 下一次读取会重新连接。 */ }
+        if (!controller.signal.aborted) setLatest({ session, data })
+      }
+      if (!controller.signal.aborted) timeout = setTimeout(refresh, 3000)
+    }
+    void refresh()
+    return () => {
+      controller.abort()
+      clearTimeout(timeout)
+    }
+  }, [open, session])
+  return open && latest?.session === session ? latest?.data : undefined
+}
+
+/** 每半秒刷新正在计时的耗时，并跟随宿主运行行的挂载和卸载。 */
 function useTick(active: boolean): number {
   const [now, setNow] = useState(Date.now)
   useEffect(() => {
@@ -249,7 +281,7 @@ function hostRows(host: HostStats): Row[] {
   const rows: Row[] = []
   if (host.llmMs > 0) rows.push({ key: 'llm', label: '模型用时', value: formatStatDuration(host.llmMs) })
   if (host.toolMs > 0) rows.push({ key: 'tool', label: '工具调用用时', value: formatStatDuration(host.toolMs) })
-  rows.push({ key: 'unavailable', label: '速度统计', value: '暂不可用，请重启 DSH', title: '完整统计尚未加载，不能用宿主的接收内容时间推算生成速度。' })
+  rows.push({ key: 'unavailable', label: '含等待速度', value: '会话统计尚未加载' })
   return rows
 }
 
@@ -272,22 +304,21 @@ function workRows(totals: TotalsView): Row[] {
 const tps = (s: { outputTokens: number; tokenMs: number }): string => `${formatSpeed(s.outputTokens, s.tokenMs)} tok/s`
 const SPEED_NOTE = '上报的输出 token 总数除以对应请求的总用时，包含等待、思考和接收内容，不含工具执行；只统计已完成且上报输出数的请求。'
 const CONTENT_NOTE = '从每步开始到收到第一段文字、思考文字或工具调用的等待时间，含请求准备；取中位数，一半请求不超过这个时间。'
-const GENERATION_NOTE = '当前接口没有提供与全部输出 token 对应的准确生成计时；不能用含隐藏思考的 token 数除以接收文字的时间。'
 
 function speedRows(totals: TotalsView, running: boolean): Row[] {
   const rows: Row[] = []
   const value = (s: { outputTokens: number; tokenMs: number; medianTtftMs: number | null }): string =>
     [tps(s), s.medianTtftMs === null ? null : `等内容 ${formatStatDuration(s.medianTtftMs)}`].filter(Boolean).join(' · ')
   const scope = running ? '速度截至上次已完成请求，进行中的耗时仍实时更新。' : '只统计已完成请求。'
-  const note = `${SPEED_NOTE}${CONTENT_NOTE}${GENERATION_NOTE}${scope}`
+  const note = `${SPEED_NOTE}${CONTENT_NOTE}${scope}`
   const avg = totals.average
   if (avg != null && avg.tokenMs > 0) {
     const since = avg.switched ? `第 ${avg.sinceTurn} 轮换模型后` : '本会话'
-    rows.push({ key: 'average', label: avg.switched ? '换模型后平均' : '会话平均', value: value(avg), title: `${avg.model}，${since}。${note}` })
+    rows.push({ key: 'average', label: avg.switched ? '换模型后含等待' : '会话含等待', value: value(avg), title: `${avg.model}，${since}。${note}` })
   }
   const cur = totals.current
   if (cur != null && cur.tokenMs > 0) {
-    rows.push({ key: 'current', label: `第 ${cur.turn} 轮平均`, value: value(cur), title: `${cur.model}，第 ${cur.turn} 轮。${note}` })
+    rows.push({ key: 'current', label: `第 ${cur.turn} 轮含等待`, value: value(cur), title: `${cur.model}，第 ${cur.turn} 轮。${note}` })
   }
   return rows
 }
@@ -327,6 +358,7 @@ function StatsPill(props: Props): JSX.Element | null {
   }, [open])
   // 面板打开就取快照：会话结束后仍要看得到最近请求的分段，不只是跑着的时候。
   const { snap, skew } = useSnapshot(props.sessionId, open)
+  const gatewaySpeed = useGatewaySpeed(props.sessionId, open)
   const now = useTick(open)
   useEffect(ensureStyle, [])
   const steps = totals?.steps ?? host?.steps ?? 0
@@ -350,9 +382,10 @@ function StatsPill(props: Props): JSX.Element | null {
           <div className="dsh-rs-title"><span className="dsh-rs-title-label">{icon}会话统计</span><span className="dsh-rs-num">{counts}</span></div>
           <div className="dsh-rs-rule" aria-hidden="true" />
           {[
-            ...(totals === undefined
-              ? [host === undefined ? [] : hostRows(host)]
-              : [wallRows(totals, hostNow), workRows(totals), speedRows(totals, running), running && snap?.running === true ? turnRows(snap, hostNow) : []]),
+            ...(totals === undefined ? [host === undefined ? [] : hostRows(host)] : [wallRows(totals, hostNow), workRows(totals)]),
+            gatewaySpeedLines(gatewaySpeed),
+            ...(totals === undefined ? [] : [speedRows(totals, running)]),
+            ...(running && snap?.running === true ? [turnRows(snap, hostNow)] : []),
             ...(snap === null ? [] : [requestRows(snap)]),
           ].filter((group) => group.length > 0).map((group, i) => (
             <div key={i}>

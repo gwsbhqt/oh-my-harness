@@ -88,7 +88,7 @@
 
 ## 依赖的宿主易变方法（升级要核对）
 
-- DSH 内部的 `createSession(request)`（模式偏好补偏好）和技能注册表的 `list` / `snapshot` / `get` 都可能随升级变更。
+- DSH 内部的 `createSession(request)`（模式偏好补偏好）和技能注册表的 `snapshot` / `get` 都可能随升级变更。原生 `list` 调 `snapshot` 取清单，列一次技能只读取一次偏好。
   保留可卸载的方法包装，装卸两轮测试在 `test/presets.test.ts`、`test/exposure.test.ts`；升级后先跑 `pnpm run check`。
 - `open-settings.ts` 借用了宿主设置外壳「共享状态句柄 + `openSection(id)`」这个没公开的形状，
   `test/open-settings.test.ts` 对着开发依赖和本机 App 自带的设置外壳各核对一次，宿主改了会先在这里报。

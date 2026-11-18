@@ -42,7 +42,7 @@ export interface Segment {
 
 /**
  * 一次模型请求的分段用时。请求结束时先记下 DSH 这边的总时长（state 为 pending），
- * 再按回复编号去 magpie 的请求记录里找这一次，拆成上传、等首字、返回。
+ * 再按回复编号去 magpie 的请求记录里找这一次，拆成上传、等首段内容、返回。
  * 请求进行中没法拆：上传完的时刻只有 magpie 知道，它要等请求结束才写进记录。
  */
 export interface RequestTiming {
@@ -57,9 +57,9 @@ export interface RequestTiming {
   readonly state: 'pending' | 'ok' | 'missing' | 'error'
   /** 上传：magpie 把请求完整交给模型服务商之前用掉的时间，含 magpie 自己处理和失败重试。缺这项说明这条线路 magpie 不记上传完的时刻。 */
   readonly uploadMs?: number
-  /** 等首字：上传完到第一个字；没有上传那项时，是发出到第一个字。 */
+  /** 等首段内容：上传完到首段内容；没有上传那项时，是发出到首段内容。 */
   readonly firstTokenMs?: number
-  /** 返回：第一个字到收完。 */
+  /** 返回：首段内容到收完。 */
   readonly returnMs?: number
   /** 上传里 magpie 失败重试用掉的部分。 */
   readonly retriedMs?: number
@@ -67,6 +67,26 @@ export interface RequestTiming {
   readonly outsideMs?: number
   readonly note?: string
 }
+
+/** Magpie 路由页最近请求的速率。下限和缺少计时的请求都不参与平均。 */
+export interface GatewayRequestSpeed {
+  readonly time: number | null
+  readonly kind: 'measured' | 'floor' | 'unmeasured' | 'running' | 'unanswered'
+  readonly tps?: number
+}
+
+export type GatewaySpeed =
+  | { readonly state: 'unconfigured' | 'unavailable' }
+  | {
+    readonly state: 'ready'
+    readonly windowSize: number
+    readonly requests: number
+    readonly completed: number
+    readonly measured: number
+    readonly floors: number
+    readonly tps: number | null
+    readonly recent: readonly GatewayRequestSpeed[]
+  }
 
 export interface RunSnapshot {
   readonly sessionId: string

@@ -4,9 +4,9 @@
  * @module
  */
 import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { createReadStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs'
-import { basename, dirname, join, resolve } from 'node:path'
+import { createHash, randomUUID } from 'node:crypto'
+import { constants, copyFileSync, createReadStream, existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmdirSync, rmSync, statSync } from 'node:fs'
+import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 
 export const DEFAULT_FEED = 'https://download.deepseek.com/dsh-desk/feeds/mac-arm64/nightly-mac.yml'
 const APP_NAME = 'DeepSeek Harness.app'
@@ -85,52 +85,159 @@ export function sha512File(path: string): Promise<string> {
   })
 }
 
-/** 下载、校验大小和 sha512、解包，再核对签名、公证、开发者和版本号；全部对上才返回解出来的 App。 */
-export async function stageRelease(entry: FeedEntry, options: { dir: string; installed: string; print: (text: string) => void; exec?: Exec }): Promise<string> {
-  const exec = options.exec ?? realExec
-  const work = join(options.dir, entry.version)
-  mkdirSync(work, { recursive: true })
-  const zip = join(work, basename(new URL(entry.url).pathname) || 'app.zip')
-  if (existsSync(zip) && (await sha512File(zip)) === entry.sha512) options.print(`已下载过，校验一致：${zip}`)
-  else {
-    rmSync(zip, { force: true })
-    options.print(`下载 ${entry.url}`)
-    must(exec, '下载安装包', 'curl', ['-fL', '--retry', '3', '--connect-timeout', '20', '-sS', '-o', `${zip}.part`, entry.url], 60 * 60_000)
-    renameSync(`${zip}.part`, zip)
-  }
-  const size = statSync(zip).size
-  if (entry.size !== undefined && size !== entry.size) { rmSync(zip, { force: true }); throw new Error(`安装包大小 ${size} 与更新源的 ${entry.size} 不符，已删除`) }
-  const digest = await sha512File(zip)
-  if (digest !== entry.sha512) { rmSync(zip, { force: true }); throw new Error(`安装包 sha512 与更新源不符，已删除（算出 ${digest}）`) }
-  options.print('大小和 sha512 与更新源一致')
-  const extract = join(work, 'extract')
-  rmSync(extract, { recursive: true, force: true })
-  mkdirSync(extract, { recursive: true })
-  must(exec, '解包', 'ditto', ['-x', '-k', zip, extract], 10 * 60_000)
-  const app = join(extract, APP_NAME)
+function verifyApp(app: string, version: string, expectedTeam: string, exec: Exec): void {
   if (!existsSync(join(app, 'Contents/Info.plist'))) throw new Error(`安装包里没有 ${APP_NAME}`)
   must(exec, '核对签名', 'codesign', ['--verify', '--deep', '--strict', app], 10 * 60_000)
   must(exec, '核对公证', 'spctl', ['-a', '-t', 'exec', app], 5 * 60_000)
-  const version = appVersion(app, exec)
-  if (version !== entry.version) throw new Error(`安装包里的版本是 ${version}，更新源写的是 ${entry.version}`)
-  if (existsSync(options.installed)) {
-    const want = teamId(options.installed, exec)
-    const got = teamId(app, exec)
-    if (want !== '' && got !== want) throw new Error(`新版的开发者 ${got || '未知'} 和现装的 ${want} 不同，没有继续`)
+  const gotVersion = appVersion(app, exec)
+  if (gotVersion !== version) throw new Error(`安装包里的版本是 ${gotVersion}，更新源写的是 ${version}`)
+  const gotTeam = teamId(app, exec)
+  if (expectedTeam !== '' && gotTeam !== expectedTeam) throw new Error(`新版的开发者 ${gotTeam || '未知'} 和现装的 ${expectedTeam} 不同，没有继续`)
+}
+
+async function archiveMismatch(path: string, entry: FeedEntry): Promise<string | undefined> {
+  const size = statSync(path).size
+  if (entry.size !== undefined && size !== entry.size) return `安装包大小 ${size} 与更新源的 ${entry.size} 不符`
+  const digest = await sha512File(path)
+  if (digest !== entry.sha512) return `安装包 sha512 与更新源不符（算出 ${digest}）`
+}
+
+/** 读取缓存期间，另一个已完成的安装可以移除缓存名。私有副本一直可用；APFS 上尽可能使用写时复制。 */
+function copyCachedArchive(source: string, destination: string): boolean {
+  try { copyFileSync(source, destination, constants.COPYFILE_FICLONE) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
   }
-  options.print(`签名、公证和开发者核对通过：${app}（${version}）`)
-  return app
+  return true
+}
+
+const checkedBuild = /^build-[0-9a-f-]{36}$/
+
+function managedRelease(dir: string, app: string) {
+  const [name = '', ...inside] = relative(resolve(dir), resolve(app)).split(sep)
+  const match = /^release-([a-f0-9]{64})(-[A-Za-z0-9]{6,})?$/.exec(name)
+  if (!match || inside.at(-2) !== 'extract' || inside.at(-1) !== APP_NAME) return undefined
+  const parents = inside.slice(0, -2)
+  const privateStage = match[2] !== undefined
+  if (privateStage ? parents.length !== 0 : parents.some((part) => part !== 'replacement' && !checkedBuild.test(part))) return undefined
+  return { work: join(dir, name), shared: join(dir, `release-${match[1]}`), archive: join(dir, `package-${match[1]}.zip`), private: privateStage }
+}
+
+function discardDirectory(work: string): void {
+  try { rmSync(work, { recursive: true, force: true }) } catch (error) {
+    process.stderr.write(`未能清理升级临时目录 ${work}：${error instanceof Error ? error.message : String(error)}\n`)
+  }
+}
+
+/** 下载、校验、解包到本次请求独占的路径；离线检查和后台安装都可以直接使用返回的 App。 */
+export async function stageRelease(entry: FeedEntry, options: { dir: string; installed: string; print: (text: string) => void; exec?: Exec }): Promise<string> {
+  const exec = options.exec ?? realExec
+  const installedTeam = () => existsSync(options.installed) ? teamId(options.installed, exec) : ''
+  const expectedTeam = installedTeam()
+  const dir = resolve(options.dir)
+  mkdirSync(dir, { recursive: true })
+  const key = createHash('sha256').update(entry.version).update('\0').update(entry.sha512).digest('hex')
+  const archive = join(dir, `package-${key}.zip`)
+  const sources = [archive]
+  const filename = basename(new URL(entry.url).pathname) || 'app.zip'
+  if ([entry.version, filename].every((part) => part !== '' && part !== '.' && part !== '..' && basename(part) === part)) {
+    sources.push(join(dir, entry.version, filename))
+  }
+  const work = mkdtempSync(join(dir, `release-${key}-`))
+  const zip = join(work, 'download.part')
+  const extract = join(work, 'extract')
+  try {
+    let source: string | undefined
+    for (const candidate of sources) {
+      if (copyCachedArchive(candidate, zip) && await archiveMismatch(zip, entry) === undefined) { source = candidate; break }
+    }
+    if (source !== undefined) options.print(`已下载过，校验一致：${source}`)
+    else {
+      options.print(`下载 ${entry.url}`)
+      must(exec, '下载安装包', 'curl', ['-fL', '--retry', '3', '--connect-timeout', '20', '-sS', '-o', zip, entry.url], 60 * 60_000)
+      const mismatch = await archiveMismatch(zip, entry)
+      if (mismatch !== undefined) throw new Error(`${mismatch}，已删除本次下载`)
+    }
+    options.print('大小和 sha512 与更新源一致')
+    mkdirSync(extract)
+    must(exec, '解包', 'ditto', ['-x', '-k', zip, extract], 10 * 60_000)
+    const app = join(extract, APP_NAME)
+    verifyApp(app, entry.version, expectedTeam || installedTeam(), exec)
+    renameSync(zip, archive)
+    options.print(`签名、公证和开发者核对通过：${app}（${entry.version}）`)
+    return app
+  } catch (error) {
+    discardDirectory(work)
+    throw error
+  }
+}
+
+/** --check 完成后发布。返回的 App 位于不可复用的目录名下，修复损坏缓存时也不会移走别的请求手里的完好 App。 */
+export function keepCheckedRelease(dir: string, staged: string, exec: Exec = realExec): string {
+  const release = managedRelease(dir, staged)
+  if (!release?.private) return staged
+  const version = appVersion(staged, exec)
+  const team = teamId(staged, exec)
+  const name = `build-${randomUUID()}`
+  const candidate = join(release.work, name)
+  mkdirSync(candidate)
+  renameSync(dirname(staged), join(candidate, 'extract'))
+  let slot = release.shared
+  try {
+    for (;;) {
+      try {
+        renameSync(release.work, slot)
+        return join(slot, name, 'extract', APP_NAME)
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (code === 'ENOENT' && slot !== release.shared) { slot = release.shared; continue }
+        if (code !== 'ENOTEMPTY' && code !== 'EEXIST') throw error
+      }
+      let existing: string | undefined
+      try { existing = readdirSync(slot, { withFileTypes: true }).find((item) => item.isDirectory() && checkedBuild.test(item.name))?.name } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        slot = release.shared
+        continue
+      }
+      if (!existing) { slot = join(slot, 'replacement'); continue }
+      const previous = join(slot, existing)
+      const next = join(previous, 'replacement')
+      if (existsSync(next)) { slot = next; continue }
+      const app = join(previous, 'extract', APP_NAME)
+      try { verifyApp(app, version, team, exec); return app } catch {
+        // 同一校验工具能验证私有副本，才回收已确认损坏的那份。其唯一目录承载下一次原子发布。
+        verifyApp(join(candidate, 'extract', APP_NAME), version, team, exec)
+        discardDirectory(join(previous, 'extract'))
+        slot = next
+      }
+    }
+  } finally { discardDirectory(release.work) }
+}
+
+/** 准备或交接失败时，仅释放本次操作的私有解包目录。 */
+export function discardStagedRelease(dir: string, staged: string): void {
+  const release = managedRelease(dir, staged)
+  if (release?.private) discardDirectory(release.work)
+}
+
+function copyApp(from: string, to: string, exec: Exec): void {
+  const work = mkdtempSync(join(dirname(to), '.dsh-upgrade-'))
+  const copy = join(work, APP_NAME)
+  try {
+    must(exec, `复制 ${from}`, 'ditto', [from, copy], 10 * 60_000)
+    renameSync(copy, to)
+  } finally { discardDirectory(work) }
 }
 
 function move(from: string, to: string, exec: Exec): void {
   try { renameSync(from, to) } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error
-    must(exec, `复制 ${from}`, 'ditto', [from, to], 10 * 60_000)
+    copyApp(from, to, exec)
     rmSync(from, { recursive: true, force: true })
   }
 }
 
-export interface Swap { target: string; backup: string; from: string; to: string }
+export interface Swap { target: string; backup: string; from: string; to: string; staged: string }
 
 /** 旧 App 挪进备份目录、新 App 挪到原位并核对版本；中途出错把旧版挪回原位再抛错。只能在旧进程退出后调用。 */
 export function swapIn(staged: string, target: string, backups: string, exec: Exec = realExec): Swap {
@@ -142,18 +249,20 @@ export function swapIn(staged: string, target: string, backups: string, exec: Ex
   rmSync(backup, { recursive: true, force: true })
   const hadTarget = existsSync(target)
   if (hadTarget) move(target, backup, exec)
+  let placed = false
   try {
-    move(staged, target, exec)
+    const release = managedRelease(dirname(backups), staged)
+    if (release && !release.private) copyApp(staged, target, exec)
+    else move(staged, target, exec)
+    placed = true
     const now = appVersion(target, exec)
     if (now !== to) throw new Error(`替换后读到的版本是 ${now}，不是 ${to}`)
   } catch (error) {
-    if (hadTarget) {
-      rmSync(target, { recursive: true, force: true })
-      move(backup, target, exec)
-    }
+    if (placed) rmSync(target, { recursive: true, force: true })
+    if (hadTarget) move(backup, target, exec)
     throw error
   }
-  return { target, backup, from, to }
+  return { target, backup, from, to, staged }
 }
 
 /** 新版起不来时换回：新版挪进 failed 目录，备份挪回原位。 */
@@ -166,8 +275,28 @@ export function swapBack(swap: Swap, exec: Exec = realExec): void {
   move(swap.backup, swap.target, exec)
 }
 
-/** 新版确认就绪后清理旧版、下载和解包目录；失败回滚阶段不得提前清理。 */
-export function pruneUpgrade(dir: string): void {
-  for (const name of existsSync(dir) ? readdirSync(dir) : []) rmSync(join(dir, name), { recursive: true, force: true })
+/** 仅在新版就绪后回收这次安装的备份、下载和检查结果。其他请求可能正在解包或等待后台接手。 */
+export function pruneUpgrade(dir: string, swap: Swap): void {
+  const backups = resolve(dir, 'backups')
+  const failed = resolve(dir, 'failed')
+  const replaced = [[backups, swap.backup], [failed, join(failed, `DeepSeek Harness ${swap.to}.app`)]] as const
+  for (const [folder, app] of replaced) {
+    if (dirname(resolve(app)) !== folder) continue
+    rmSync(app, { recursive: true, force: true })
+    try { rmdirSync(folder) } catch (error) {
+      if (!['ENOTEMPTY', 'EEXIST', 'ENOENT'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error
+    }
+  }
+  const release = managedRelease(dir, swap.staged)
+  if (!release) return
+  if (release.private) rmSync(release.work, { recursive: true, force: true })
+  rmSync(release.archive, { force: true })
+  const retired = mkdtempSync(join(dir, 'retired-'))
+  try {
+    // 先挪走再递归删除，使同时完成的 --check 总能发布到一个完整或空缺的位置。
+    try { renameSync(release.shared, join(retired, 'checked')) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+  } finally { rmSync(retired, { recursive: true, force: true }) }
 }
 

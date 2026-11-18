@@ -6,7 +6,7 @@ Four small improvements to the DSH session UI, merged into one plugin with one l
 | --- | --- |
 | `hideFinished` | The header "jobs" and "subagents" buttons only show what is still running; when everything finished the button disappears (kept while the team board has content). |
 | `pathMention` | A path written in backticks in an assistant reply that really exists on this machine becomes a clickable mention: files preview in the sidebar, directories open in the system; right-click opens with an app; can be dragged into the composer. |
-| `runStatus` | A line above the composer says exactly what "thinking" is stuck on and for how long; a stats card below the composer replaces the built-in one with more accurate session statistics; requests through magpie also show segmented timing. |
+| `runStatus` | A line above the composer says exactly what "thinking" is stuck on and for how long; a stats card below the composer replaces the built-in one with more accurate session statistics; the expanded card shows Magpie output speed, DSH speed including waits, and request timing. |
 | `copySessionId` | A "copy session id" button in the header copies the bare session id; on the web it appends `#machine`. Pasting into the composer turns it into a reference chip via dsh-composer. |
 
 All four default to on. Turning one off registers no slot, route or event listener for it.
@@ -33,14 +33,20 @@ Both the entry id and the settings namespace are `session-ui`. All six fields ar
 | `pathMention` | `true` | Existing paths in replies are clickable, right-click openable, draggable |
 | `runStatus` | `true` | Status line above and stats card below the composer |
 | `copySessionId` | `true` | Copy-session-id button in the header |
-| `magpieBaseUrl` | `''` | Magpie gateway for segmented timing. Empty: use local `127.0.0.1:3425` if Magpie is installed, otherwise hide that section |
+| `magpieBaseUrl` | `''` | Magpie gateway for routing speed and segmented timing. An empty setting uses a locally installed Magpie |
 | `magpieKeyRef` | `''` | Credential reference name of the gateway key (not the key itself) |
 
-Gateway selection: if a local Magpie is installed (a `magpie` on PATH), use the local address and local key; otherwise use the explicitly configured remote address and reference; if neither, segmented timing is not read and the rest works as usual. No gateway address or key is hard-coded; both come from configuration.
+Gateway selection: if a local Magpie is installed (a `magpie` on PATH), use the local address and local key; otherwise use the explicitly configured remote address and reference; with neither, the card displays DSH’s own statistics. No gateway address or key is hard-coded; both come from configuration.
+
+## Reading the speed figures
+
+- **Magpie average output** matches the unfiltered live Routing page. The gateway keeps up to 60 recent requests across all sessions. Within that window, the card divides this session’s total measurable output by its total measured generation time. In-flight and failed routes count toward the request count. Retries within a route count once.
+- Timing starts at the first observed output or reasoning signal. When the reasoning start is unknown, only an answer with a timed first text can be measured. A buffered reply may show a `≥` lower bound or no rate. The card shows how many requests contribute to the average and the most recent individual results.
+- **Speed including waits** uses DSH’s step start and completed reply times. It includes preparation, waiting and reasoning. The pill shows the latest turn. The expanded card adds the session average since the last model change and the median wait for content. These figures come from session history and remain available when a session leaves the gateway window or the gateway is offline.
 
 ## How it works
 
-See the Chinese [README.md](README.md) for detail. In short: `hideFinished` shadows the host header buttons with filtered wrappers; `pathMention` adds three same-origin host routes plus a reply-layer client wrapper; `runStatus` listens only to public host events and hook timing, exposes a read-only state route and a `runStatusTotals` session projection; `copySessionId` adds a header button whose machine name comes from its own `/api/session-ui.machine` route.
+See the Chinese [README.md](README.md) for detail. In short: `hideFinished` shadows the host header buttons with filtered wrappers; `pathMention` resolves existing files through authenticated host routes and uses the host application chooser to open directories; `runStatus` listens only to public host events and hook timing, exposes a read-only state route and a `runStatusTotals` session projection; `copySessionId` adds a header button whose machine name comes from its own `/api/session-ui.machine` route.
 
 ## Development
 

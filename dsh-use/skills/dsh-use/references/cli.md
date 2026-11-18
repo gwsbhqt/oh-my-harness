@@ -138,7 +138,7 @@ dsh-use upgrade --detach         # 检查通过后重启：旧 App 退出后才�
 dsh-use -H beta upgrade --detach   # 给别的机器升级；远端在后台进程里做，SSH 断了也不影响
 ```
 
-更新源默认 `https://download.deepseek.com/dsh-desk/feeds/mac-arm64/nightly-mac.yml`，`--feed` 可换。下载、解包和旧版备份在 `~/.local/state/dsh-use/app-upgrade`，升级成功后只留刚换下来的那一版。启动检查用的是新版 App，所以插件和新宿主不兼容时这一步就拦下，不会退出 DSH。要连同 profile 依赖一起更新时用 `--before`，它在会话都中止后、换 App 前执行，失败就不重启。
+默认更新源是 `https://download.deepseek.com/dsh-desk/feeds/mac-arm64/nightly-mac.yml`，可以用 `--feed` 指定其他来源。缓存位于 `~/.local/state/dsh-use/app-upgrade`。`--check` 使用新版 App 验证实际配置，并返回已检查的 App 路径。升级成功后会清理本次备份与这份发布包的缓存。需要同时更新 profile 依赖时使用 `--before`，它在会话中止后、替换 App 前执行。预检或更新命令失败时会保留正在使用的版本。脚本通过 `--json` 读取回执，后台受理后的结果按请求编号查询。
 
 ## 通用接口
 

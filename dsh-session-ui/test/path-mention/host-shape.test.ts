@@ -135,6 +135,7 @@ function assertHostShape(chatSource: string, conversationSource: string, openInA
   // 右键菜单的打开方式：和宿主头栏「打开工作区」那个菜单同一份清单、同一个图标接口、同一套应用名文案。
   assert.ok(hasRoute(openInApp, 'OPEN_IN_APP_APPS', '/open-in-app/apps'), `${label}: 本机应用清单接口仍是 open-in-app/apps`)
   assert.ok(hasRoute(openInApp, 'OPEN_IN_APP_ICON_PREFIX', '/open-in-app/icon'), `${label}: 应用图标接口仍是 open-in-app/icon/<id>`)
+  assert.ok(hasRoute(openInApp, 'OPEN_IN_APP_OPEN', '/open-in-app/open'), `${label}: 目录在指定应用打开的路由仍是 open-in-app/open`)
   has(openInApp, 'if(Array.isArray(payload.apps))apps=payload.apps.filter(id=>typeof id==="string")', `${label}: 清单接口仍返回 {apps: string[]}`)
   has(openInApp, 'const NS="open-in-app";', `${label}: 应用名文案命名空间仍是 open-in-app`)
   has(openInApp, '"app.finder":"访达",', `${label}: 应用名文案键仍是 app.<id>`)

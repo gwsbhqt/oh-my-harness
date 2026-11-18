@@ -13,22 +13,22 @@ const RETRIED: MagpieRow = { response_id: 'req-retry-0002', ms: 63122, ttft_ms: 
 const CLAUDE: MagpieRow = { response_id: 'req-plain-0003', ms: 6022, ttft_ms: 3392 }
 
 describe('把 magpie 的一行拆成三段', () => {
-  it('有上传完的时刻：上传、等首字、返回', () => {
+  it('有上传完的时刻：上传、等首段内容、返回', () => {
     const t = splitRow(BIG_UPLOAD, 16_000)
     assert.deepEqual(t, { state: 'ok', uploadMs: 9595, firstTokenMs: 6371, returnMs: 5 })
-    assert.equal(describeRequest({ responseId: 'x', step: 8, totalMs: 16_000, end: 0, ...t }), '第 8 步：上传 9.6 秒，等首字 6.4 秒，返回 0.0 秒')
+    assert.equal(describeRequest({ responseId: 'x', step: 8, totalMs: 16_000, end: 0, ...t }), '第 8 步：上传 9.6 秒，等首段内容 6.4 秒，返回 0.0 秒')
   })
 
   it('失败重试算在上传里并单独说出来', () => {
     const t = splitRow(RETRIED, 63_500)
     assert.equal(t.retriedMs, 52640)
-    assert.match(describeRequest({ responseId: 'x', totalMs: 63_500, end: 0, ...t }), /^上传 57 秒（其中失败重试 53 秒），等首字 2\.7 秒，返回 3\.6 秒$/)
+    assert.match(describeRequest({ responseId: 'x', totalMs: 63_500, end: 0, ...t }), /^上传 57 秒（其中失败重试 53 秒），等首段内容 2\.7 秒，返回 3\.6 秒$/)
   })
 
-  it('Claude 线路只能拆成发出到首字和返回', () => {
+  it('Claude 线路只能拆成发出到首段内容和返回', () => {
     const t = splitRow(CLAUDE, 6100)
     assert.deepEqual(t, { state: 'ok', firstTokenMs: 3392, returnMs: 2630 })
-    assert.equal(describeRequest({ responseId: 'x', totalMs: 6100, end: 0, ...t }), '发出到首字 3.4 秒，返回 2.6 秒')
+    assert.equal(describeRequest({ responseId: 'x', totalMs: 6100, end: 0, ...t }), '发出到首段内容 3.4 秒，返回 2.6 秒')
   })
 
   it('DSH 量到的比 magpie 记的长 1 秒以上，单独记成到 magpie 来回', () => {
@@ -36,10 +36,14 @@ describe('把 magpie 的一行拆成三段', () => {
     assert.equal(splitRow(BIG_UPLOAD, 16_900).outsideMs, undefined)
   })
 
-  it('没有首字时刻时不编数字', () => {
+  it('没有首段内容时刻时不编数字', () => {
     const t = splitRow({ response_id: 'x', ms: 900 }, 1000)
     assert.equal(t.firstTokenMs, undefined)
     assert.match(describeRequest({ responseId: 'x', totalMs: 1000, end: 0, ...t }), /拆不开/)
+  })
+
+  it('首段晚于收完时不能把负数改成零', () => {
+    assert.equal(splitRow({ ms: 900, ttft_ms: 950 }, 1000).returnMs, undefined)
   })
 
   it('秒数格式', () => {
@@ -76,6 +80,21 @@ describe('排队找记录', () => {
     assert.equal(reads(), 1)
     assert.deepEqual(done.map(([id, p]) => [id, p.state, p.uploadMs]), [[BIG_UPLOAD.response_id, 'ok', 9595], [CLAUDE.response_id, 'ok', undefined]])
     assert.equal(lookup.nextAt(), undefined)
+  })
+
+  it('回复编号相同时只选本会话的记录，本会话仍有多个候选则留空', async () => {
+    const other = { ...CLAUDE, session: 'other' }
+    const own = { ...CLAUDE, native_session: 's', ms: 8000 }
+    const { lookup, done } = setup(async () => [other, own])
+    lookup.add({ session: 's', responseId: own.response_id! }, 8100, 0)
+    await lookup.poll(LOOKUP_DELAYS[0])
+    assert.equal(done[0]?.[1].returnMs, 8000 - CLAUDE.ttft_ms!)
+    for (const rows of [[other], [own, { ...own, ms: 9000 }]]) {
+      const ambiguous = setup(async () => rows)
+      ambiguous.lookup.add({ session: 's', responseId: own.response_id! }, 8100, 0)
+      while (ambiguous.lookup.nextAt() !== undefined) await ambiguous.lookup.poll(ambiguous.lookup.nextAt()!)
+      assert.equal(ambiguous.done[0]?.[1].state, 'missing')
+    }
   })
 
   it('一直找不到就记成找不到；读不到 magpie 就记原因', async () => {

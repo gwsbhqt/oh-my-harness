@@ -5,7 +5,7 @@
  *
  * 数据来源都是宿主公开的事件：会话日志追加（session/event）、agent 状态（agent/status）、
  * 模型流（agent/assistant-stream），以及给会阻塞对话的事件里每个插件的监听器计时（见 hooks.ts）。
- * 走 magpie 的请求结束后，再按回复编号读 magpie 的请求记录，拆出上传、等首字、返回（见 magpie.ts）。
+ * 走 magpie 的请求结束后，再按回复编号读 magpie 的请求记录，拆出上传、等首段内容、返回（见 magpie.ts）。
  * 另把整段会话统计登记成宿主的会话投影 `runStatusTotals`（见 totals.ts），网页半的统计卡读它。
  * 只读不改：不拦截、不改写任何事件的结果。
  *
@@ -16,8 +16,9 @@ import type { Context } from '@deepseek-ai/cordis'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { installHookTiming, realEvents } from './hooks.ts'
-import { readRows, requestsUrl, TimingLookup } from './magpie.ts'
-import { resolveMagpieGateway } from './magpie-gateway.ts'
+import { gatewayUrl, readGatewayJson, requestRows, requestsUrl, TimingLookup } from './magpie.ts'
+import { resolveMagpieGateway, type ResolvedMagpieGateway } from './magpie-gateway.ts'
+import { gatewaySpeeds } from './magpie-speed.ts'
 import { STATE_PATH } from '../../shared/run-status/types.ts'
 import { totalsProjection } from './totals.ts'
 import { RunTracker, type SessionEventLike, type StreamFrameLike } from './tracker.ts'
@@ -81,14 +82,16 @@ export function applyRunStatus(ctx: Context, config: RunStatusHostConfig): void 
     const found = await ctx.get('credentials')?.resolve(credentialRef(name))
     return found === undefined ? undefined : { value: found.value }
   }
+  const readGateway = async (resolved: ResolvedMagpieGateway, url: URL) => {
+    const ref = resolved.magpieKeyRef
+    const found = await resolveRef(ref)
+    return readGatewayJson(url, found?.value ?? process.env[ref])
+  }
+  const speeds = gatewaySpeeds(resolved => readGateway(resolved, gatewayUrl(resolved.magpieBaseUrl, 'trace')))
   const lookup = new TimingLookup(async () => {
     const resolved = gateway()
     if (resolved === undefined) throw new Error('未配置 magpie 网关')
-    const url = requestsUrl(resolved.magpieBaseUrl)
-    const ref = resolved.magpieKeyRef
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(ref)) throw new Error('网关钥匙必须写凭据引用名')
-    const found = await resolveRef(ref)
-    return readRows(url, found?.value ?? process.env[ref])
+    return requestRows(await readGateway(resolved, requestsUrl(resolved.magpieBaseUrl)))
   }, (item, patch) => tracker.resolveRequest(item.session, item.responseId, patch))
   let timer: ReturnType<typeof setTimeout> | undefined
   let polling = false
@@ -186,15 +189,24 @@ export function applyRunStatus(ctx: Context, config: RunStatusHostConfig): void 
     }
   })
 
-  ctx.inject(['webServer'], (webCtx) => {
+  ctx.inject(['webServer', 'connection'], (webCtx) => {
+    // 宿主与网页在同一个 TypeScript 项目，两个 connection 服务共享名字。
+    const connection = webCtx.get('connection') as unknown as { requestRejection(req: IncomingMessage): 401 | 403 | undefined }
     webCtx.effect(() => webCtx.webServer.register({
       kind: 'exact',
       path: STATE_PATH,
-      handler: (req: IncomingMessage, res: ServerResponse) => {
+      handler: async (req: IncomingMessage, res: ServerResponse) => {
+        const rejection = connection.requestRejection(req)
+        if (rejection !== undefined) {
+          res.writeHead(rejection, { 'cache-control': 'no-store' })
+          res.end()
+          return
+        }
         if (req.method !== 'GET' || !sameOrigin(req)) return send(res, 403, { error: 'forbidden' })
         const url = new URL(req.url ?? '/', 'http://local')
         const session = url.searchParams.get('session')
         if (session === null || session === '') return send(res, 200, { running: tracker.runningIds() })
+        if (url.searchParams.get('view') === 'magpie') return send(res, 200, await speeds(gateway(), session))
         send(res, 200, tracker.snapshot(session, now()))
       },
     }), 'run-status: state route')

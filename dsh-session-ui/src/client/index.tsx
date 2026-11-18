@@ -31,6 +31,16 @@ function enabled(form: ConfigForm<unknown>, key: string): boolean {
 }
 
 export function apply(ctx: ClientContext): void {
+  // 顶栏的省略号在页头，菜单浮层在 body。只有主列表含 contextMenu.content，页脚和子菜单各自保留分组。
+  ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register(
+    { name: 'conversation.session.header.utilities', id: 'session-ui.header-menu' },
+    () => <style>{`
+      body:has([data-slot="conversation.session.header"] [data-context-menu-trigger][aria-expanded="true"])
+        [data-context-menu] [role="separator"]:first-child:has(~ [data-slot="contextMenu.content"]) {
+        display: none;
+      }
+    `}</style>,
+  ))
   const form = ctx.configForms.get<unknown>(NS)
   ctx.effect(() => ctx.configForms.whileServed([NS], () => {
     // 每块能力挂在自己的子 fiber 上：关掉时子 fiber 整体卸载，槽位和组件里的监听一起撤销；

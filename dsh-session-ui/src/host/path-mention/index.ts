@@ -1,12 +1,6 @@
 /**
- * dsh-path-mention 宿主半：两条同源 HTTP 路由。
- *
- *   POST /dsh-path-mention/resolve  {cwd, tokens} → {results}：哪些片段在本机真实存在
- *   POST /dsh-path-mention/open      {path, action} → 在本机打开：action 是 open（目录用默认程序打开）、reveal（在访达中显示）
- *   POST /dsh-path-mention/open-with {path, app}    → 用宿主头栏菜单清单里的某个应用打开（见 src/apps.ts）
- *
- * 左键点目录走这里：宿主侧栏只预览文件，工作区外的目录会报错。右键菜单的打开方式用宿主的会话接口，
- * 只有宿主接口不在时才退回这里。只接受真实存在的绝对路径，动作是固定的两种，不执行任意程序。
+ * 路径提及的宿主路由。解析只返回真实文件和目录，打开动作只接受绝对路径和已知操作。
+ * 文件可用菜单中的编辑器或终端打开。旧客户端也可用 open-with 打开目录。
  *
  * @module dsh-path-mention
  */
@@ -97,12 +91,21 @@ export function applyPathMention(ctx: Context): void {
     child.unref()
   }
 
-  ctx.inject(['webServer'], (webCtx) => {
+  ctx.inject(['webServer', 'connection'], (webCtx) => {
+    const connection = webCtx.get('connection') as unknown as {
+      requestRejection(req: IncomingMessage): 401 | 403 | undefined
+    }
+    const acceptPost = (req: IncomingMessage, res: ServerResponse): boolean => {
+      const rejection = connection.requestRejection(req) ?? (req.method === 'POST' && isSameOrigin(req) ? undefined : 403)
+      if (rejection === undefined) return true
+      send(res, rejection, { error: 'forbidden' })
+      return false
+    }
     webCtx.effect(() => webCtx.webServer.register({
       kind: 'exact',
       path: RESOLVE_PATH,
       handler: async (req: IncomingMessage, res: ServerResponse) => {
-        if (req.method !== 'POST' || !isSameOrigin(req)) return send(res, 403, { error: 'forbidden' })
+        if (!acceptPost(req, res)) return
         try {
           const body = await readJson(req) as { cwd?: unknown; tokens?: unknown }
           const cwd = typeof body.cwd === 'string' && isAbsolute(body.cwd) ? body.cwd : undefined
@@ -118,7 +121,7 @@ export function applyPathMention(ctx: Context): void {
       kind: 'exact',
       path: OPEN_PATH,
       handler: async (req: IncomingMessage, res: ServerResponse) => {
-        if (req.method !== 'POST' || !isSameOrigin(req)) return send(res, 403, { error: 'forbidden' })
+        if (!acceptPost(req, res)) return
         try {
           const body = await readJson(req) as { path?: unknown; action?: unknown }
           const path = existingPath(body.path)
@@ -139,7 +142,7 @@ export function applyPathMention(ctx: Context): void {
       kind: 'exact',
       path: OPEN_WITH_PATH,
       handler: async (req: IncomingMessage, res: ServerResponse) => {
-        if (req.method !== 'POST' || !isSameOrigin(req)) return send(res, 403, { error: 'forbidden' })
+        if (!acceptPost(req, res)) return
         try {
           const body = await readJson(req) as { path?: unknown; app?: unknown }
           const path = existingPath(body.path)

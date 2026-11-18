@@ -14,16 +14,16 @@ const OK_NO_UPLOAD: RequestTiming = {
 }
 
 describe('统计卡的最近请求分段行', () => {
-  it('有真实请求时，每个请求一行，右边是上传/等首字/返回这些真数字', () => {
+  it('有真实请求时，每个请求一行，右边是上传/等首段内容/返回这些真数字', () => {
     const lines = recentRequestLines([OK_WITH_UPLOAD, OK_NO_UPLOAD])
     assert.equal(lines.length, 2)
     assert.equal(lines[0]!.label, '第 8 步')
     assert.match(lines[0]!.value, /上传 9\.6 秒/)
-    assert.match(lines[0]!.value, /等首字 6\.4 秒/)
+    assert.match(lines[0]!.value, /等首段内容 6\.4 秒/)
     assert.match(lines[0]!.value, /返回 0\.0 秒/)
     assert.match(lines[0]!.title, /整次 16秒/)
     assert.equal(lines[1]!.label, '第 9 步')
-    assert.match(lines[1]!.value, /发出到首字 3\.4 秒/)
+    assert.match(lines[1]!.value, /发出到首段内容 3\.4 秒/)
   })
 
   it('还在等 magpie 记录时也先占一行，说清正在等', () => {

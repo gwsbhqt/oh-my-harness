@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url'
 import { COMMANDS, validateCommand } from '../commands.ts'
 import { UsageError } from '../gateway.ts'
 import { appLaunchEnv, backendRunning, fromSsh, hostRunning, offlineDoctor, layeredDoctor, reportText, type Report } from './doctor.ts'
-import { DEFAULT_FEED, appVersion, fetchFeed, pruneUpgrade, stageRelease, swapBack, swapIn, type Swap } from './upgrade.ts'
+import { DEFAULT_FEED, appVersion, discardStagedRelease, fetchFeed, keepCheckedRelease, pruneUpgrade, stageRelease, swapBack, swapIn, type Swap } from './upgrade.ts'
 
 /** argv → 位置参数 + 选项。`--key value`、`--key=value`、`--flag`；重复的选项收成数组；`--` 之后全算位置参数。 */
 export function parseArgv(argv: string[], booleans: Set<string>, takesValue: (key: string, next: string) => boolean = () => false): { positional: string[]; options: Record<string, unknown> } {
@@ -211,6 +211,7 @@ export function createCli(
   stderr: (text: string) => unknown = (text) => process.stderr.write(text),
   spawnDetached: (args: string[], env: NodeJS.ProcessEnv, log: string) => number = spawnDetachedCli,
   app: AppControl = realApp,
+  prepareRelease: typeof stageRelease = stageRelease,
 ): (argv: string[]) => Promise<number> {
   const HOME = env['DSH_HOME'] ?? join(homedir(), '.dsh')
   const SOCKET = env['DSH_USE_SOCKET'] ?? join(HOME, 'dsh-use', 'dsh.sock')
@@ -278,8 +279,9 @@ export function createCli(
     })
   }
 
+  let logOutput = stdout
   function print(text: string): void {
-    stdout(text.endsWith('\n') ? text : `${text}\n`)
+    logOutput(text.endsWith('\n') ? text : `${text}\n`)
   }
 
   class CliExit extends Error {
@@ -315,9 +317,10 @@ export function createCli(
 
   function output(res: RunResponse, asJson: boolean): void {
     if (asJson) {
-      print(JSON.stringify(res.ok
+      const payload = res.ok
         ? { ok: true, status: res.status ?? 'ok', data: res.data ?? null, ...(receipt === undefined ? {} : { receipt }), ...(res.meta === undefined ? {} : { meta: res.meta }) }
-        : { ok: false, error: res.error ?? { code: 'internal', message: '通信口没给出错误信息' }, ...(res.status === undefined ? {} : { status: res.status }), ...(res.data === undefined ? {} : { data: res.data }), ...(receipt === undefined ? {} : { receipt }) }, null, 2))
+        : { ok: false, error: res.error ?? { code: 'internal', message: '通信口没给出错误信息' }, ...(res.status === undefined ? {} : { status: res.status }), ...(res.data === undefined ? {} : { data: res.data }), ...(receipt === undefined ? {} : { receipt }) }
+      stdout(`${JSON.stringify(payload, null, 2)}\n`)
       return
     }
     if (res.ok) print(res.text ?? '')
@@ -476,7 +479,7 @@ export function createCli(
       if (installError !== undefined) fail(`DSH 已拉起，但没换成新版：${installError}`, EXIT.error)
       if (installed !== undefined) {
         print(`DSH 已就绪，App 现在是 ${installed.to}`)
-        try { pruneUpgrade(UPGRADE_DIR); print(`已删掉旧版 ${installed.from || '（无）'} 和下载文件`) } catch (error) { stamp(`删旧版和下载目录没成功，不影响使用：${error instanceof Error ? error.message : String(error)}`) }
+        try { pruneUpgrade(UPGRADE_DIR, installed); print(`已删掉旧版 ${installed.from || '（无）'} 和下载文件`) } catch (error) { stamp(`删旧版和下载目录没成功，不影响使用：${error instanceof Error ? error.message : String(error)}`) }
         return EXIT.ok
       }
       print('DSH 已就绪')
@@ -612,8 +615,6 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
     })
   }
   const QUIT_WAIT_MS = Number(env['DSH_USE_QUIT_WAIT_MS'] ?? 30_000)
-  /** 会话、排队消息和后台任务清场的最长等待；提前清干净会立即继续。 */
-  const QUIT_CLEAR_MS = Number(env['DSH_USE_QUIT_CLEAR_MS'] ?? 5_000)
   const KEEP_LOGS = 20
   // profile 改动可触发插件热重载；给通信口重建留出宽限，避免把暂时不可达判成永久故障。
   const RELOAD_GRACE_MS = Number(env['DSH_USE_RELOAD_GRACE_MS'] ?? 30_000)
@@ -695,14 +696,19 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
     failureDetail = undefined
     restartState = {}
     installApp = install
+    let code: number
     try {
       recordRestart('checking', { startedAt: Date.now(), notify, quitVia, message: '正在检查，尚未重启' })
       const outcome = await attempt(() => restartNow(options))
-      if (outcome.code === EXIT.usage && notify === undefined) { recordRestart('failed', { message: outcome.reason || '被安全保护拒绝', finishedAt: Date.now() }); return outcome.code }
-      return await finish(outcome, notify, 0)
+      if (outcome.code === EXIT.usage && notify === undefined) {
+        recordRestart('failed', { message: outcome.reason || '被安全保护拒绝', finishedAt: Date.now() })
+        code = outcome.code
+      } else {
+        code = await finish(outcome, notify, 0)
+      }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
-      return await finish({ code: error instanceof CliExit ? error.code : EXIT.error, interrupted: [], reason, ms: 0 }, notify, 0)
+      code = await finish({ code: error instanceof CliExit ? error.code : EXIT.error, interrupted: [], reason, ms: 0 }, notify, 0)
     } finally {
       // 不论重启成没成，为它暂停过的目标都要恢复，免得目标就此停住。
       try { await resumeGoals() } finally {
@@ -715,6 +721,13 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
         restartOwned = false
       }
     }
+    if (invocationJson) {
+      const result = code === EXIT.ok
+        ? { ok: true, status: 'completed', data: restartState }
+        : { ok: false, status: 'failed', data: restartState, error: { code: 'restart-failed', message: String(restartState.message) } }
+      output(result, true)
+    }
+    return code
   }
 
   /**
@@ -744,7 +757,7 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
         stream.on('data', (text: string) => {
           appendFileSync(index === 0 ? stdoutLog : stderrLog, text)
           collectors[index]!.push(text)
-          ;(index === 0 ? stdout : stderr)(text)
+          ;(index === 0 ? logOutput : stderr)(text)
         })
       }
       child.on('error', (caught: NodeJS.ErrnoException) => { error = caught })
@@ -923,9 +936,10 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
   /**
    * 清掉会让 App 弹退出确认框的东西，返回 undefined 表示清干净了，否则返回卡在哪。
    * 重启一律强制：在跑的会话中止（宿主保留排队消息），后台任务停掉（重启后在原会话重新拉起），
-   * 有排队消息但没在跑的会话等它自己开跑或清空，最多 5 秒。
+   * 安装前必须等到清场完成，普通重启可以在较短等待后结束进程。
    */
-  async function clearQuitBlockers(running: string[], allowQuietNotices = false): Promise<string | undefined> {
+  async function clearQuitBlockers(running: string[], beforeUpdate = false): Promise<string | undefined> {
+    const waitMs = Number(env['DSH_USE_QUIT_CLEAR_MS'] ?? (beforeUpdate ? 30_000 : 5_000))
     // 退出前那一刻还在跑的子代理：它们会被中止，重启后不会自己接着跑，要告诉派它们的会话。
     const before = await quitBlockers()
     const roots = new Set(running)
@@ -967,7 +981,7 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
           const parent = parents[id]
           const res = parent === undefined
             ? await run('cancel', [id], {}, 20_000)
-            : await run('api', ['call', 'subagents/interruptByParent', JSON.stringify({ childSessionId: id, parentSessionId: parent, mode: 'continuable' })], {}, 20_000)
+            : await run('api', ['call', 'subagents/interruptByUser', JSON.stringify({ childSessionId: id })], {}, 20_000)
           if (!res.ok) stamp(`中止会话 ${shortId(id)} 被拒：${res.error?.message ?? '未知'}`)
           // 等待途中才看到在跑的子代理，也要告诉派它的会话（开头那批已经记过）。
           // 同主会话：只因名下任务被停、被「任务结束」通知叫醒的子代理不算被打断，名下任务的说明照样送上级。
@@ -985,13 +999,13 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
       }
     }
     await cancel([...new Set([...running, ...(before?.running ?? [])])])
-    const deadline = Date.now() + QUIT_CLEAR_MS
+    const deadline = Date.now() + waitMs
     let killedJobs = false
     for (;;) {
       const b = await quitBlockers()
       if (b === undefined) return appRunning() ? '无法确认退出状态，' : undefined
       if (b.clear) return undefined
-      const quietOnly = allowQuietNotices && b.running.length === 0 && b.jobs.length === 0 && b.queued.length > 0 && b.queued.every((id) => {
+      const quietOnly = beforeUpdate && b.running.length === 0 && b.jobs.length === 0 && b.queued.length > 0 && b.queued.every((id) => {
         const detail = b.queuedDetails?.find((item) => item.id === id)
         return detail !== undefined && detail.nextTurnCount === 0 && detail.nextStepCount > 0 && detail.nextStepCount === detail.nextStepSources.length && detail.nextStepSources.every((source) => source.form === 'notice' && (source.kind === 'dsh-monitor' || source.kind === 'python-repl-jobs'))
       })
@@ -1012,11 +1026,12 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
         killedJobs = true
       }
       if (Date.now() >= deadline) {
+        quitTimeBlockers = b
         return [
-          `等了 ${Math.max(1, Math.round(QUIT_CLEAR_MS / 1000))} 秒，退出仍会弹确认框：`,
-          b.running.length > 0 ? `${b.running.length} 个会话还在跑；` : '',
-          b.queued.length > 0 ? `${b.queued.length} 个会话还有排队消息；` : '',
-          b.jobs.length > 0 ? `${b.jobs.length} 个后台任务还在跑；` : '',
+          `等了 ${Math.max(1, Math.round(waitMs / 1000))} 秒，退出仍会弹确认框：`,
+          b.running.length > 0 ? `${b.running.length} 个会话还在跑（${b.running.map(shortId).join(', ')}）；` : '',
+          b.queued.length > 0 ? `${b.queued.length} 个会话还有排队消息（${b.queued.map(shortId).join(', ')}）；` : '',
+          b.jobs.length > 0 ? `${b.jobs.length} 个后台任务还在跑（${b.jobs.map((j) => j.id).join(', ')}）；` : '',
         ].join('')
       }
       await sleep(200)
@@ -1561,6 +1576,17 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
     return result.ok ? EXIT.ok : EXIT.error
   }
 
+  // 后台重启会在另一进程接管安装包。只有排队或安装失败的请求需要在此释放自己的临时目录。
+  async function discardReleaseOnFailure(staged: string, action: () => Promise<number>): Promise<number> {
+    let code: number | undefined
+    try {
+      code = await action()
+      return code
+    } finally {
+      if (code !== EXIT.ok) discardStagedRelease(UPGRADE_DIR, staged)
+    }
+  }
+
   /**
    * upgrade：按更新源升级 App。先下载、校验、用新版 App 对实际配置跑离线检查，全过才交给 restart --install-app，
    * 由重启流程在旧 App 退出后替换、拉起；新版拉不起来就换回旧版；新版就绪后旧版和下载文件一并删掉。
@@ -1570,16 +1596,29 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
     const entry = fetchFeed(feed)
     const current = existsSync(APP) ? appVersion(APP) : ''
     print(`本机 ${current || '未安装'}，更新源最新 ${entry.version}${entry.releaseDate ? `（${entry.releaseDate} 发布）` : ''}`)
-    if (entry.version === current && options['force'] !== true) { print('已是最新，不用升级'); return EXIT.ok }
-    const staged = await stageRelease(entry, { dir: UPGRADE_DIR, installed: APP, print })
-    installApp = staged
-    let ok: boolean
-    try { ok = await preflight() } finally { installApp = undefined }
-    if (!ok) return EXIT.error
-    if (options['check'] === true) { print(`新版已备好，用它对实际配置的离线检查通过；按 --check 没有替换：${staged}`); return EXIT.ok }
-    const pass: Record<string, unknown> = { 'install-app': staged }
-    for (const key of ['detach', 'notify', 'quit-via', 'before']) if (options[key] !== undefined) pass[key] = options[key]
-    return restart(pass)
+    const versions = { currentVersion: current || null, targetVersion: entry.version }
+    if (entry.version === current && options['force'] !== true) {
+      output({ ok: true, status: 'up-to-date', text: '已是最新，不用升级', data: versions }, invocationJson)
+      return EXIT.ok
+    }
+    const staged = await prepareRelease(entry, { dir: UPGRADE_DIR, installed: APP, print })
+    return discardReleaseOnFailure(staged, async () => {
+      installApp = staged
+      let ok: boolean
+      try { ok = await preflight() } finally { installApp = undefined }
+      if (!ok) {
+        if (invocationJson) output({ ok: false, status: 'failed', error: { code: 'preflight-failed', message: lastFailure }, data: { ...versions, ...failureDetail } }, true)
+        return EXIT.error
+      }
+      if (options['check'] === true) {
+        const checked = keepCheckedRelease(UPGRADE_DIR, staged)
+        output({ ok: true, status: 'prepared', text: `新版已备好，用它对实际配置的离线检查通过；按 --check 没有替换：${checked}`, data: { ...versions, stagedApp: checked } }, invocationJson)
+        return EXIT.ok
+      }
+      const pass: Record<string, unknown> = { 'install-app': staged }
+      for (const key of ['detach', 'notify', 'quit-via', 'before']) if (options[key] !== undefined) pass[key] = options[key]
+      return restart(pass)
+    })
   }
 
   interface HelpEntry { name: string; summary: string; usage: string; writes: boolean }
@@ -1666,6 +1705,7 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
   async function main(argv: string[]): Promise<number> {
     const { command, positional, options, asJson } = parseCommand(argv)
     invocationJson = asJson
+    logOutput = asJson && (command === 'upgrade' || command === 'restart') ? stderr : stdout
     receipt = undefined
     if (command !== 'answer') {
       const rawJson = parseArgv(argv.slice(1), BOOLEAN_OPTIONS).options['json']
@@ -1687,7 +1727,8 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
     if (command === 'upgrade') return upgrade(options)
     if (command === 'restart') {
       if (positional.length > 0) fail('restart 不接受位置参数；dsh-use help restart 查看用法', EXIT.usage)
-      return restart(options)
+      const staged = options['install-app']
+      return typeof staged === 'string' ? discardReleaseOnFailure(staged, () => restart(options)) : restart(options)
     }
     try {
       if (command === 'send' || command === 'new' || command === 'chat') resolveNotifySelf(options)

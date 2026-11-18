@@ -1,5 +1,7 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
+import { Context } from '@deepseek-ai/cordis'
+import { SkillRegistry } from '@deepseek-ai/dsh-skill'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -127,6 +129,28 @@ class FakeRegistry {
   async get(name: string, options?: unknown) { this.calls.push(options); return this.items.find((s) => s.name === name) }
 }
 
+test('宿主列技能只判一次偏好，设置页能恢复关闭的技能', async (t) => {
+  const ctx = new Context()
+  const registry = new SkillRegistry(ctx)
+  const entry = { name: 'example-guide', description: 'Example guide', content: 'Example instructions', source: 'runtime' }
+  t.after(registry.register(entry))
+  const preferences = setLevel(EMPTY_DOCUMENT, { layer: 'global' }, 'skills', entry.name, 'off')
+  const document = t.mock.fn(() => preferences)
+  const filter = installFilter(registry, { document, projectRoot: (cwd) => cwd, home: HOME })
+  t.after(() => filter.dispose())
+
+  assert.deepEqual(await registry.list(), [])
+  assert.equal(document.mock.callCount(), 1)
+  assert.equal(Object.hasOwn(registry, 'list'), false)
+  assert.deepEqual(await registry.snapshot(), { skills: [], complete: true })
+  assert.equal(await registry.get(entry.name), undefined)
+  assert.deepEqual((await filter.raw.list()).map(s => s.name), [entry.name])
+  filter.dispose()
+  assert.deepEqual((await registry.list()).map(s => s.name), [entry.name])
+  assert.equal((await registry.snapshot()).skills[0]?.name, entry.name)
+  assert.equal((await registry.get(entry.name))?.content, entry.content)
+})
+
 test('装上过滤后 list / snapshot / get 一致改写，卸载后原样', async () => {
   const reg = new FakeRegistry([skill('lark-im-live'), skill('ship'), skill('browser-use'), skill('keep')])
   const projectRoot = (cwd: string) => (cwd.startsWith('/work/nexus') ? '/work/nexus' : cwd)
@@ -149,11 +173,11 @@ test('装上过滤后 list / snapshot / get 一致改写，卸载后原样', asy
 test('别的插件后来又包了一层时卸载不摘掉它的那层', async () => {
   const reg = new FakeRegistry([skill('lark-im-live')]) as unknown as Record<string, unknown> & FakeRegistry
   const handle = installFilter(reg, { document: () => doc, projectRoot: (c) => c, home: HOME })
-  const ours = reg['list'] as (o?: unknown) => Promise<CandidateLike[]>
-  const theirs = async function (this: unknown, o?: unknown) { return ours.call(this, o) }
-  Object.defineProperty(reg, 'list', { value: theirs, writable: true, configurable: true })
+  const ours = reg.snapshot
+  const theirs = async function (this: FakeRegistry, options?: unknown) { return ours.call(this, options) }
+  Object.defineProperty(reg, 'snapshot', { value: theirs, writable: true, configurable: true })
   handle.dispose()
-  assert.equal(reg['list'], theirs)
+  assert.equal(reg.snapshot, theirs)
   assert.equal((await reg.list({})).length, 1, '我们那层变成直通')
 })
 

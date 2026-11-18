@@ -24,10 +24,13 @@ import { createRoot, type Root } from 'react-dom/client'
 import { IconCopyOutlineRegular, IconFolderOpenOutlineRegular, IconRightUpOutlineRegular, Menu, Toast, writeClipboard, type MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { StoredEntry } from '@deepseek-ai/dsh-client-ui-slots'
+import { fileAddressFor } from '@deepseek-ai/dsh-util-workspace-path'
 // 以下类型导入会被擦除，只为拿到 Context 的类型扩充。
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-import { inlineCodeTokens, OPEN_PATH, OPEN_WITH_PATH, parsePathToken, RESOLVE_PATH, type Resolved, type ResolveResponse } from '../../shared/path-mention/token.ts'
+import { OPEN_IN_APP_APPS_ROUTE, OPEN_IN_APP_ICON_PREFIX_ROUTE } from '@deepseek-ai/dsh-host-open-in-app/shared'
+import { inlineCodeTokens, parsePathToken, type Resolved } from '../../shared/path-mention/token.ts'
+import { fetchResolved, openOnHost, openWithApp } from './requests.ts'
 import { absoluteTarget, composerMention, pickPreferred, lineSuffix, mentionLabel, mentionModelText, pastedPathText, relativePath, type MenuAction, type MentionTarget } from './menu.ts'
 import { ASSISTANT_KEY, CHAT_LOCALE, SLOT } from './ids.ts'
 import { openableApps } from '../../shared/path-mention/apps.ts'
@@ -66,56 +69,13 @@ interface RootInfo {
 }
 const roots = new WeakMap<Element, RootInfo>()
 
-async function fetchResolved(cwd: string | undefined, tokens: string[], signal?: AbortSignal): Promise<Record<string, Resolved>> {
-  const response = await fetch(RESOLVE_PATH, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
-    body: JSON.stringify({ cwd, tokens }),
-    ...(signal === undefined ? {} : { signal }),
-  })
-  if (!response.ok) return {}
-  const value = (await response.json()) as Partial<ResolveResponse>
-  return typeof value.results === 'object' && value.results !== null ? value.results : {}
-}
-
-function openOnHost(path: string, action: 'open' | 'reveal'): void {
-  void fetch(OPEN_PATH, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ path, action }),
-  }).catch(() => undefined)
-}
-
-/** 用宿主头栏清单里的某个应用打开；返回宿主有没有接下（没装、不在清单里都算失败）。 */
-async function openWithApp(path: string, app: string): Promise<boolean> {
-  try {
-    const response = await fetch(OPEN_WITH_PATH, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path, app }),
-    })
-    return response.ok
-  } catch {
-    return false
-  }
-}
-
-
-/**
- * 打开方式和宿主头栏「打开工作区」那个菜单同一份：宿主那个菜单从 `/open-in-app/apps` 拿本机装了的应用 id
- * （按宿主清单的顺序，访达在最前），图标走 `/open-in-app/icon/<id>`，名字用它的文案（命名空间 `open-in-app`、
- * 键 `app.<id>`）。三样都直接问宿主，所以显示的应用、顺序、图标、名字都和头栏一模一样。
- * 只有「打开」走本插件：宿主那个打开接口只收目录，右键的却常常是文件（见 src/apps.ts）。
- */
-const APPS_ROUTE = 'open-in-app/apps'
-const ICON_ROUTE = 'open-in-app/icon'
 const APP_LOCALE = 'open-in-app'
 
 let installedApps: Promise<string[]> | undefined
 
 /** 本机装了的应用 id，整个页面只问一次（宿主那边也是一次探测、之后不变）。问不到就是空列表，下次右键再试。 */
 function loadInstalledApps(): Promise<string[]> {
-  installedApps ??= fetch(APPS_ROUTE, { headers: { accept: 'application/json' } })
+  installedApps ??= fetch(OPEN_IN_APP_APPS_ROUTE, { headers: { accept: 'application/json' } })
     .then(async (response) => {
       if (!response.ok) throw new Error(`HTTP ${String(response.status)}`)
       const payload = (await response.json()) as { apps?: unknown }
@@ -259,10 +219,10 @@ export function menuItems(target: MentionTarget, cwd: string | undefined, apps: 
   // 文件用访达打开就是「显示文件位置」，和 footer 那项重复，所以文件不列访达。
   const rest = apps.filter((id) => id !== preferred && !(id === 'finder' && target.kind === 'file'))
   const items: MenuEntry[] = []
-  if (preferred !== undefined) items.push({ id: `app:${preferred}`, icon: <AppIcon source={`${ICON_ROUTE}/${preferred}`} />, label: `用 ${label(preferred)} 打开` }, { type: 'separator', id: 'sep-preferred' })
+  if (preferred !== undefined) items.push({ id: `app:${preferred}`, icon: <AppIcon source={`${OPEN_IN_APP_ICON_PREFIX_ROUTE}/${preferred}`} />, label: `用 ${label(preferred)} 打开` }, { type: 'separator', id: 'sep-preferred' })
   items.push(...copies)
   if (rest.length > 0) items.push({ type: 'separator', id: 'sep-open' })
-  for (const id of rest) items.push({ id: `app:${id}`, icon: <AppIcon source={`${ICON_ROUTE}/${id}`} />, label: label(id) })
+  for (const id of rest) items.push({ id: `app:${id}`, icon: <AppIcon source={`${OPEN_IN_APP_ICON_PREFIX_ROUTE}/${id}`} />, label: label(id) })
   return items
 }
 
@@ -331,7 +291,7 @@ function ContextMenu({ state, onClose }: { state: MenuState | undefined; onClose
           else if (id === 'reveal') openOnHost(target.path, 'reveal')
           else if (id.startsWith('app:')) {
             rememberLastUsed(id.slice(4))
-            run(openWithApp(target.path, id.slice(4)), '打开失败，请重试')
+            run(openWithApp(target, id.slice(4)), '打开失败，请重试')
           }
         }}
         onClose={onClose}
@@ -599,17 +559,6 @@ function parseLineRef(ref: string): LineRef | undefined {
   }
 }
 
-/** 和宿主 `fileAddressFor` 一样的文件地址：工作区内写相对路径，工作区外原样写绝对路径。 */
-function fileAddress(sessionId: string, cwd: string | undefined, path: string): string {
-  const encode = (segment: string) => encodeURIComponent(segment).replace(/%3A/giu, ':')
-  let normalized = path.replace(/\\/gu, '/')
-  const root = cwd === undefined ? '' : cwd.replace(/\\/gu, '/').replace(/\/+$/u, '')
-  if (root !== '' && normalized === root) normalized = ''
-  else if (root !== '' && normalized.startsWith(`${root}/`)) normalized = normalized.slice(root.length + 1)
-  normalized = normalized.replace(/^(?:\.\/)+/u, '')
-  return `dsh-resource://file/session/${encode(sessionId)}/${normalized.split('/').map(encode).join('/')}`
-}
-
 interface InputTriggersFace {
   registerSource(source: unknown): () => void
 }
@@ -639,7 +588,7 @@ function registerLineSource(ctx: ClientContext): () => void {
       const sidebar = ctx.get('sidebarRight' as never) as SidebarRightFace | undefined
       if (value === undefined || sidebar === undefined) return false
       const cwd = (ctx.get('sessions' as never) as SessionsFace | undefined)?.list.getSnapshot().byId[session.sessionId]?.cwd
-      sidebar.openResource(fileAddress(session.sessionId, cwd, value.path), { params: { line: value.line } })
+      sidebar.openResource(fileAddressFor(session.sessionId, cwd, value.path), { params: { line: value.line } })
       return true
     },
     codec: {
