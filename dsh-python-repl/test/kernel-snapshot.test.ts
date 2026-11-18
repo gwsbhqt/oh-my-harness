@@ -14,7 +14,7 @@ import { strict as assert } from 'node:assert'
 import { after, before, describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { ReplSession } from '../src/session.ts'
@@ -31,12 +31,12 @@ before(async () => {
 const scratch = mkdtempSync(join(tmpdir(), 'dsh-snapshot-'))
 const sessions: ReplSession[] = []
 let counter = 0
-function newSession(statePath: string | null = join(scratch, `s${++counter}`)): ReplSession {
+function newSession(statePath: string | null = join(scratch, `s${++counter}`), cwd = scratch): ReplSession {
   const session = new ReplSession({
     python: venvPython,
     vendorRoot: join(root, 'vendor', 'prime'),
     pythonRoot: join(root, 'python'),
-    cwd: scratch,
+    cwd,
     startupTimeoutMs: 60_000,
     ...(statePath === null ? {} : { statePath }),
   })
@@ -215,6 +215,73 @@ describe('variables survive a kernel replacement', () => {
     assert.match(text(fresh), /'set in the restarting cell'/)
   })
 
+  it('a timed out restart keeps the live progress and the previous snapshot without replaying user code', { timeout: 120_000 }, async () => {
+    const dir = join(scratch, 'slow-restart')
+    const session = newSession(dir)
+    const attempts = join(dir, 'saves')
+    const effects = join(dir, 'effects')
+    assert.equal((await session.runCell('progress = 1', noTools())).error, undefined)
+    assert.equal((await session.panelControl('stop')).ok, true)
+    const payload = join(dir, 'kernel-state.dill')
+    const previous = readFileSync(payload)
+    assert.equal((await session.runCell('assert progress == 1', noTools())).error, undefined)
+    const epoch = session.epoch
+    const restart = await session.runCell([
+      'progress = 2', `with open(${JSON.stringify(effects)}, "a") as record:`, '    record.write("changed\\n")', 'del record',
+      'class SlowValue:', '    def __reduce__(self):', `        with open(${JSON.stringify(attempts)}, "a") as record:`,
+      '            record.write("save\\n")', '        __import__("time").sleep(15)', '        return (int, (2,))',
+      'pending = SlowValue()', 'await repl.restart()',
+    ].join('\n'), noTools())
+    assert.equal(restart.error?.kind, 'exception', JSON.stringify(restart))
+    assert.match(restart.error.message, /restart failed.*timed out/)
+    assert.match(restart.error.message, /retry repl\.restart\(\) on its own/)
+    assert.doesNotMatch(text(restart), /Kernel restarted as requested/)
+    assert.equal(session.kernelAlive, true)
+    assert.equal(session.epoch, epoch)
+    assert.deepEqual(readFileSync(payload), previous)
+    const readback = await session.runCell('assert progress == 2\ndel pending', noTools())
+    assert.equal(readback.error, undefined, JSON.stringify(readback))
+    assert.equal((await session.runCell('await repl.restart()', noTools())).error, undefined)
+    assert.equal((await session.runCell('assert progress == 2', noTools())).error, undefined)
+    assert.equal(session.epoch, epoch + 1)
+    assert.equal(readFileSync(attempts, 'utf8'), 'save\n')
+    assert.equal(readFileSync(effects, 'utf8'), 'changed\n')
+  })
+
+  it('a failed final save preserves the original exception, and closing the session still stops it', { timeout: 120_000 }, async () => {
+    const dir = join(scratch, 'write-failure')
+    const session = newSession(dir)
+    assert.equal((await session.runCell('progress = 1', noTools())).error, undefined)
+    mkdirSync(join(dir, 'kernel-state.dill'))
+    const result = await session.runCell('progress = 2\nawait repl.restart()\nraise ValueError("original failure")', noTools())
+    assert.match(result.error?.message ?? '', /ValueError: original failure/)
+    assert.match(text(result), /restart failed.*write failed/)
+    assert.equal((await session.runCell('assert progress == 2', noTools())).error, undefined)
+    const epoch = session.epoch
+    await session.dispose()
+    assert.equal(session.kernelAlive, false)
+    assert.equal(session.epoch, epoch)
+  })
+
+  it('a failed restore protects the existing snapshot through autosave, restart and final close', { timeout: 120_000 }, async () => {
+    const dir = mkdtempSync(join(scratch, 'incomplete-'))
+    const payload = join(dir, 'kernel-state.dill')
+    const damaged = 'unreadable fixture snapshot'
+    writeFileSync(payload, damaged)
+    const session = newSession(dir)
+    const first = await session.runCell('progress = 2', noTools())
+    assert.equal(first.error, undefined)
+    assert.match(text(first), /state could not be revived/)
+    await debounce()
+    assert.equal(readFileSync(payload, 'utf8'), damaged)
+    const requested = await session.runCell('await repl.restart()', noTools())
+    assert.match(requested.error?.message ?? '', /previous restore was incomplete/)
+    assert.equal((await session.panelControl('stop')).ok, false)
+    assert.equal((await session.runCell('assert progress == 2', noTools())).error, undefined)
+    await session.dispose()
+    assert.equal(readFileSync(payload, 'utf8'), damaged)
+  })
+
   for (const mode of ['w', 'w+', 'x']) {
     for (const savedClosed of [false, true]) {
       it(`repl.restart() preserves files for ${savedClosed ? 'closed' : 'open'} ${mode} handles, including nested handles`, { timeout: 180_000 }, async () => {
@@ -269,7 +336,9 @@ describe('variables survive a kernel replacement', () => {
   it('a value the snapshot cannot hold is named, not silently dropped', { timeout: 180_000 }, async () => {
     const session = newSession()
     assert.equal((await session.runCell('kept = 1\ngen = (i for i in range(3))', noTools())).error, undefined)
-    assert.equal((await session.runCell('await repl.restart()', noTools())).error, undefined)
+    const requested = await session.runCell('await repl.restart()', noTools())
+    assert.equal(requested.error, undefined)
+    assert.match(text(requested), /These names could not be saved: gen/)
     const fresh = await session.runCell('kept', noTools())
     assert.equal(fresh.error, undefined, JSON.stringify(fresh.error))
     assert.match(text(fresh), /1 name is back\.\nVariables[^\n]*: kept\./)
@@ -280,19 +349,43 @@ describe('variables survive a kernel replacement', () => {
     const session = newSession()
     assert.equal((await session.runCell('saved_before = 7', noTools())).error, undefined)
     await debounce()
+    assert.equal((await session.runCell('saved_before = 8', noTools())).error, undefined)
     const crash = await session.runCell('import os\nos._exit(3)', noTools())
     assert.equal(crash.error?.kind, 'worker-exit')
-    assert.match(crash.error?.message ?? '', /restores the variables saved after the last successful cell/)
+    assert.match(crash.error?.message ?? '', /restore the most recent saved snapshot/)
     const fresh = await session.runCell('saved_before', noTools())
     assert.equal(fresh.error, undefined, JSON.stringify(fresh.error))
     assert.match(text(fresh), /^7$/m)
     assert.match(text(fresh), /1 name is back\.\nVariables[^\n]*: saved_before\./)
   })
 
+  it('a configured snapshot directory with unavailable support keeps the live kernel', { timeout: 120_000 }, async () => {
+    const fixture = mkdtempSync(join(scratch, 'unsupported-'))
+    writeFileSync(join(fixture, 'dill.py'), 'raise ImportError("fixture snapshot support unavailable")\n')
+    const session = newSession(join(fixture, 'state'), fixture)
+    const setup = await session.runCell('progress = 2', noTools())
+    assert.equal(setup.error, undefined)
+    assert.match(text(setup), /dill is not installed/)
+    const epoch = session.epoch
+    const restart = await session.runCell('await repl.restart()', noTools())
+    assert.match(restart.error?.message ?? '', /restart failed.*dill is not installed/)
+    for (const action of ['restart', 'stop'] as const) {
+      const result = await session.panelControl(action)
+      assert.equal(result.ok, false)
+      assert.match(result.reason!, /dill is not installed/)
+    }
+    assert.equal((await session.runCell('assert progress == 2', noTools())).error, undefined)
+    assert.equal(session.epoch, epoch)
+    assert.equal((await session.panelControl('reset')).ok, true)
+    assert.equal((await session.runCell('assert "progress" not in globals()', noTools())).error, undefined)
+  })
+
   it('without a state path nothing is saved or claimed', { timeout: 180_000 }, async () => {
     const session = newSession(null)
     assert.equal((await session.runCell('y = 1', noTools())).error, undefined)
-    assert.equal((await session.runCell('await repl.restart()', noTools())).error, undefined)
+    const requested = await session.runCell('await repl.restart()', noTools())
+    assert.equal(requested.error, undefined)
+    assert.match(text(requested), /variables are gone/)
     const fresh = await session.runCell('"y" in globals()', noTools())
     assert.equal(fresh.error, undefined, JSON.stringify(fresh.error))
     assert.match(text(fresh), /^False$/m)

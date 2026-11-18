@@ -518,6 +518,24 @@ class ToolResultViews(unittest.IsolatedAsyncioTestCase):
         self.assertIn("… (1000 chars)", text)
         self.assertLess(len(text), 20_000)
 
+    async def test_provider_capped_grep_reports_only_retained_matches(self) -> None:
+        rows = [{"path": "sample.txt", "lineNumber": n + 1, "line": "hit"} for n in range(260)]
+        for matches in ([], rows):
+            with self.subTest(retained=len(matches)):
+                value = {"matches": matches, "outputCapped": True, "unreadableIncomplete": True,
+                         "unreadable": [{"path": "other.txt", "error": "Permission denied"}]}
+                result = await self.call("grep", value, {"scope": "all"})
+                self.assertEqual(result, value)
+                shown = repr(result)
+                for part in (f"{len(matches)} retained matches", "INCOMPLETE", "capped", "Narrow path, include or pattern",
+                             "scope=all", "some paths could not be read", "other.txt: Permission denied", "list itself"):
+                    self.assertIn(part, shown)
+                self.assertNotIn("holds all", shown)
+                self.assertNotIn("no matches in the selected search scope", shown)
+                if matches:
+                    self.assertIn("10 more not shown", shown)
+                    self.assertIn("r['matches'][250:]", shown)
+
     async def test_big_glob_is_capped_in_the_view(self) -> None:
         paths = [f"p{i}" for i in range(500)]
         result = await self.call("glob", {"paths": paths, "root": "/r"})
@@ -1063,6 +1081,60 @@ class BashJobs(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError) as gone:
             await dsh_kernel._BashResult(kind="promoted", jobId="cap-0", output="")
         self.assertIn("released to save memory", str(gone.exception))
+
+    async def test_direct_reads_do_not_keep_discarded_or_old_receipts_alive(self) -> None:
+        import gc
+        import weakref
+        from unittest.mock import patch
+
+        async def host(payload):
+            job_id = payload["args"].get("command") or payload["args"]["job_id"]
+            if payload["tool"] == "bash":
+                return {"status": "ok", "result": {"kind": "background", "jobId": job_id}}
+            status = "completed" if payload["args"].get("wait") else "running"
+            return {"status": "ok", "result": {"text": "output\n", "job": {"id": job_id, "status": status}}}
+
+        use_cell("cache-fixture", host=host)
+        shell = dsh_kernel._proxy("bash")
+        output = dsh_kernel._proxy("job_output")
+        with patch.object(dsh_kernel, "_KEEP_FINISHED", 2), patch.object(dsh_kernel, "_KEEP_RELEASED_IDS", 3), \
+                patch.object(dsh_kernel, "_HANDLES", {}), patch.object(dsh_kernel, "_RELEASED", {}):
+            receipt = await shell("discarded", "fixture", run_in_background=True)
+            await output(job_id=receipt.jobId)
+            pending = weakref.ref(receipt._handle())
+            del receipt
+            gc.collect()
+            self.assertIsNone(pending())
+            self.assertNotIn("discarded", dsh_kernel._BASH_JOBS)
+
+            receipts = [await shell(f"settled-{i}", "fixture", run_in_background=True) for i in range(6)]
+            oldest = weakref.ref(receipts[0]._handle())
+            for receipt in receipts:
+                await output(job_id=receipt.jobId, wait=True)
+            gc.collect()
+            self.assertIsNone(oldest(), "even a kept receipt must release an evicted result")
+            self.assertEqual(list(dsh_kernel._HANDLES), ["settled-4", "settled-5"])
+            self.assertEqual(list(dsh_kernel._RELEASED), ["settled-1", "settled-2", "settled-3"])
+            with self.assertRaisesRegex(RuntimeError, "released to save memory"):
+                await receipts[3]
+            self.assertEqual((await receipts[4]).text, "output\n")
+
+    async def test_restored_receipt_keeps_direct_reads_with_its_initial_output(self) -> None:
+        import weakref
+        from unittest.mock import patch
+        try:
+            import dill
+        except ImportError:
+            self.skipTest("dill is exercised in the snapshot test environment")
+
+        job_id = "receipt-snapshot"
+        receipt = dsh_kernel._with_view("bash", {"kind": "promoted", "jobId": job_id, "output": "first\n"})
+        saved = dill.dumps(receipt)
+        with patch.object(dsh_kernel, "_BASH_JOBS", weakref.WeakValueDictionary()):
+            restored = dill.loads(saved)
+            use_cell("restored-receipt", host=reply_with({"text": "last\n", "job": {"id": job_id, "status": "completed"}}))
+            await dsh_kernel.call_tool("job_output", {"job_id": job_id})
+            self.assertEqual((await restored).text, "first\nlast\n")
 
     async def test_a_finished_background_job_leaves_the_cancel_table(self) -> None:
         import background

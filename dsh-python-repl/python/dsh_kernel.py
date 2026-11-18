@@ -270,7 +270,12 @@ async def _ready(value: Any) -> Any:
 
 
 class _BashResult(_ToolResult):
-    __slots__ = ()
+    __slots__ = ("_pending", "__weakref__")
+
+    def __setstate__(self, state: tuple[None, dict]) -> None:
+        _, fields = state
+        self._pending = fields["_pending"]
+        _BASH_JOBS[self._pending.id] = self
 
     # A bash call still running past the cell's wait is a job; the result itself is its handle.
     def _handle(self) -> "BashJob":
@@ -285,16 +290,18 @@ class _BashResult(_ToolResult):
                     f"(the kernel keeps the last {_KEEP_FINISHED} finished jobs). Run the command again if you still need it; "
                     "next time keep `await job`'s result in a variable."
                 )
-            handle = BashJob(job_id, "")
-            if self.get("kind") == "promoted":
-                handle._append_output(self.get("output") or "", truncated=self.get("truncated"), spill_paths=self.get("spillPaths"))
-            _HANDLES[job_id] = handle
+            handle = getattr(self, "_pending", None)
+            if handle is None:
+                handle = self._pending = BashJob(job_id, "")
+                if self.get("kind") == "promoted":
+                    handle._append_output(self.get("output") or "", truncated=self.get("truncated"), spill_paths=self.get("spillPaths"))
+                _BASH_JOBS[job_id] = self
         return handle
 
     def __await__(self):
         if self.get("kind") not in ("background", "promoted"):
             return _ready(self).__await__()
-        return self._handle().wait().__await__()
+        return self.wait().__await__()
 
     async def wait(self, timeout_ms: float | None = None) -> Any:
         """The finished job's result (stdout, stderr, exitCode); raises JobStillRunning past the cell's wait."""
@@ -399,8 +406,7 @@ class _ReadResult(_ToolResult):
 
 
 #: Display caps for search views, matching the host's direct-call caps
-#: (`grepMaxMatches` 250, `globMaxResults` 100). A cell gets the COMPLETE
-#: result, so the view must be bounded independently of the stored value.
+#: (`grepMaxMatches` 250, `globMaxResults` 100), independent of provider limits.
 _GREP_SHOW = 250
 _GLOB_SHOW = 100
 _LINE_SHOW = 300
@@ -412,8 +418,8 @@ def _clip_line(line: str) -> str:
 
 def _not_shown(hidden: int, total: int, key: str, shown: int) -> str:
     return (
-        f"… {hidden} more not shown. The value holds all {total}: "
-        f"slice `r['{key}'][{shown}:]` or filter in Python instead of printing them."
+        f"… {hidden} more not shown. Slice `r['{key}'][{shown}:]` "
+        f"or filter the {total} returned {key} in Python."
     )
 
 
@@ -428,7 +434,13 @@ class _GrepResult(_ToolResult):
         unreadable = self.get("unreadable")
         incomplete = self.get("unreadableIncomplete") or isinstance(unreadable, list) and bool(unreadable)
         warning = " · INCOMPLETE: some paths could not be read" if incomplete else ""
-        out = [f"── grep{label} · {len(matches)} matches in {files} files{warning} (view of a dict) ──"]
+        capped = self.get("outputCapped") is True
+        count = f"{len(matches)} retained matches" if capped else f"{len(matches)} matches"
+        if capped:
+            warning += " · INCOMPLETE: search output was capped"
+        out = [f"── grep{label} · {count} in {files} files{warning} (view of a dict) ──"]
+        if capped:
+            out.append("  Narrow path, include or pattern and search again for missing matches.")
         if isinstance(unreadable, list):
             for item in unreadable[:10]:
                 if isinstance(item, dict):
@@ -440,8 +452,9 @@ class _GrepResult(_ToolResult):
         out += [f"{m['path']}:{m['lineNumber']}: {_clip_line(m['line'])}" for m in matches[:_GREP_SHOW]]
         if len(matches) > _GREP_SHOW:
             out.append(_not_shown(len(matches) - _GREP_SHOW, len(matches), "matches", _GREP_SHOW))
-        if not matches:
-            out.append("(no matches in the selected search scope; check the grep contract before concluding absence)")
+        if not matches and not capped:
+            coverage = "readable part of the selected search scope" if incomplete else "selected search scope"
+            out.append(f"(no matches in the {coverage}; check the grep contract before concluding absence)")
         return "\n".join(out)
 
 
@@ -547,6 +560,10 @@ def _with_view(tool: str, result: Any, args: Any = None) -> Any:
             shown._search_scope = scope
     for key, value in list(shown.items()):
         dict.__setitem__(shown, key, _wrap_nested(value))
+    if isinstance(shown, _BashResult) and shown.get("kind") in ("background", "promoted"):
+        job_id = shown.get("jobId")
+        if isinstance(job_id, str) and job_id:
+            shown._handle()
     return shown
 
 
@@ -959,10 +976,8 @@ class _BashJobResult(_ToolResult):
 
 _BASH_JOB_SHOW = 20_000
 
-#: Handles made from a still-running bash result, kept so `await r` sees every piece of output.
+#: Only completed receipts are retained by the kernel. A pending handle belongs to its receipt.
 _HANDLES: dict[str, "BashJob"] = {}
-#: Finished handles in `_HANDLES`, oldest first; past the cap the oldest leave it.
-_FINISHED: dict[str, None] = {}
 #: Ids that left `_HANDLES`, so awaiting one says why instead of waiting on a job DSH forgot.
 _RELEASED: dict[str, None] = {}
 _KEEP_FINISHED = 100
@@ -971,13 +986,10 @@ _KEEP_RELEASED_IDS = 10_000
 
 def _finished(handle: "BashJob") -> None:
     """Keep only the newest finished handles; the result value a cell holds is unaffected."""
-    if _HANDLES.get(handle.id) is not handle:
-        return
-    _FINISHED[handle.id] = None
-    while len(_FINISHED) > _KEEP_FINISHED:
-        old = next(iter(_FINISHED))
-        del _FINISHED[old]
-        _HANDLES.pop(old, None)
+    _HANDLES[handle.id] = handle
+    while len(_HANDLES) > _KEEP_FINISHED:
+        old = next(iter(_HANDLES))
+        del _HANDLES[old]
         _RELEASED[old] = None
     while len(_RELEASED) > _KEEP_RELEASED_IDS:
         del _RELEASED[next(iter(_RELEASED))]
@@ -989,19 +1001,29 @@ def _streams(text: str, truncated: bool | None) -> dict:
     return {"stdout": {"text": head + ("\n" if sep and head and not head.endswith("\n") else ""), "truncated": truncated},
             "stderr": {"text": tail if sep else "", "truncated": truncated}}
 
-#: Live handles by job id. DSH hands each piece of a job's output out once, so
-#: a `tools.job_output` call made outside the handle would otherwise take that
-#: piece away from `await job` without a trace.
-_BASH_JOBS: "weakref.WeakValueDictionary[str, BashJob]" = weakref.WeakValueDictionary()
+#: A stream read consumes its delta. Route it back to the live receipt (or a standalone
+#: BashJob from bash.start) without keeping an abandoned command's output alive.
+_BASH_JOBS: weakref.WeakValueDictionary[str, BashJob | _BashResult] = weakref.WeakValueDictionary()
 
 
 def _keep_job_text(args: Any, result: Any) -> None:
     """Give the text a job_output call consumed to the job's handle, if one exists."""
     job_id = args.get("job_id") if isinstance(args, dict) else None
-    handle = _BASH_JOBS.get(job_id) if isinstance(job_id, str) else None
-    if handle is not None and handle._result is None and isinstance(result, dict):
-        # The public job_output result supplies text/job, not a structured gap flag.
-        handle._append_output(result.get("text") or "")
+    owner = _BASH_JOBS.get(job_id) if isinstance(job_id, str) else None
+    if owner is None or not isinstance(result, dict):
+        return
+    handle = owner._pending if isinstance(owner, _BashResult) else owner
+    if handle._result is not None:
+        return
+    # The public job_output result supplies text/job, not a structured gap flag.
+    handle._append_output(result.get("text") or "")
+    job = result.get("job")
+    if isinstance(job, dict) and job.get("status") in ("completed", "failed", "killed"):
+        handle._finish(job)
+        if isinstance(owner, _BashResult):
+            del owner._pending
+            del _BASH_JOBS[job_id]
+            _finished(handle)
 
 
 class BashJob:
@@ -1046,7 +1068,8 @@ class BashJob:
         _BASH_JOBS[self.id] = self
 
     def _append_output(self, text: str, *, truncated: bool | None = None, spill_paths: Any = ()) -> None:
-        self._text.append(text)
+        if text:
+            self._text.append(text)
         if truncated is True:
             self._truncated = True
         elif self._truncated is not True and truncated is not False:
@@ -1096,23 +1119,26 @@ class BashJob:
                        "Read it now. The job keeps running and DSH wakes you when it finishes; `await job` then returns its result at once. Do not start it again.")
                 )
             if job.get("status") not in _JOB_LIVE:
-                match = _JOB_EXIT.search(job.get("detail") or "")
-                self._result = _BashJobResult(
-                    jobId=self.id,
-                    status=job.get("status"),
-                    exitCode=int(match.group(1)) if match else None,
-                    text="".join(self._text),
-                    detail=job.get("detail"),
-                    truncated=self._truncated,
-                    spillPaths=list(self._spill_paths),
-                    **_wrap_nested(_streams("".join(self._text), self._truncated)),
-                )
-                # The result now holds the text; a second copy would double the memory every job keeps.
-                self._text = []
-                _finished(self)
-                return self._result
+                return self._finish(job)
             if deadline is not None and time.monotonic() >= deadline:
                 raise self._still_running(timeout_ms)
+
+    def _finish(self, job: dict) -> _BashJobResult:
+        if self._result is None:
+            match = _JOB_EXIT.search(job.get("detail") or "")
+            text = "".join(self._text)
+            self._result = _BashJobResult(
+                jobId=self.id,
+                status=job.get("status"),
+                exitCode=int(match.group(1)) if match else None,
+                text=text,
+                detail=job.get("detail"),
+                truncated=self._truncated,
+                spillPaths=list(self._spill_paths),
+                **_wrap_nested(_streams(text, self._truncated)),
+            )
+            self._text.clear()
+        return self._result
 
     def _still_running(self, timeout_ms: float) -> "JobStillRunning":
         return JobStillRunning(
@@ -1127,7 +1153,7 @@ class BashJob:
         if self._result is not None:
             return self._result["text"]
         await call_tool("job_output", {"job_id": self.id})
-        return "".join(self._text)
+        return self._result["text"] if self._result is not None else "".join(self._text)
 
     async def kill(self, reason: str | None = None) -> Any:
         """Ask DSH to stop the job; `await job` afterwards collects what it wrote."""

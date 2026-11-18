@@ -10,7 +10,7 @@
  */
 
 import { existsSync } from 'node:fs'
-import { readFile, rm } from 'node:fs/promises'
+import { rm } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { withFileSource } from './panel-source.ts'
 import type { PanelState, PanelName, PanelPreview, PanelCell, PanelControlAction, PanelControlResult, PanelNameAction, PanelNameResult } from './panel-types.ts'
@@ -31,7 +31,7 @@ import { describeDenial, LeaseRegistry, type BoundTool } from './lease.ts'
 import { BackgroundGrant, ToolLane, type PipelineLike } from './background-tools.ts'
 import { argumentFix, catalogBindings, isCatalogBinding, TOP_LEVEL_TOOLS, type ToolSchemaLike } from './catalog.ts'
 import { failedTasksNotice, foreignLanguageHint, missingModuleHint, usageHint } from './hints.ts'
-import { RESTORE_TIMEOUT_MS, SNAPSHOT_DEBOUNCE_MS, SNAPSHOT_SUPPORT_TIMEOUT_MS, SNAPSHOT_TIMEOUT_MS, readRestoreReport, restoreNotice, snapshotFiles, type RestoreSummary, type RestoreReport } from './snapshot.ts'
+import { RESTORE_TIMEOUT_MS, SNAPSHOT_DEBOUNCE_MS, SNAPSHOT_SUPPORT_TIMEOUT_MS, SNAPSHOT_TIMEOUT_MS, readRestoreReport, restoreNotice, snapshotFiles, snapshotResult, type SnapshotResult, type RestoreSummary, type RestoreReport } from './snapshot.ts'
 
 export interface SessionOptions {
   python: string
@@ -282,14 +282,11 @@ export class ReplSession {
       // No readable answer is a reason to keep the kernel, never to stop it.
       const reasons = outcome.status === 'ok' && Array.isArray(found) ? found : ['the idle check did not answer']
       if (reasons.length > 0) return reasons.join('; ')
-      clearTimeout(this.#snapshotTimer)
-      this.#snapshotTimer = undefined
-      this.#dirty = true
-      await this.#captureSnapshot(kernel)
-      if (this.#dirty) return 'the snapshot could not be saved'
-      const target = this.#snapshotTarget()
-      const skipped = target === undefined ? [] : await readSkipped(target.manifestPath)
-      if (skipped.length > 0) return `the snapshot could not hold ${skipped.slice(0, 5).join(', ')}`
+      this.#cancelSnapshotTimer()
+      const saved = await this.#captureSnapshot(kernel)
+      if (saved.status !== 'saved') return 'the snapshot could not be saved'
+      if (saved.skipped) return `the snapshot could not hold ${saved.skipped}`
+      if (this.#disposed || kernel !== this.#kernel) return 'kernel changed'
       const minutes = Math.round((Date.now() - this.#lastActivity) / 60_000)
       this.cellLog.kernelEnded(`闲置 ${minutes} 分钟后自动关闭`)
       await this.#retireKernel(`The Python kernel was stopped after ${minutes} minutes idle to free memory; this cell runs on a new kernel `
@@ -312,7 +309,10 @@ export class ReplSession {
     if (this.#disposed) return refuse('这个会话已经关闭')
     if (this.#controlPending !== undefined) return refuse('上一个操作还没完成')
     if (this.#queuedCells > 0 || this.#starting !== undefined) return refuse('内核正在执行代码，等这一格结束再操作')
-    const work = this.#queue.then(() => this.#control(action))
+    if (action !== 'start') this.#cancelSnapshotTimer()
+    const pending = this.#snapshotInFlight
+    const saving = pending?.kernel === this.#kernel ? pending?.result : undefined
+    const work = this.#queue.then(() => this.#control(action, saving))
     this.#queue = work.catch(() => undefined)
     this.#controlPending = work
     try {
@@ -368,7 +368,7 @@ export class ReplSession {
     return typeof summary?.total === 'number' && Array.isArray(summary.functions) ? summary : undefined
   }
 
-  async #control(action: PanelControlAction): Promise<PanelControlResult> {
+  async #control(action: PanelControlAction, saving?: Promise<SnapshotResult>): Promise<PanelControlResult> {
     const done = (reason?: string): PanelControlResult => ({ action, ok: true, epoch: this.#epoch, ...(reason === undefined ? {} : { reason }) })
     if (this.#disposed) return { action, ok: false, epoch: this.#epoch, reason: '这个会话已经关闭' }
     const kernel = this.#kernel
@@ -377,28 +377,36 @@ export class ReplSession {
       await this.#ensureStarted(new Map())
       return done()
     }
-    if (action === 'stop') {
-      if (kernel === undefined) return done('内核没有在运行')
-      await this.#stopFromPanel(kernel, '在内核页手动关闭',
-        `The user stopped the Python kernel from the kernel tab. ${this.#lossTail()}`)
-      return done()
-    }
-    if (action === 'restart') {
+    if (action === 'stop' || action === 'restart') {
+      if (action === 'stop' && kernel === undefined) return done('内核没有在运行')
+      let note: string | undefined
       if (kernel !== undefined) {
-        await this.#stopFromPanel(kernel, '在内核页手动重启',
-          'The user restarted the Python kernel from the kernel tab; this cell runs on the new kernel.')
+        // A background task can change a value after the last debounced save.
+        const saved = await (saving ?? this.#captureSnapshot(kernel))
+        if (this.#disposed || kernel !== this.#kernel || !kernel.ready) {
+          return { action, ok: false, epoch: this.#epoch, reason: '保存期间内核已关闭' }
+        }
+        if (saved.status === 'failed') {
+          const detail = saved.panelReason ?? `快照保存失败。${saved.reason}`
+          return { action, ok: false, epoch: this.#epoch, reason: `已保留当前内核。${detail}` }
+        }
+        const verb = action === 'stop' ? '关闭' : '重启'
+        if (saved.status === 'disabled') note = `内核已${verb}。此会话未启用快照，变量已清空。`
+        else if (saved.skipped) note = `内核已${verb}。以下变量未能保存：${saved.skipped}`
+        this.cellLog.kernelEnded(`在内核页手动${verb}`)
+        await this.#retireKernel(action === 'stop'
+          ? `The user stopped the Python kernel from the kernel tab. ${this.#lossTail()}`
+          : 'The user restarted the Python kernel from the kernel tab; this cell runs on the new kernel.')
       }
-      await this.#ensureStarted(new Map())
-      return done()
+      if (action === 'restart') await this.#ensureStarted(new Map())
+      return done(note)
     }
-    // reset: nothing of the old namespace may come back, so no save and no snapshot left behind.
-    clearTimeout(this.#snapshotTimer)
-    this.#snapshotTimer = undefined
+    // Reset deliberately discards the namespace, even when a snapshot cannot be written.
     this.#dirty = false
     if (kernel !== undefined) {
-      await this.#stopFromPanel(kernel, '在内核页手动重置',
-        'The user reset the Python kernel from the kernel tab: all variables and functions are gone and the saved '
-        + 'snapshot was deleted. Files already written and DSH jobs already started are unaffected.', false)
+      this.cellLog.kernelEnded('在内核页手动重置')
+      await this.#retireKernel('The user reset the Python kernel from the kernel tab: all variables and functions are gone and the saved '
+        + 'snapshot was deleted. Files already written and DSH jobs already started are unaffected.')
     }
     const target = this.#snapshotTarget()
     if (target !== undefined) {
@@ -409,17 +417,6 @@ export class ReplSession {
     this.#restoreIncomplete = false
     await this.#ensureStarted(new Map())
     return done()
-  }
-
-  /** Save first unless resetting (and never over a fuller file), then retire with a note the next cell reads. */
-  async #stopFromPanel(kernel: PythonKernel, label: string, notice: string, save = true): Promise<void> {
-    if (save && kernel.ready && !this.#restoreIncomplete) {
-      clearTimeout(this.#snapshotTimer)
-      this.#snapshotTimer = undefined
-      await this.#captureSnapshot(kernel)
-    }
-    this.cellLog.kernelEnded(label)
-    await this.#retireKernel(notice)
   }
 
   #kernel: PythonKernel | undefined
@@ -449,10 +446,12 @@ export class ReplSession {
   #restoreNotice: string | undefined
   /** Why the newest kernel cannot snapshot (no `dill`), or undefined when it can. */
   #snapshotUnavailable: string | undefined
-  /** A successful cell settled since the last committed snapshot. */
+  /** User code may have changed the namespace since the last confirmed save. */
   #dirty = false
   #snapshotTimer: NodeJS.Timeout | undefined
   #snapshotCounter = 0
+  /** Shared through the kernel's actual reply, even if the host has already reported a timeout. */
+  #snapshotInFlight: { kernel: PythonKernel; id: string; result: Promise<SnapshotResult> } | undefined
   /**
    * The restore failed or left names out: the file on disk is the fuller copy,
    * so closing the session must not overwrite it (Prime's restore_incomplete).
@@ -748,6 +747,8 @@ export class ReplSession {
     if (abandoned === undefined) return
     this.#abandoned = undefined
     const kernel = this.#kernel
+    // A restart save has its own bounded wait. The user cell already finished.
+    if (kernel !== undefined && this.#activeRunId === undefined && this.#snapshotInFlight?.kernel === kernel) return
     const interrupt = (): void => { if (this.#activeRunId !== undefined) kernel?.interrupt(this.#activeRunId) }
     interrupt()
     const repeat = setInterval(interrupt, INTERRUPT_REPEAT_MS)
@@ -826,9 +827,11 @@ export class ReplSession {
     // On abort: revoke authority FIRST (a cell that catches the interrupt must
     // not still reach its tools), then ask Python to stop. A cell that does
     // not stop is reclaimed by the next one (#reclaimAbandoned).
+    let savingForRestart = false
     const onAbort = (): void => {
       this.#revoke(runId)
-      kernel.interrupt(runId)
+      const save = savingForRestart ? this.#snapshotInFlight : undefined
+      kernel.interrupt(save?.kernel === kernel ? save.id : runId)
     }
     signal?.addEventListener('abort', onAbort, { once: true })
 
@@ -848,6 +851,7 @@ export class ReplSession {
       const trace: CellTrace = { calls: [], startedAt: Date.now() }
       this.#traces.set(runId, trace)
       const executed = await kernel.execute(runId, code)
+      if (this.#snapshotsOn && kernel === this.#kernel) this.#dirty = true
       trace.endedAt = Date.now()
       this.#activeRunId = undefined
       const bound = executed.error !== undefined && this.#options.boundErrorOutput !== undefined
@@ -897,22 +901,33 @@ export class ReplSession {
         result.logs.push(this.#restoreNotice)
         this.#restoreNotice = undefined
       }
-      // Any user cell may have changed the namespace (Prime counts failed ones
-      // too for the final snapshot); only a successful one schedules a save.
-      if (this.#snapshotsOn) this.#dirty = true
-      if (ok && result.error === undefined) this.#scheduleSnapshot()
-      if (teardown.restart !== undefined) {
-        // Asked for, so no state-loss notice for the next cell: this cell's
-        // own output already says what happens. Save first, so the new
-        // kernel restores this cell's end state, not the last debounce.
-        clearTimeout(this.#snapshotTimer)
-        await this.#captureSnapshot(kernel)
+      if (teardown.restart !== undefined && !signal?.aborted) {
+        if (this.#disposed) return disposedResult(result)
+        this.#cancelSnapshotTimer()
+        savingForRestart = true
+        const saved = await this.#captureSnapshot(kernel)
+        savingForRestart = false
+        if (this.#disposed) return disposedResult(result)
+        if (signal?.aborted) return { ...result, error: { kind: 'abort', message: 'cell was cancelled before the kernel restarted' } }
+        if (kernel !== this.#kernel || !kernel.ready) {
+          return { ...result, error: result.error ?? { kind: 'worker-exit', message: 'the kernel ended while saving its snapshot' } }
+        }
+        if (saved.status === 'failed') {
+          const message = `Kernel restart failed while saving the snapshot (${saved.reason}). The current kernel is still running. `
+            + 'Code that already ran keeps its effects. After resolving the save problem, retry repl.restart() on its own.'
+          if (result.error === undefined) result.error = { kind: 'exception', message }
+          else result.logs.push(`[dsh-python-repl] ${message}`)
+          return result
+        }
         await this.#retireKernel()
         result.logs.push(
           `[dsh-python-repl] Kernel restarted as requested (${teardown.restart}). The next cell runs on a fresh kernel`
-          + (this.#snapshotsOn ? ' with the variables saved at the end of this cell' : '; variables are gone')
-          + '; files and packages installed with repl.install stay.',
+          + (saved.status === 'saved' ? ' with the variables saved at the end of this cell' : '; variables are gone')
+          + '; files and packages installed with repl.install stay.'
+          + (saved.status === 'saved' && saved.skipped ? ` These names could not be saved: ${saved.skipped}.` : ''),
         )
+      } else if (ok && result.error === undefined && !this.#disposed) {
+        this.#scheduleSnapshot()
       }
       return result
     } finally {
@@ -987,35 +1002,63 @@ export class ReplSession {
   /** What a replaced kernel takes with it. */
   #lossTail(): string {
     return this.#snapshotsOn
-      ? 'The next cell starts a new kernel, which restores the variables saved after the last successful cell; '
-        + 'anything changed after that is lost. Files already written and DSH jobs already started are unaffected.'
+      ? 'The next kernel will try to restore the most recent saved snapshot, if one exists. Later changes may be missing. '
+        + 'Files already written and DSH jobs already started are unaffected.'
       : 'All variables and functions are gone; files already written and DSH jobs already started are unaffected.'
+  }
+
+  #cancelSnapshotTimer(): void {
+    clearTimeout(this.#snapshotTimer)
+    this.#snapshotTimer = undefined
   }
 
   /** Prime's debounced auto-snapshot after a successful cell, run between cells. */
   #scheduleSnapshot(): void {
-    if (!this.#dirty) return
-    clearTimeout(this.#snapshotTimer)
-    this.#snapshotTimer = setTimeout(() => {
-      this.#snapshotTimer = undefined
+    if (!this.#dirty || this.#restoreIncomplete) return
+    this.#cancelSnapshotTimer()
+    const timer = setTimeout(() => {
       const task = this.#queue.then(() => {
+        // A manual action or a newer cell may supersede even a timer already in the queue.
+        if (this.#snapshotTimer !== timer) return
+        this.#snapshotTimer = undefined
         const kernel = this.#kernel
-        return kernel === undefined || this.#disposed ? undefined : this.#captureSnapshot(kernel)
+        if (this.#dirty && kernel !== undefined && !this.#disposed) return this.#captureSnapshot(kernel)
       })
       this.#queue = task.catch(() => undefined)
     }, SNAPSHOT_DEBOUNCE_MS)
-    this.#snapshotTimer.unref?.()
+    this.#snapshotTimer = timer
+    timer.unref?.()
   }
 
-  /** Write the namespace now; a failure leaves it dirty for the next attempt. */
-  async #captureSnapshot(kernel: PythonKernel): Promise<void> {
+  /** One physical save per kernel at a time. Only a confirmed write clears the dirty flag. */
+  async #captureSnapshot(kernel: PythonKernel): Promise<SnapshotResult> {
+    if (this.#snapshotInFlight?.kernel === kernel) return this.#snapshotInFlight.result
     const target = this.#snapshotTarget()
-    if (target === undefined || !this.#dirty || !kernel.ready) return
-    this.#dirty = false
+    if (target === undefined) return { status: 'disabled' }
+    if (this.#snapshotUnavailable !== undefined) return { status: 'failed', reason: this.#snapshotUnavailable }
+    if (this.#restoreIncomplete) return {
+      status: 'failed', reason: 'the previous restore was incomplete and the existing snapshot is protected',
+      panelReason: '上次恢复时有数据未能读回，已保留原来的快照。',
+    }
+    if (!kernel.ready) return { status: 'failed', reason: 'the kernel is no longer running' }
+    this.#dirty = true
     const id = `snapshot-${this.#epoch}-${++this.#snapshotCounter}`
-    const outcome = await this.#withDeadline(kernel.snapshot(id, target), SNAPSHOT_TIMEOUT_MS)
-    if (outcome === TIMED_OUT) kernel.interrupt(id)
-    if (outcome === TIMED_OUT || outcome.status !== 'ok') this.#dirty = true
+    const completed = Promise.resolve().then(() => kernel.snapshot(id, target)).then((outcome) => {
+      const saved = snapshotResult(outcome)
+      if (saved.status === 'saved' && this.#kernel === kernel) this.#dirty = false
+      return saved
+    }).catch((error: unknown): SnapshotResult => ({ status: 'failed', reason: errorMessage(error) }))
+    const result = this.#withDeadline(completed, SNAPSHOT_TIMEOUT_MS).then((saved): SnapshotResult => {
+      if (saved !== TIMED_OUT) return saved
+      kernel.interrupt(id)
+      return { status: 'failed', reason: `snapshot timed out after ${SNAPSHOT_TIMEOUT_MS}ms`,
+        panelReason: `快照保存超时，等待 ${SNAPSHOT_TIMEOUT_MS / 1000} 秒后仍未收到完成确认。` }
+    })
+    this.#snapshotInFlight = { kernel, id, result }
+    void completed.then(() => {
+      if (this.#snapshotInFlight?.id === id) this.#snapshotInFlight = undefined
+    })
+    return result
   }
 
   /** Revive the saved namespace into a kernel that just finished its bootstrap. */
@@ -1036,12 +1079,7 @@ export class ReplSession {
     return report
   }
 
-  /**
-   * Race a kernel request against a host-owned deadline.
-   *
-   * The losing promise is abandoned deliberately: after the deadline the
-   * kernel is killed, which settles it.
-   */
+  /** Bound the host's wait. The caller decides what to do with an outstanding kernel request. */
   async #withDeadline<T>(work: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
     let timer: NodeJS.Timeout | undefined
     const deadline = new Promise<typeof TIMED_OUT>((resolve) => {
@@ -1351,6 +1389,7 @@ export class ReplSession {
    * one-shot notes for the first cell.
    */
   async #prepareState(kernel: PythonKernel): Promise<string[]> {
+    this.#dirty = false
     this.#snapshotUnavailable = undefined
     this.#restoreIncomplete = false
     const target = this.#snapshotTarget()
@@ -1748,8 +1787,8 @@ export class ReplSession {
    * file is fuller than this kernel (an incomplete restore).
    */
   async #flushSnapshotForDispose(kernel: PythonKernel): Promise<void> {
-    clearTimeout(this.#snapshotTimer)
-    if (!this.#dirty || this.#restoreIncomplete || !kernel.ready) return
+    this.#cancelSnapshotTimer()
+    if ((!this.#dirty && this.#activeRunId === undefined) || this.#restoreIncomplete || !kernel.ready) return
     if (this.#activeRunId !== undefined) kernel.interrupt(this.#activeRunId)
     await this.#captureSnapshot(kernel)
   }
@@ -1762,16 +1801,6 @@ export class ReplSession {
  * detection and the host's own classification are unchanged.
  */
 const SUBAGENTS_KEPT = 50
-
-/** Names the last snapshot's manifest says it could not save; unreadable counts as none known. */
-async function readSkipped(manifestPath: string): Promise<string[]> {
-  try {
-    const data = JSON.parse(await readFile(manifestPath, 'utf8')) as { skipped?: Array<{ name?: unknown }> }
-    return (data.skipped ?? []).map((item) => String(item.name ?? '?'))
-  } catch {
-    return []
-  }
-}
 
 /** A finished job_output or a job_kill means the model has that job's end: no completion notice for it. */
 function withCollected(tool: string, fn: BoundTool, host: HostJobs): BoundTool {
@@ -1836,8 +1865,8 @@ const ABORT_RETURN_MS = 1_000
 const INTERRUPT_REPEAT_MS = 500
 
 /** The result for a cell that reached a session closed under it. */
-function disposedResult(): CellResult {
-  return { logs: [], error: { kind: 'worker-exit', message: 'session disposed' } }
+function disposedResult(result: CellResult = { logs: [] }): CellResult {
+  return { ...result, error: result.error ?? { kind: 'worker-exit', message: 'session disposed' } }
 }
 
 /** The result for a cell that never ran because it was already cancelled. */

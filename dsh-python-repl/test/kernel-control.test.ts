@@ -8,7 +8,7 @@ import { after, before, describe, it } from 'node:test'
 import { createServer, request as httpRequest } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { ReplSession } from '../src/session.ts'
@@ -25,8 +25,7 @@ before(async () => {
 const scratch = mkdtempSync(join(tmpdir(), 'dsh-use-'))
 const sessions: ReplSession[] = []
 let counter = 0
-function newSession(): { session: ReplSession; state: string } {
-  const state = join(scratch, `s${++counter}`)
+function newSession(state = join(scratch, `s${++counter}`)): { session: ReplSession; state: string } {
   const session = new ReplSession({ python: venvPython, vendorRoot: join(root, 'vendor', 'prime'),
     pythonRoot: join(root, 'python'), cwd: scratch, startupTimeoutMs: 60_000, statePath: state })
   sessions.push(session)
@@ -38,6 +37,34 @@ after(async () => {
   await Promise.all(sessions.map((s) => s.dispose()))
   rmSync(scratch, { recursive: true, force: true })
 })
+
+function gatedSave(state: string): { code: string; attempts: string; release: string } {
+  const attempts = join(state, 'saves')
+  const release = join(state, 'release')
+  const code = [
+    'class Sample:',
+    '    def __reduce__(self):',
+    '        import time',
+    `        with open(${JSON.stringify(attempts)}, "a") as record:`,
+    '            record.write("save\\n")',
+    `        while not Path(${JSON.stringify(release)}).exists():`,
+    '            try:',
+    '                time.sleep(0.01)',
+    '            except KeyboardInterrupt:',
+    '                continue',
+    '        return (int, (2,))',
+    'progress = Sample()',
+  ].join('\n')
+  return { code, attempts, release }
+}
+
+async function waitForFile(path: string): Promise<void> {
+  const deadline = Date.now() + 10_000
+  while (!existsSync(path)) {
+    assert.ok(Date.now() < deadline, `expected the kernel to write ${path}`)
+    await sleep(20)
+  }
+}
 
 describe('kernel tab control', () => {
   it('starts a kernel before any cell, and the first cell still gets its tools', { timeout: 120_000 }, async () => {
@@ -90,6 +117,136 @@ describe('kernel tab control', () => {
     assert.equal(cell.error, undefined, JSON.stringify(cell))
     assert.match(text(cell), /reset the Python kernel/)
     assert.doesNotMatch(text(cell), /python-state-restored/)
+  })
+
+  it('a failed write keeps both buttons on the live kernel, and an explicit reset still clears it', { timeout: 120_000 }, async () => {
+    const { session, state } = newSession()
+    assert.equal((await session.runCell('progress = 2', noTools())).error, undefined)
+    const target = snapshotFiles(state).path
+    mkdirSync(target) // A directory at the payload destination makes the real rename fail.
+    const epoch = session.epoch
+    for (const action of ['stop', 'restart'] as const) {
+      const result = await session.panelControl(action)
+      assert.equal(result.ok, false, JSON.stringify(result))
+      assert.equal(result.epoch, epoch)
+      assert.match(result.reason!, /已保留当前内核.*write failed/)
+      assert.equal((await session.runCell('assert progress == 2', noTools())).error, undefined)
+      assert.equal(session.cellLog.view().generations.at(-1)?.reason, null)
+    }
+    rmdirSync(target)
+    const reset = await session.panelControl('reset')
+    assert.equal(reset.ok, true)
+    assert.equal(reset.epoch, epoch + 1)
+    assert.equal(existsSync(target), false)
+    assert.equal((await session.runCell('assert "progress" not in globals()', noTools())).error, undefined)
+  })
+
+  it('a click takes the current state even when a task changed it after a confirmed automatic save', { timeout: 120_000 }, async () => {
+    const { session, state } = newSession()
+    const release = join(state, 'advance')
+    const updated = join(state, 'advanced')
+    const setup = await session.runCell([
+      'progress = 1', 'async def advance():', `    while not Path(${JSON.stringify(release)}).exists():`,
+      '        await asyncio.sleep(0.01)', '    global progress', '    progress = 2', `    Path(${JSON.stringify(updated)}).touch()`,
+      'asyncio.create_task(advance())', 'None',
+    ].join('\n'), noTools())
+    assert.equal(setup.error, undefined, JSON.stringify(setup))
+    await waitForFile(snapshotFiles(state).manifestPath)
+    writeFileSync(release, '')
+    await waitForFile(updated)
+    assert.equal((await session.panelControl('restart')).ok, true)
+    const readback = await session.runCell('assert progress == 2', noTools())
+    assert.equal(readback.error, undefined, JSON.stringify(readback))
+  })
+
+  it('a click during an automatic save shares its result, and a queued cell uses the resulting kernel', { timeout: 120_000 }, async () => {
+    const { session, state } = newSession()
+    const { code, attempts, release } = gatedSave(state)
+    const setup = await session.runCell(code, noTools())
+    assert.equal(setup.error, undefined, JSON.stringify(setup))
+    await waitForFile(attempts)
+    const epoch = session.epoch
+    const restarting = session.panelControl('restart')
+    const duplicate = await session.panelControl('stop')
+    assert.equal(duplicate.ok, false)
+    assert.match(duplicate.reason!, /上一个操作/)
+    const next = session.runCell('assert progress == 2', noTools())
+    writeFileSync(release, '')
+    assert.deepEqual(await restarting, { action: 'restart', ok: true, epoch: epoch + 1 })
+    assert.equal((await next).error, undefined)
+    assert.equal(readFileSync(attempts, 'utf8'), 'save\n')
+  })
+
+  it('closing the session during a restart shares the save and leaves the kernel stopped', { timeout: 120_000 }, async () => {
+    const { session, state } = newSession()
+    const { code, attempts, release } = gatedSave(state)
+    const restarting = session.runCell(`${code}\nawait repl.restart()`, noTools())
+    await waitForFile(attempts)
+    const epoch = session.epoch
+    const closing = session.dispose()
+    writeFileSync(release, '')
+    const [restart] = await Promise.all([restarting, closing])
+    assert.match(restart.error?.message ?? '', /session disposed/)
+    assert.doesNotMatch(text(restart), /Kernel restarted as requested/)
+    assert.equal(session.kernelAlive, false)
+    assert.equal(session.epoch, epoch)
+    assert.equal(readFileSync(attempts, 'utf8'), 'save\n')
+    assert.ok(existsSync(snapshotFiles(state).path))
+  })
+
+  it('cancelling while a restart saves leaves the next cell on the same kernel', { timeout: 120_000 }, async () => {
+    const { session, state } = newSession()
+    const { code, attempts, release } = gatedSave(state)
+    const controller = new AbortController()
+    const restarting = session.runCell(`${code}\nawait repl.restart()`, noTools(), controller.signal)
+    await waitForFile(attempts)
+    const epoch = session.epoch
+    controller.abort()
+    try {
+      assert.equal((await restarting).error?.kind, 'abort')
+      assert.equal(session.kernelAlive, true)
+      const next = session.runCell('assert isinstance(progress, Sample)\nprogress = 2', noTools())
+      writeFileSync(release, '')
+      assert.equal((await next).error, undefined)
+      assert.equal(session.epoch, epoch)
+      assert.equal(readFileSync(attempts, 'utf8'), 'save\n')
+    } finally { writeFileSync(release, '') }
+  })
+
+  it('a save that finishes after its deadline neither retries the serializer nor discards a queued change', { timeout: 120_000 }, async () => {
+    const { session, state } = newSession()
+    const { code, attempts, release } = gatedSave(state)
+    assert.equal((await session.runCell(code, noTools())).error, undefined)
+    const epoch = session.epoch
+    const first = session.panelControl('restart')
+    try {
+      await waitForFile(attempts)
+      const timedOut = await first
+      assert.equal(timedOut.ok, false)
+      assert.match(timedOut.reason!, /超时/)
+      const again = await session.panelControl('stop')
+      assert.equal(again.ok, false)
+      assert.match(again.reason!, /超时/)
+      const next = session.runCell('progress = 3', noTools())
+      writeFileSync(release, '')
+      assert.equal((await next).error, undefined)
+      assert.equal(session.epoch, epoch)
+      await session.dispose()
+      assert.equal(readFileSync(attempts, 'utf8'), 'save\n')
+      const readback = await newSession(state).session.runCell('assert progress == 3', noTools())
+      assert.equal(readback.error, undefined, JSON.stringify(readback))
+    } finally { writeFileSync(release, '') }
+  })
+
+  it('a successful manual restart names anything the snapshot skipped', { timeout: 120_000 }, async () => {
+    const { session } = newSession()
+    assert.equal((await session.runCell('progress = 2\nstream = (i for i in range(3))', noTools())).error, undefined)
+    const restarted = await session.panelControl('restart')
+    assert.equal(restarted.ok, true)
+    assert.match(restarted.reason!, /未能保存.*stream/)
+    const readback = await session.runCell('assert progress == 2 and "stream" not in globals()', noTools())
+    assert.equal(readback.error, undefined)
+    assert.match(text(readback), /never saved.*stream/)
   })
 
   it('is refused while a cell runs and never interrupts it', { timeout: 120_000 }, async () => {

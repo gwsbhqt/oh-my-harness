@@ -55,6 +55,8 @@ describe('rewriteSdkSection', () => {
     assert.match(rewritten, /No top-level `return`/)
     assert.match(rewritten, /trailing expression/)
     assert.match(rewritten, /persistent Python CELL/)
+    assert.match(rewritten, /outputCapped[^\n]*partial results[^\n]*Narrow[^\n]*path[^\n]*include[^\n]*pattern/)
+    assert.doesNotMatch(rewritten, /`grep`\/`glob` return the COMPLETE value/i)
   })
 
   it('leaves an unrecognized section alone rather than corrupting it', () => {

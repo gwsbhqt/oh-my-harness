@@ -20,6 +20,7 @@ is off. Counted in user cells, never in time: an idle session keeps everything.
 from __future__ import annotations
 
 import ast
+from contextvars import ContextVar
 import hashlib
 import json
 import os
@@ -32,6 +33,8 @@ ARCHIVE_DIR = "archive"
 STATE_VERSION = 1
 MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
 MAX_DELETED = 2000
+_SHARED = "shares an object with another live name"
+_archive_checks: ContextVar[set | None] = ContextVar("dsh_archive_checks", default=None)
 _USER_CELL = re.compile(r"cell-\d+-\d+")
 
 
@@ -242,6 +245,9 @@ def _archive(name: str, ns: dict) -> str | None:
     import dill
 
     st = state()
+    shared = _archive_checks.get()
+    if name in (shared if shared is not None else _shared_names(ns, [name])):
+        return _SHARED
     value = ns[name]
     file = hashlib.sha256(name.encode("utf-8", "surrogatepass")).hexdigest()[:32] + ".dill"
     path = _archive_path(file)
@@ -275,6 +281,15 @@ def _delete(name: str, entry: dict) -> None:
         st.deleted.pop(next(iter(st.deleted)))
 
 
+def _shared_names(ns: dict, candidates: list[str]) -> set[str]:
+    import rlm.repl as _repl
+    from snapshot_refs import shared_references
+
+    roots = {n: v for n, v in ns.copy().items() if type(n) is str and not n.startswith("__")
+             and n not in _repl._ALWAYS_SKIP}
+    return shared_references(roots, ns, candidates)[0]
+
+
 def sweep() -> list[str]:
     """End of a user cell: archive and delete what has gone unused; returns notes for the model."""
     st = state()
@@ -297,6 +312,7 @@ def sweep() -> list[str]:
     present = set(live)
     for name in [n for n in st.names if n not in present]:
         del st.names[name]
+    due = []
     for name in live:
         if name in st.pins:
             continue
@@ -306,10 +322,21 @@ def sweep() -> list[str]:
             del ns[name]
         # A failed archive is retried only after a cell used the name again: dill
         # re-serializes the whole value on every attempt, up to the size cap.
-        elif st.archive_after and idle >= st.archive_after and "stuck" not in st.names[name]:
-            reason = _archive(name, ns)
-            if reason is not None:
-                st.names[name]["stuck"] = reason
+        elif (st.archive_after and idle >= st.archive_after and "stuck" not in st.names[name]
+              and st.cell >= st.names[name].get("retryArchive", 0)):
+            due.append(name)
+    if due:
+        token = _archive_checks.set(_shared_names(ns, due))
+        try:
+            for name in due:
+                reason = _archive(name, ns)
+                if reason == _SHARED:
+                    # Recheck on an archive interval without changing the actual last-use time.
+                    st.names[name]["retryArchive"] = st.cell + st.archive_after
+                elif reason is not None:
+                    st.names[name]["stuck"] = reason
+        finally:
+            _archive_checks.reset(token)
     for name, entry in list(st.archived.items()):
         if name in st.pins:
             continue

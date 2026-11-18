@@ -100,6 +100,116 @@ class ByName(unittest.TestCase):
             else:
                 delattr(main, "skills")
 
+    def test_shared_values_survive_failed_or_oversized_neighbors(self):
+        shared = []
+        missing = self.module("refs_temporary", "pass\n")
+        ns = {"will_fail": [shared, missing], "large": [shared, b"x" * 4096],
+              "bad": [shared, (i for i in ())], "left": {"items": [shared]}, "right": (shared,)}
+        result = repl._snapshot_state(ns, self.path, self.manifest, 8192, 1024, False)
+        self.assertEqual(set(result["saved"]), {"will_fail", "left", "right"})
+        self.assertEqual({item["name"] for item in result["skipped"]}, {"large", "bad"})
+        self.assertLessEqual(os.path.getsize(self.path), 8192)
+        del sys.modules[missing.__name__]
+        Path(self.dir, "refs_temporary.py").unlink()
+        fresh = {}
+        restored = repl._restore_state(fresh, self.path, max_bytes=8192, max_variable_bytes=1024)
+        self.assertEqual(restored["restored"], ["left", "right"])
+        self.assertEqual([item["name"] for item in restored["failed"]], ["will_fail"])
+        fresh["left"]["items"][0].append(1)
+        self.assertIs(fresh["left"]["items"][0], fresh["right"][0])
+        self.assertEqual(fresh["right"][0].pop(), 1)
+
+    def test_nested_cycles_and_equal_independent_values(self):
+        shared = []
+        shared.append(shared)
+        separate = []
+        separate.append(separate)
+        _, fresh = self.roundtrip({"first": {"rows": shared}, "second": (shared,), "other": separate})
+        value = fresh["first"]["rows"]
+        self.assertIs(value, value[0])
+        self.assertIs(value, fresh["second"][0])
+        self.assertIsNot(value, fresh["other"])
+
+    def test_preexisting_legacy_snapshot_still_loads(self):
+        Path(self.path).write_bytes(dill.dumps({"old": dill.dumps({"rows": [1]})}))
+        fresh = {}
+        result = repl._restore_state(fresh, self.path)
+        self.assertEqual(result, {"restored": ["old"], "failed": []})
+        self.assertEqual(fresh["old"], {"rows": [1]})
+
+    def test_reference_scan_reads_builtin_storage_without_user_hooks(self):
+        def forbidden(*args):
+            raise AssertionError("user hook called while looking for shared values")
+
+        class Row(dict):
+            keys = values = items = __iter__ = __repr__ = forbidden
+            __class__ = property(forbidden)
+
+        class Rows(list):
+            __iter__ = __getitem__ = __len__ = __repr__ = forbidden
+
+        leaf = []
+        nested = Rows([Row(items=leaf)])
+        names, refs = snapshot_refs.shared_references({"left": nested, "right": leaf}, {})
+        self.assertEqual(names, {"left", "right"})
+        self.assertIs(refs[id(leaf)][2], leaf)
+
+    def test_failed_owner_does_not_split_its_other_containers(self):
+        shared = []
+        left, right = [shared], {"ref": shared}
+        missing = self.module("refs_skipped_owner", "pass\n")
+        ns = {"broken": [left, right, missing], "left": left, "right": right}
+        repl._snapshot_state(ns, self.path, self.manifest, 8192, 1024, False)
+        del sys.modules[missing.__name__]
+        Path(self.dir, "refs_skipped_owner.py").unlink()
+        fresh = {}
+        result = repl._restore_state(fresh, self.path)
+        self.assertEqual([item["name"] for item in result["failed"]], ["broken"])
+        self.assertIs(fresh["left"][0], fresh["right"]["ref"])
+
+    def test_prune_still_removes_only_oversized_live_names(self):
+        data = [b"x" * 4096]
+        ns = {"large": data, "also_large": data, "small": 7}
+        result = repl._snapshot_state(ns, self.path, self.manifest, 4096, 128, True)
+        self.assertEqual(result["pruned"], ["also_large", "large"])
+        self.assertEqual(ns, {"small": 7})
+        self.assertLessEqual(os.path.getsize(self.path), 4096)
+        fresh = {}
+        self.assertEqual(repl._restore_state(fresh, self.path)["restored"], ["small"])
+        self.assertEqual(fresh, ns)
+
+    def test_rebuilt_function_aliases_share_attributes_and_live_globals(self):
+        ns = {"__name__": "__main__", "setting": 1}
+        exec("def apply(): return setting", ns)
+        ns["alias"] = ns["apply"]
+        ns["box"] = (ns["apply"],)
+        _, fresh = self.roundtrip(ns)
+        fresh["alias"].enabled = True
+        self.assertIs(fresh["apply"], fresh["box"][0])
+        self.assertTrue(fresh["box"][0].enabled)
+        fresh["setting"] = 42
+        self.assertEqual(fresh["apply"](), 42)
+
+    def test_immutable_leaves_do_not_prevent_archiving(self):
+        fixed = (frozenset({1}), ("ready",))
+        roots = {"one": [fixed], "two": {"key": fixed}}
+        self.assertEqual(snapshot_refs.shared_references(roots, {}), (set(), {}))
+
+    def test_text_pickle_setting_never_formats_a_shared_value(self):
+        class Quiet(list):
+            def __repr__(self):
+                raise AssertionError("snapshot formatted a user value")
+
+        value = Quiet([3])
+        protocol = dill.settings["protocol"]
+        try:
+            dill.settings["protocol"] = 0
+            _, fresh = self.roundtrip({"first": value, "second": value})
+        finally:
+            dill.settings["protocol"] = protocol
+        self.assertIs(fresh["first"], fresh["second"])
+        self.assertEqual(fresh["second"].pop(), 3)
+
     def test_main_and_unimportable_modules_keep_dills_own_rule(self):
         fake = types.ModuleType("not_in_sys_modules")
         self.assertFalse(snapshot_refs.by_name(fake))

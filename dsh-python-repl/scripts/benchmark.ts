@@ -1,10 +1,11 @@
-import { spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, writeFile, realpath, symlink, stat, readdir, cp } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual, parseArgs } from 'node:util'
+import { reuseTask, serveBenchmarkLogs } from './benchmark-reuse.ts'
 
 export interface BenchTask {
   id: string
@@ -13,6 +14,7 @@ export interface BenchTask {
   files: Record<string, string>
   prompt: string
   expected: unknown
+  reuse?: { body: string; prompt: string; expected: unknown }
 }
 export interface RunMetrics {
   complete: boolean
@@ -20,12 +22,14 @@ export interface RunMetrics {
   steps: number
   modelToolCalls: number
   toolErrors: number
+  successfulTools: Record<string, number>
   usage: Record<string, number | null>
   final: string | null
   errors: string[]
 }
 const USAGE = ['inputTokens', 'outputTokens', 'totalTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const
 const sha = (text: string) => createHash('sha256').update(text).digest('hex')
+const activationFailure = /entr(?:y|ies) did not activate|required plugins? did not activate|slot entry crashed/
 
 /** Synthetic records retain the columns used by the real process-log analysis task. */
 export function makeTask(family: string, rows: number): BenchTask {
@@ -71,6 +75,7 @@ export function makeTask(family: string, rows: number): BenchTask {
 
 export const taskIds = () => [24, 600, 12000].flatMap(rows => ['total', 'groups', 'peak', 'window'].map(family => `${family}-${rows}`))
 export function taskById(id: string): BenchTask {
+  if (id === 'reuse-600') return reuseTask()
   const found = /^(total|groups|peak|window)-(24|600|12000)$/.exec(id)
   if (!found) throw new Error(`未知任务：${id}`)
   return makeTask(found[1]!, Number(found[2]))
@@ -78,8 +83,9 @@ export function taskById(id: string): BenchTask {
 
 /** Missing usage stays null; malformed, incomplete or failed streams never count as successful runs. */
 export function parseRunEvents(text: string): RunMetrics {
-  const metrics: RunMetrics = { complete: false, sessionId: null, steps: 0, modelToolCalls: 0, toolErrors: 0,
+  const metrics: RunMetrics = { complete: false, sessionId: null, steps: 0, modelToolCalls: 0, toolErrors: 0, successfulTools: Object.create(null) as Record<string, number>,
     usage: Object.fromEntries(USAGE.map(key => [key, null])), final: null, errors: [] }
+  const pendingTools = new Map<string, string>()
   let finals = 0
   let completed = false
   let usageSteps = 0
@@ -88,7 +94,15 @@ export function parseRunEvents(text: string): RunMetrics {
     let event: Record<string, any>
     try { event = JSON.parse(line) } catch { metrics.errors.push('运行输出包含不完整的 JSON 行'); continue }
     if (event.type === 'session') metrics.sessionId = typeof event.sessionId === 'string' ? event.sessionId : null
-    if (event.type === 'tool_call') metrics.modelToolCalls++
+    if (event.type === 'tool_call') {
+      metrics.modelToolCalls++
+      if (typeof event.callId === 'string' && typeof event.tool === 'string') pendingTools.set(event.callId, event.tool)
+    }
+    if (event.type === 'tool_result' && typeof event.callId === 'string') {
+      const tool = pendingTools.get(event.callId)
+      if (tool !== undefined && event.status === 'completed') metrics.successfulTools[tool] = (metrics.successfulTools[tool] ?? 0) + 1
+      pendingTools.delete(event.callId)
+    }
     if (event.type === 'tool_result' && event.status !== 'completed') {
       metrics.toolErrors++
       if (/dsh-python-repl: (没找到能用的 Python|建 Python 内核的专用环境失败)/.test(String(event.result))) metrics.errors.push('评测环境未能启动 Python 内核')
@@ -119,22 +133,30 @@ export function parseRunEvents(text: string): RunMetrics {
   return metrics
 }
 
-export async function gradeTask(task: BenchTask, work: string): Promise<{ passed: boolean; reasons: string[] }> {
+export async function gradeTask(task: BenchTask, work: string, followup = false): Promise<{ passed: boolean; reasons: string[] }> {
   const reasons: string[] = []
   for (const [name, content] of Object.entries(task.files)) {
     try { if (sha(await readFile(join(work, name), 'utf8')) !== sha(content)) reasons.push(`输入被改动：${name}`) }
     catch { reasons.push(`输入已丢失：${name}`) }
   }
-  try {
-    const actual = JSON.parse(await readFile(join(work, 'answer.json'), 'utf8'))
-    if (!isDeepStrictEqual(actual, task.expected)) reasons.push('答案与独立验收结果不一致')
-  } catch (error) { reasons.push(`答案缺失或不是合法 JSON：${error instanceof Error ? error.message : String(error)}`) }
+  const expected: Array<[string, unknown]> = [['answer.json', task.expected]]
+  if (followup && task.reuse) expected.push(['followup.json', task.reuse.expected])
+  for (const [file, answer] of expected) {
+    try {
+      const actual = JSON.parse(await readFile(join(work, file), 'utf8'))
+      if (!isDeepStrictEqual(actual, answer)) reasons.push(`${file} 与独立验收结果不一致`)
+    } catch (error) { reasons.push(`${file} 缺失或不是合法 JSON：${error instanceof Error ? error.message : String(error)}`) }
+  }
   return { passed: reasons.length === 0, reasons }
 }
+
+export type BenchMode = 'native' | 'ptc' | 'node-ptc'
 
 export interface BenchRun {
   task: string; mode: string; variant: string; provider: string; model: string; inputHash: string
   valid: boolean; passed: boolean; elapsedMs: number; metrics: RunMetrics; appBuild: string; runtimeDigest?: string | null; isolation?: string
+  runtimeVerified?: boolean
+  turns?: Array<{ sourceDownloads: number | null; elapsedMs: number; metrics: RunMetrics; passed: boolean }>
 }
 
 /** Comparison uses identical inputs and only jointly correct tasks for efficiency figures. */
@@ -157,15 +179,24 @@ export function summarizeRuns(runs: BenchRun[]) {
     if ([...group.values()].some(other => other.inputHash !== run.inputHash)) throw new Error(`输入不一致：${run.task}`)
     group.set(key, run); tasks.set(run.task, group)
   }
-  const comparable = [...tasks.entries()].filter(([, group]) => group.size === variants.length && [...group.values()].every(run => run.valid && run.passed)).map(([task]) => task)
+  const comparable = [...tasks.entries()].filter(([, group]) => group.size === variants.length && [...group.values()].every(run => run.valid && run.passed && run.runtimeVerified === true)).map(([task]) => task)
   return { model: runs[0] ? `${runs[0].provider}/${runs[0].model}` : null, jointlyPassedTasks: comparable,
     groups: variants.map(key => {
       const selected = runs.filter(run => `${run.variant}-${run.mode}` === key)
       const paired = selected.filter(run => comparable.includes(run.task))
-      const tokenValues = paired.map(run => run.metrics.usage.totalTokens)
+      const totalUsage = Object.fromEntries(USAGE.map(field => {
+        const values = paired.map(run => run.metrics.usage[field])
+        return [field, values.length && values.every(v => v != null) ? values.reduce<number>((sum, v) => sum + v!, 0) : null]
+      }))
+      const times = paired.map(run => run.elapsedMs).sort((a, b) => a - b)
+      const mid = Math.floor(times.length / 2)
+      const medianMs = times.length ? (times[mid]! + times[Math.floor((times.length - 1) / 2)]!) / 2 : null
+      const secondDownloads = paired.flatMap(run => run.turns?.[1]?.sourceDownloads ?? [])
       return { variant: key, attempted: selected.length, valid: selected.filter(run => run.valid).length,
         passed: selected.filter(run => run.valid && run.passed).length,
-        comparable: paired.length, totalTokensOnComparable: paired.length && tokenValues.every(value => value != null) ? tokenValues.reduce<number>((sum, value) => sum + value!, 0) : null,
+        unverifiedRuntime: selected.filter(run => run.runtimeVerified !== true).length,
+        comparable: paired.length, totalTokensOnComparable: totalUsage.totalTokens, usageOnComparable: totalUsage,
+        medianMsOnComparable: medianMs, followupDownloadsOnComparable: secondDownloads.length ? secondDownloads.reduce((a, b) => a + b, 0) : null,
         totalMsOnComparable: paired.length ? paired.reduce((sum, run) => sum + run.elapsedMs, 0) : null,
         stepsOnComparable: paired.length ? paired.reduce((sum, run) => sum + run.metrics.steps, 0) : null }
     }) }
@@ -185,13 +216,52 @@ async function runtimeDigest(pluginRoot: string) {
   return sha(parts.join('\n'))
 }
 
+function totalMetrics(turns: RunMetrics[]): RunMetrics {
+  if (turns.length === 1) return turns[0]!
+  const combined = parseRunEvents('')
+  const last = turns.at(-1)
+  combined.sessionId = last?.sessionId ?? null
+  combined.final = last?.final ?? null
+  combined.complete = turns.length > 0 && turns.every(turn => turn.complete && turn.sessionId === combined.sessionId)
+  for (const turn of turns) {
+    combined.steps += turn.steps
+    combined.modelToolCalls += turn.modelToolCalls
+    combined.toolErrors += turn.toolErrors
+    combined.errors.push(...turn.errors)
+    for (const [tool, count] of Object.entries(turn.successfulTools)) combined.successfulTools[tool] = (combined.successfulTools[tool] ?? 0) + count
+  }
+  for (const field of USAGE) {
+    const values = turns.map(turn => turn.usage[field])
+    combined.usage[field] = values.length && values.every(value => value != null) ? values.reduce<number>((sum, value) => sum + value!, 0) : null
+  }
+  return combined
+}
+
+function sawExpectedTool(mode: BenchMode, metrics: RunMetrics): boolean {
+  const tools = Object.keys(metrics.successfulTools)
+  return mode === 'native' ? tools.length > 0 && !tools.includes('run_code') : tools.length === 1 && tools[0] === 'run_code'
+}
+
+/** The per-task home starts empty. A matching call in the transcript and the Python session's own successful cells provide independent evidence. */
+async function pythonCells(home: string, sessionId: string): Promise<number> {
+  const file = join(home, 'plugins', 'python-repl', 'state', sha(sessionId).slice(0, 32), 'cell-log.json')
+  try {
+    const log = JSON.parse(await readFile(file, 'utf8'))
+    if (log.version !== 1 || !Array.isArray(log.cells)) throw new Error('无法识别 Python 执行记录格式')
+    return log.cells.filter((cell: { status?: string }) => cell?.status === 'ok').length
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0
+    throw error
+  }
+}
+
 export interface BenchOptions {
   output: string; app: string; credentials: string; baseUrl: string; keyRef: string
   provider: string; model: string; api: string; pluginRoot: string; kernelVenv: string
-  mode: 'native' | 'ptc'; variant: string; timeoutMs: number; tasks: string[]; dryRun: boolean
+  mode: BenchMode; variant: string; timeoutMs: number; tasks: string[]; dryRun: boolean
 }
 
-async function execute(file: string, args: string[], env: NodeJS.ProcessEnv, cwd: string, input: string, timeoutMs: number) {
+async function execute(file: string, args: string[], env: NodeJS.ProcessEnv, cwd: string, input: string | ((child: ChildProcessWithoutNullStreams) => Promise<void>), timeoutMs: number) {
   const started = performance.now()
   let stdout = '', stderr = '', timedOut = false, spawnError: string | null = null
   const child = spawn(file, args, { env, cwd, detached: true, stdio: ['pipe', 'pipe', 'pipe'] })
@@ -203,19 +273,25 @@ async function execute(file: string, args: string[], env: NodeJS.ProcessEnv, cwd
   const timer = setTimeout(() => { timedOut = true; stop('SIGTERM') }, timeoutMs)
   const hard = setTimeout(() => stop('SIGKILL'), timeoutMs + 3000)
   child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8')
-  child.stdout.on('data', value => { stdout += value })
+  if (typeof input === 'string') child.stdout.on('data', value => { stdout += value })
   child.stderr.on('data', value => {
     stderr += value
-    if (/entr(?:y|ies) did not activate|slot entry crashed/.test(stderr)) {
+    if (activationFailure.test(stderr)) {
       stop('SIGTERM'); cancelKill ??= setTimeout(() => stop('SIGKILL'), 3000)
     }
   })
   child.stdin.on('error', () => {})
-  child.stdin.end(input)
-  const exitCode = await new Promise<number | null>(done => {
+  const exited = new Promise<number | null>(done => {
     child.on('error', error => { spawnError = error.message })
     child.on('close', code => done(code))
   })
+  let driver: Promise<void> | undefined
+  if (typeof input === 'string') child.stdin.end(input)
+  else driver = input(child).catch(error => {
+    spawnError = error instanceof Error ? error.message : String(error)
+    stop('SIGTERM'); cancelKill ??= setTimeout(() => stop('SIGKILL'), 3000)
+  })
+  const [exitCode] = await Promise.all([exited, driver])
   clearTimeout(timer); clearTimeout(hard); clearTimeout(cancelKill); stop('SIGKILL')
   process.removeListener('SIGTERM', cancel); process.removeListener('SIGINT', cancel)
   return { exitCode, timedOut, cancelled, spawnError, elapsedMs: Math.round(performance.now() - started), stdout, stderr }
@@ -231,7 +307,7 @@ interface BenchPatchRow {
 
 /** Match dsh-base's executor rows explicitly; a missing PTC runtime must never select native. */
 export function benchmarkPatch(options: Pick<BenchOptions, 'credentials' | 'provider' | 'model' | 'api' | 'baseUrl' | 'keyRef' | 'mode' | 'pluginRoot'>, python?: string): BenchPatchRow[] {
-  if (!['native', 'ptc'].includes(options.mode)) throw new Error('模式必须为 native 或 ptc')
+  if (!['native', 'ptc', 'node-ptc'].includes(options.mode)) throw new Error('模式必须为 native、ptc 或 node-ptc')
   if (options.mode === 'ptc' && !python) throw new Error('PTC 评测必须指定现有 Python 内核运行环境')
   return [
     { id: 'credentials', disabled: false, config: { path: resolve(options.credentials), watch: false } },
@@ -239,8 +315,8 @@ export function benchmarkPatch(options: Pick<BenchOptions, 'credentials' | 'prov
     { id: 'llm-pi-ai', config: { providers: { [options.provider]: { apiKeyEnv: options.keyRef, api: options.api, baseURL: options.baseUrl,
       models: [{ id: options.model, name: options.model, contextWindow: 1000000, maxTokens: 16384, input: ['text'] }] } } } },
     { id: 'tool-executor-native', disabled: options.mode !== 'native' },
-    { id: 'tool-executor-ptc', disabled: options.mode !== 'ptc' },
-    { id: 'ptc-runtime', disabled: true },
+    { id: 'tool-executor-ptc', disabled: options.mode === 'native' },
+    { id: 'ptc-runtime', disabled: options.mode !== 'node-ptc', ...(options.mode === 'node-ptc' ? { config: { executionMode: 'persistent-in-memory' } } : {}) },
     { id: 'permission', config: { defaultPreset: 'danger-full-access' } },
     ...['session-title-llm', 'agent-instructions', 'tool-skill', 'workflow-ptc', 'tool-workflow', 'tool-web', 'tool-subagent', 'tool-subagent-fork', 'tool-goal', 'tool-todo'].map(id => ({ id, disabled: true })),
     ...(options.mode === 'ptc' ? [{ insert: [{ id: 'python-repl', name: resolve(options.pluginRoot, 'lib/index.js'), config: { python, skillRoots: [], projectSkillRoots: [] } }] }] : []),
@@ -249,7 +325,7 @@ export function benchmarkPatch(options: Pick<BenchOptions, 'credentials' | 'prov
 
 export async function runBenchmark(options: BenchOptions) {
   if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1000) throw new Error('超时必须为至少 1000 毫秒的整数')
-  if (!['native', 'ptc'].includes(options.mode)) throw new Error('模式必须为 native 或 ptc')
+  if (!['native', 'ptc', 'node-ptc'].includes(options.mode)) throw new Error('模式必须为 native、ptc 或 node-ptc')
   if (!/^[a-z0-9][a-z0-9-]*$/.test(options.variant)) throw new Error('版本标签只能使用小写字母、数字和短横线')
   const runRoot = resolve(options.output, `${options.variant}-${options.mode}`)
   await mkdir(dirname(runRoot), { recursive: true, mode: 0o700 })
@@ -275,28 +351,24 @@ export async function runBenchmark(options: BenchOptions) {
     const root = join(runRoot, id)
     const work = join(root, 'work')
     const home = join(root, 'home')
-    const profile = join(home, 'profiles', 'headless')
+    const profile = join(home, 'profiles', task.reuse ? 'sdk' : 'headless')
     await mkdir(profile, { recursive: true, mode: 0o700 })
     await mkdir(work, { recursive: true })
     for (const [name, content] of Object.entries(task.files)) {
       await mkdir(dirname(join(work, name)), { recursive: true })
       await writeFile(join(work, name), content)
     }
-    await writeFile(join(root, 'prompt.txt'), task.prompt)
-    const inputHash = sha(JSON.stringify(task.files))
-    if (options.dryRun) { results.push({ task: id, inputHash, prepared: true }); continue }
-    const patch: unknown[] = [
-      { id: 'credentials', disabled: false, config: { path: resolve(options.credentials), watch: false } },
-      { id: 'agent-default-model', config: { provider: options.provider, model: options.model } },
-      { id: 'llm-pi-ai', config: { providers: { [options.provider]: { apiKeyEnv: options.keyRef, api: options.api, baseURL: options.baseUrl,
-        models: [{ id: options.model, name: options.model, contextWindow: 1000000, maxTokens: 16384, input: ['text'] }] } } } },
-      { id: 'tools' },
-      ...(options.mode === 'ptc'
-        ? [{ id: 'tool-executor-native', disabled: true }, { id: 'tool-executor-ptc', disabled: false }]
-        : [{ id: 'tool-executor-native', disabled: false }, { id: 'tool-executor-ptc', disabled: true }]),
-      { id: 'permission', config: { defaultPreset: 'danger-full-access' } },
-      ...['session-title-llm', 'agent-instructions', 'tool-skill', 'workflow-ptc', 'tool-workflow', 'tool-web', 'tool-subagent', 'tool-subagent-fork', 'tool-goal', 'tool-todo'].map(id => ({ id, disabled: true })),
-    ]
+    const inputHash = task.reuse ? sha(JSON.stringify([task.prompt, task.reuse.prompt, task.reuse.body])) : sha(JSON.stringify(task.files))
+    if (options.dryRun) {
+      await writeFile(join(root, 'prompt.txt'), task.prompt)
+      if (task.reuse) {
+        await writeFile(join(root, 'followup.txt'), task.reuse.prompt)
+        await writeFile(join(root, 'source.json'), task.reuse.body)
+      }
+      results.push({ task: id, inputHash, prepared: true })
+      continue
+    }
+    let python: string | undefined
     if (options.mode === 'ptc') {
       const venvRoot = join(home, 'plugins', 'python-repl', 'kernel-venv')
       await mkdir(dirname(venvRoot), { recursive: true })
@@ -304,30 +376,72 @@ export async function runBenchmark(options: BenchOptions) {
       const marker = JSON.parse(await readFile(join(options.kernelVenv, '3.14', '.dsh-kernel-env.json'), 'utf8')) as { base?: string }
       if (!marker.base) throw new Error('现有内核缺少解释器记录，不能在评测时临时安装')
       await stat(marker.base)
-      patch.push({ id: 'ptc-runtime', disabled: true }, { insert: [{ id: 'python-repl', name: resolve(pluginRoot, 'lib/index.js'), config: { python: marker.base, skillRoots: [], projectSkillRoots: [] } }] })
+      python = marker.base
     }
-    await writeFile(join(profile, 'package.json'), JSON.stringify({ private: true, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-headless'] } } }))
+    const patch = benchmarkPatch({ ...options, pluginRoot }, python)
+    // The text-only SDK task needs neither uploads nor the client's writable connection token.
+    if (task.reuse) patch.push({ id: 'connection', disabled: true }, { id: 'file-upload', disabled: true })
+    const appBundle = task.reuse ? '@deepseek-ai/dsh-sdk-app' : '@deepseek-ai/dsh-headless'
+    await writeFile(join(profile, 'package.json'), JSON.stringify({ private: true, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', appBundle] } } }))
     await writeFile(join(profile, 'cordis.yml'), '[]\n')
     await writeFile(join(profile, 'cordis.patch.yml'), JSON.stringify(patch, null, 2))
     const sandbox = join(root, 'sandbox.sb')
     await writeFile(sandbox, `(version 1)(allow default)(deny file-write*)(allow file-write* (subpath ${JSON.stringify(await realpath(root))}) (literal "/dev/null"))`)
     const env: NodeJS.ProcessEnv = { ...process.env, DSH_HOME: home, DSH_TELEMETRY_DISABLED: '1', TMPDIR: root, PYTHONDONTWRITEBYTECODE: '1' }
     delete env.ELECTRON_RUN_AS_NODE; delete env.DSH_WEB_URL; delete env.DSH_TOOLS_MODE
-    const execution = await execute('/usr/bin/sandbox-exec', ['-f', sandbox, join(options.app, 'Contents/Resources/runtime/cli/bin/dsh'), 'headless', '--json', '-'], env, work, task.prompt, options.timeoutMs)
+    const cli = join(options.app, 'Contents/Resources/runtime/cli/bin/dsh')
+    const turns: Array<{ elapsedMs: number; sourceDownloads: number | null; metrics: RunMetrics; passed: boolean; reasons: string[] }> = []
+    const source = task.reuse ? await serveBenchmarkLogs(task.reuse.body) : undefined
+    let execution: Awaited<ReturnType<typeof execute>>
+    try {
+      const first = source ? task.prompt.replace('{sourceUrl}', source.url) : task.prompt
+      await writeFile(join(root, 'prompt.txt'), first)
+      if (task.reuse && source) {
+        const prompts = [first, task.reuse.prompt]
+        await writeFile(join(root, 'followup.txt'), prompts[1]!)
+        const sessionId = `session-${randomUUID()}`
+        const { driveBenchmarkDialog } = await import('./benchmark-dialog.ts')
+        let collected = 0
+        const streams: string[] = []
+        execution = await execute('/usr/bin/sandbox-exec', ['-f', sandbox, cli, 'sdk'], env, work, async child => {
+          await driveBenchmarkDialog(child.stdout, child.stdin, { cwd: work, provider: options.provider, model: options.model, sessionId, prompts,
+            onTurn: async (index, events, elapsedMs) => {
+              streams.push(events.trimEnd() + '\n')
+              const metrics = parseRunEvents(events)
+              const now = source.downloads()
+              const grade = await gradeTask(task, work, index === 1)
+              turns.push({ elapsedMs, sourceDownloads: now - collected, metrics, ...grade })
+              collected = now
+              return metrics.complete && metrics.sessionId === sessionId && sawExpectedTool(options.mode, metrics) && now > 0
+            },
+          })
+        }, options.timeoutMs)
+        execution.stdout = streams.join('')
+      } else {
+        execution = await execute('/usr/bin/sandbox-exec', ['-f', sandbox, cli, 'headless', '--json', '-'], env, work, first, options.timeoutMs)
+        const grade = await gradeTask(task, work)
+        turns.push({ elapsedMs: execution.elapsedMs, sourceDownloads: null, metrics: parseRunEvents(execution.stdout), ...grade })
+      }
+    } finally { await source?.close() }
     await writeFile(join(root, 'events.jsonl'), execution.stdout, { mode: 0o600, flag: 'wx' })
     await writeFile(join(root, 'stderr.txt'), execution.stderr, { mode: 0o600, flag: 'wx' })
-    const metrics = parseRunEvents(execution.stdout)
-    const grade = await gradeTask(task, work)
+    const metrics = totalMetrics(turns.map(turn => turn.metrics))
     const invalid: string[] = []
     if (execution.exitCode !== 0) invalid.push(`进程退出码 ${execution.exitCode}`)
     if (execution.timedOut) invalid.push('运行超时')
     if (execution.cancelled) invalid.push('评测已取消')
     if (execution.spawnError) invalid.push(execution.spawnError)
-    if (!metrics.complete) invalid.push('没有收到完整且成功的执行终态')
-    if (/entr(?:y|ies) did not activate|slot entry crashed/.test(execution.stderr)) invalid.push('评测宿主有未激活的插件')
+    if (!metrics.complete || turns.length !== (task.reuse ? 2 : 1)) invalid.push('没有收到全部轮次的成功终态')
+    if (activationFailure.test(execution.stderr)) invalid.push('评测宿主有未激活的插件')
+    const successfulPythonCells = options.mode === 'ptc' && metrics.sessionId ? await pythonCells(home, metrics.sessionId) : null
+    const runtimeVerified = turns.length > 0 && turns.every(turn => sawExpectedTool(options.mode, turn.metrics))
+      && (options.mode !== 'ptc' || (successfulPythonCells ?? 0) >= turns.length)
+    if (!runtimeVerified) invalid.push(`缺少所选模式 ${options.mode} 实际执行成功的证据`)
+    if (task.reuse && !turns[0]?.sourceDownloads) invalid.push('首轮没有从数据源取回日志')
     const result = { task: id, family: task.family, rows: task.rows, mode: options.mode, variant: options.variant,
       provider: options.provider, model: options.model, runtimeDigest: fingerprint, appBuild, isolation: 'outer-os-write-boundary-v1', inputHash, elapsedMs: execution.elapsedMs,
-      valid: invalid.length === 0, passed: invalid.length === 0 && grade.passed, reasons: [...invalid, ...metrics.errors, ...grade.reasons], metrics }
+      valid: invalid.length === 0, passed: invalid.length === 0 && turns.every(turn => turn.passed), runtimeVerified, successfulPythonCells,
+      reasons: [...invalid, ...metrics.errors, ...turns.flatMap(turn => turn.reasons)], metrics, turns }
     results.push(result)
     await writeFile(join(root, 'result.json'), JSON.stringify(result, null, 2), { mode: 0o600, flag: 'wx' })
     console.log(JSON.stringify({ task: id, mode: options.mode, variant: options.variant, passed: result.passed, valid: result.valid, elapsedMs: result.elapsedMs, steps: metrics.steps, totalTokens: metrics.usage.totalTokens, reasons: result.reasons }))
@@ -348,7 +462,7 @@ async function main() {
     tasks: { type: 'string' }, 'dry-run': { type: 'boolean', default: false },
   } })
   if (values.help) {
-    console.log('用法：node scripts/benchmark.ts --output <新目录> --provider <线路> --model <模型> --base-url <网关> --key-ref <凭据引用名> [--mode ptc|native] [--variant current|baseline] [--tasks total-24,groups-600] [--plugin-root <已构建插件>] [--timeout 180000] [--dry-run]\n每个版本和模式只运行一次，已存在的输出目录拒绝覆盖。轮换版本顺序：--matrix [--baseline-root <已构建旧插件>]。合并结果：--reports <results.json>，可重复传入。默认生成十二个日志分析任务。--dry-run 只准备生成数据，不调用模型。密钥仅由宿主读取既有凭据，不复制、不打印。')
+    console.log('用法：node scripts/benchmark.ts --output <新目录> --provider <线路> --model <模型> --base-url <网关> --key-ref <凭据引用名> [--mode ptc|node-ptc|native] [--variant current|baseline] [--tasks total-24,groups-600] [--plugin-root <已构建插件>] [--timeout 180000] [--dry-run]\n每个版本和模式只运行一次，已存在的输出目录拒绝覆盖。轮换版本顺序：--matrix [--baseline-root <已构建旧插件>]。合并结果：--reports <results.json>，可重复传入。默认生成十二个单轮日志题。--tasks reuse-600 在同一进程里连续运行两轮；--matrix 对照普通工具、Node 持久内存和持久 Python。--dry-run 只准备生成数据，不调用模型。密钥仅由宿主读取既有凭据，不复制、不打印。')
     return
   }
   if (values.reports?.length) {
@@ -369,13 +483,14 @@ async function main() {
   }
   const options: BenchOptions = { output: values.output, app: values.app!, credentials: values.credentials!, baseUrl: values['base-url'] ?? '', keyRef: values['key-ref'] ?? '',
     provider: values.provider ?? '', model: values.model ?? '', api: values.api!, pluginRoot: values['plugin-root']!, kernelVenv: values['kernel-venv']!,
-    mode: values.mode as 'native' | 'ptc', variant: values.variant!, timeoutMs: Number(values.timeout), tasks, dryRun: values['dry-run']! }
+    mode: values.mode as BenchMode, variant: values.variant!, timeoutMs: Number(values.timeout), tasks, dryRun: values['dry-run']! }
   let results: unknown[] = []
   if (values.matrix) {
     await mkdir(dirname(resolve(options.output)), { recursive: true, mode: 0o700 })
     await mkdir(resolve(options.output), { mode: 0o700 })
     const variants: Array<Pick<BenchOptions, 'mode' | 'variant' | 'pluginRoot'>> = [
       { mode: 'native', variant: 'current', pluginRoot: options.pluginRoot },
+      { mode: 'node-ptc', variant: 'current', pluginRoot: options.pluginRoot },
       { mode: 'ptc', variant: 'current', pluginRoot: options.pluginRoot },
     ]
     if (values['baseline-root']) variants.push({ mode: 'ptc', variant: 'baseline', pluginRoot: resolve(values['baseline-root']) })

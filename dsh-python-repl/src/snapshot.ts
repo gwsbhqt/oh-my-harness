@@ -157,6 +157,25 @@ function nameList(names: readonly string[], limit: number): string {
   return names.length > limit ? `${shown} (+${names.length - limit} more)` : shown
 }
 
+/** The kernel acknowledges a snapshot only after writing the payload and manifest. */
+export type SnapshotResult =
+  | { status: 'saved'; skipped: string }
+  | { status: 'disabled' }
+  | { status: 'failed'; reason: string; panelReason?: string }
+
+export function snapshotResult(outcome: CellOutcome): SnapshotResult {
+  if (outcome.status !== 'ok') {
+    const reason = outcome.fields?.['reason']
+    return { status: 'failed', reason: typeof reason === 'string' ? reason : outcome.error?.evalue ?? outcome.status }
+  }
+  const skipped = outcome.fields?.['skipped']
+  if (!Array.isArray(outcome.fields?.['saved']) || !Array.isArray(skipped)
+    || !skipped.every((item: unknown) => typeof (item as { name?: unknown } | null)?.name === 'string')) {
+    return { status: 'failed', reason: 'the kernel did not confirm which names were saved' }
+  }
+  return { status: 'saved', skipped: nameList(skipped.map((item: { name: string }) => item.name), LOST_LIMIT) }
+}
+
 /**
  * The first cell's restore note. Long sessions bring back hundreds of names,
  * so with a summary only pins are listed in full, and functions and variables

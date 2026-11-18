@@ -121,13 +121,15 @@ Options are stored under the `python-repl` loader id. The plugin settings card e
 | `maxCellOutputTokens` | `8000` | Estimated cell output budget. Full overflow output goes to the Harness spill store; zero disables the limit. |
 | `maxCellTimeoutMs` | `86400000` | Maximum cell duration, including tool and approval waits. A smaller call-level `timeoutMs` wins. |
 | `cellWaitMs` | `5000` | Maximum foreground wait for a bash command or job before it continues in the background. Zero disables this cap. A subagent session waits at least 10 minutes: when a subagent's turn ends, DSH stops its background jobs without a notice, so it has to wait for results in a cell. |
-| `archiveAfterCells` | `100` | Archive unpinned names after this many unused cells; using them restores them automatically. Zero disables archiving. |
+| `archiveAfterCells` | `100` | Archive unpinned names after this many unused cells. Names sharing an object through a direct reference or a built-in container stay in memory at the archive threshold. Using an archived name restores it. Zero disables archiving. |
 | `deleteAfterCells` | `200` | Delete unpinned names after this many unused cells. Zero disables deletion. |
 | `idleKernelMinutes` | `60` | Reclaim fully recoverable idle kernels when no tasks, threads, or child processes are active. Zero disables reclaim. |
 
 `ptcCreativeMode` defaults to off, so installing this plugin does not change any mode's presentation or name; only setting it to `true` rewrites the shipped Creator mode into PTC Creator (tool presentation, `tool-office`, and the UI labels together), and setting it back to `false` restores the shipped appearance, with the rest of the plugin (cells, skills, tool bridge) unaffected. It is a toggle on the settings card, so users do not type true/false by hand.
 
 The default resident tools are `job_output`, `job_kill`, `ask_user_question`, `read_image`, `web_search`, `present`, `todo_write`, `interrupt_agent`, and `update_goal`.
+
+With snapshots enabled, a requested restart or a stop from the kernel tab saves the current state first. A failed save leaves the kernel running. A successful save reports any names that could not be serialized.
 
 Runtime state lives below `DSH_HOME/plugins/python-repl/`. Each session has its own snapshot and execution history. Kernel environments are shared by Python minor version; project dependencies still belong in the project's own environment.
 
@@ -145,11 +147,15 @@ Harness tool calls retain Harness approval and policy checks. A cell losing its 
 
 ## Output completeness
 
+When a search stops early, its count covers the returned matches. Narrow the search before reporting a total. A background command receipt retains output already read through `job_output` or `peek()` when you later await the receipt.
+
 `await repl.require_complete(result)` returns Bash stdout only after the command has finished successfully and its output is known to be complete. A successful exit does not prove that logs are complete. Known gaps are marked as truncation; when the background interface supplies no structured completeness information, the result is explicitly unknown and the check refuses it.
 
 A full-log file supplied by the host may combine stdout and stderr. The same path must not be described as each stream’s separate full output. Read the actual supplied file when complete logs are needed; missing text cannot be recovered from a retained tail when no file is available.
 
 ## Development and attribution
+
+Run the same model on a log summary and a follow-up question in three modes. Each turn records correctness, model usage, elapsed time and source downloads. [Two-turn benchmark](scripts/benchmark.md#两轮追问)
 
 `pnpm run check` runs TypeScript checking, the build, TypeScript tests, and Python tests. `pnpm run test:py` runs the Python suite separately. Tests use isolated Harness state; the snapshot integration fixture creates a dedicated uv-managed test environment when needed.
 

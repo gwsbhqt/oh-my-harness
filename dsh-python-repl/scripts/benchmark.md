@@ -2,7 +2,7 @@
 
 这套入口通过 App 自带的无界面运行方式调用真实模型。每题新建独立工作目录、会话和 DSH_HOME，只允许在该题的临时目录里写文件。日常 profile 不会被修改。隔离进程的宿主策略设为 danger-full-access，避免 macOS 不支持嵌套 Seatbelt；所有进程的实际写入仍由外层 sandbox-exec 限制在该题目录内，测试会真实验证目录外写入被拒绝。两种模式共用这层边界，命令执行后端不可用的样本不会计入对照。凭据由宿主只读引用原文件，不复制密钥。
 
-首批十二题来自真实的进程日志分析任务，保留 CSV 的输入结构，使用确定生成的数据。四类题分别检查总量、按进程汇总、内存峰值和时间范围，每类有 24、600、12000 行三个规模。这里没有私人进程日志，也不能把这些题说成十二种独立业务。它们尚未覆盖取消、审批、长任务和多 Agent。为统一三组条件，本入口不加载日常记忆、技能目录和项目说明，结果不能等同于日常完整上下文的用量。
+首批十二题来自真实的进程日志分析任务，保留 CSV 的输入结构，使用确定生成的数据。四类题分别检查总量、按进程汇总、内存峰值和时间范围，每类有 24、600、12000 行三个规模。这里没有私人进程日志，也不能把这些题说成十二种独立业务。它们尚未覆盖取消、审批、长任务和多 Agent。为统一各组条件，本入口不加载日常记忆、技能目录和项目说明，结果不能等同于日常完整上下文的用量。
 
 ## 运行
 
@@ -29,7 +29,7 @@ node scripts/benchmark.ts --output /tmp/ptc-bench-run \
   --mode ptc --variant current
 ```
 
-推荐用一个交替批次保持三组条件一致：
+可用一个交替批次保持各组条件一致：
 
 ```sh
 node scripts/benchmark.ts --output /tmp/ptc-bench-matrix \
@@ -37,7 +37,7 @@ node scripts/benchmark.ts --output /tmp/ptc-bench-matrix \
   --matrix --baseline-root /absolute/baseline/dsh-python-repl
 ```
 
-它对每道题轮换普通工具、当前内核和旧内核的先后顺序，最终写入批次根目录的 results.json。旧插件必须先在隔离工作副本里构建。也可以单独传 `--plugin-root /absolute/baseline/dsh-python-repl --variant baseline` 运行旧版。每个版本与模式的输出目录必须不存在，入口拒绝覆盖旧结果。`--tasks total-24,groups-600` 可以缩小范围。用 `--kernel-venv` 指定现有 kernel-venv 父目录；评测只读复用它，不临时安装解释器或依赖。
+它对每道题轮换普通工具、Node 保留内存模式和当前 Python 内核的先后顺序，提供旧内核时一起加入，最终写入批次根目录的 results.json。旧插件必须先在隔离工作副本里构建。也可以单独传 `--plugin-root /absolute/baseline/dsh-python-repl --variant baseline` 运行旧版。每个版本与模式的输出目录必须不存在，入口拒绝覆盖旧结果。`--tasks total-24,groups-600` 可以缩小范围。用 `--kernel-venv` 指定现有 kernel-venv 父目录；评测只读复用它，不临时安装解释器或依赖。
 
 合并多份结果：
 
@@ -47,6 +47,20 @@ node scripts/benchmark.ts \
   --reports /tmp/ptc-bench-run/current-ptc/results.json \
   --reports /tmp/ptc-bench-run/baseline-ptc/results.json
 ```
+
+## 两轮追问
+
+`--tasks reuse-600` 会启动独立的 DSH SDK 进程，在同一个会话里先统计 600 条虚构日志，再追问错误次数并列最多的服务。两轮之间保留同一个进程。数据由该题专属的本机 HTTP 服务提供，服务端按完成的响应计数。第二轮又请求一次会如实计入 `turns[1].sourceDownloads`。第一轮必须取到数据。复用内存、会话消息或已写文件都可以完成追问，零次重新下载只说明数据源未被重读。
+
+每轮分别核对真实答案文件、工具调用的成功回执和终态。Python 模式还须在该题独立状态目录找到同一会话成功执行的代码格。第二轮同时复核第一轮产物。每题只将合成日志和普通任务文字送给模型。输入指纹覆盖日志和两轮题目，本机服务的临时端口不参与比较。
+
+```sh
+node scripts/benchmark.ts --output /tmp/repl-followup \
+  --provider PROVIDER --model MODEL --base-url GATEWAY --key-ref KEY_REFERENCE \
+  --matrix --tasks reuse-600
+```
+
+`--mode native` 使用普通工具，`--mode node-ptc` 使用官方 Node 运行时的保留内存模式，`--mode ptc` 使用持久 Python。每轮分别保留耗时、模型报告的用量和数据下载次数。总耗时含进程启动、两轮执行和退出；缓存用量可单独查看。旧报告仍可读取，缺少运行证据的样本会计入 `unverifiedRuntime`，不进入效率对比。
 
 ## 结果口径
 
