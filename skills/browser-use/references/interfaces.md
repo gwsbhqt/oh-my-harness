@@ -1,6 +1,20 @@
 # browser-use 公开接口与命令参考
 
-`await skills.browser_use.cra(tool, **arguments)` 通过 DSH 调用当前会话已注册的 Cra 官方 MCP 工具，保留其参数、回执和权限。工具名使用 `tab_open` 等官方名称。Cra 的操作与授权见 [Python 主说明](../PYSKILL.md#日常-cra-网页)。以下接口面向 Chrome。
+## Cra 任务标签
+
+`await skills.browser_use.open_cra_tab(url, space=None)` 在本机 Cra 后台打开普通标签，沿用当前登录。`tab.tab_id` 是 Cra 返回的标识；退出 `async with tab` 或显式 `await tab.close()` 都只关闭该标签。
+
+| 接口 | 含义 |
+|---|---|
+| `await tab.snap(interactive=True, query=...)` | 取得 Cra 官方快照对象。`.data` 是完整回执内容，`.elements` 是控件及其原生 `ref`。参数可省略。 |
+| `snapshot.one(name, role=...)` | 按精确名称和角色从本次快照取唯一控件。快照截断、结果不唯一、控件无引用时抛出 `LookupError`。 |
+| `await tab.click(ref=...)`、`await tab.fill(text, ref=...)` | 使用 Cra 原生输入，返回动作回执字典。也接受对应官方工具的选择器等参数。 |
+| `await tab.read(**arguments)` | 读取可见文字和链接。按官方的 `nextOffset` 继续分页。 |
+| `await tab.call(tool, **arguments)` | 调用任意官方 `page_*` 工具，返回原始 MCP 回执，保留图片和批量结果。 |
+
+失效引用需要重新取态。动作回执可能报告对话框或页面跳转，先核对页面状态，再决定下一步。Cra 或 DSH 断线时不会自动重发动作。恢复连接后在新的 Python 格使用原 `tab_id` 核对真实标签状态。`await skills.browser_use.cra(tool, **arguments)` 是已有底层入口，保留原始 MCP 回执和官方权限，可调用 `tabs_list` 等浏览器级工具。授权见 [Python 主说明](../PYSKILL.md#日常-cra-网页)。
+
+以下接口面向 Chrome。
 
 ## Python 显式安装
 

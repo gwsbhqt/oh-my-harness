@@ -51,6 +51,64 @@ class CraApiTests(unittest.IsolatedAsyncioTestCase):
                 await browser_use.cra("tabs_list")
         self.assertEqual(missing.exception.code, 5)
 
+    async def test_task_tab_binds_native_refs_and_closes_after_body_error(self):
+        def receipt(data):
+            return {"content": [{"type": "text", "text": json.dumps(data)}]}
+
+        url = "https://example.invalid/"
+        field = {"name": "Sample name", "role": "textbox", "ref": "e-fixture-1"}
+        opened = AsyncMock(return_value=receipt({"tabId": "fixture", "status": "opened"}))
+        snapped = AsyncMock(return_value=receipt({"url": url, "elements": [field], "truncated": False}))
+        filled = AsyncMock(return_value=receipt({"status": "completed", "input": "chromium"}))
+        closed = AsyncMock(return_value=receipt({"status": "closed"}))
+        with self.kernel(mcp__cra__tab_open=opened, mcp__cra__page_snapshot=snapped,
+                         mcp__cra__page_fill=filled, mcp__cra__tab_close=closed):
+            tab = await browser_use.open_cra_tab(url, space="Sample")
+            with self.assertRaisesRegex(RuntimeError, "body failed"):
+                async with tab:
+                    snap = await tab.snap(interactive=True)
+                    self.assertEqual(snap.url, url)
+                    result = await tab.fill("sample", ref=snap.one("Sample name", role="textbox")["ref"])
+                    self.assertEqual(result["input"], "chromium")
+                    with self.assertRaises(browser_use.BrowserUseError):
+                        await tab.call("page_fill", tabId="other-tab", ref="e-fixture-1", text="wrong tab")
+                    raise RuntimeError("body failed")
+            await tab.close()
+            with self.assertRaises(browser_use.BrowserUseError):
+                await tab.snap()
+        opened.assert_awaited_once_with({"url": url, "space": "Sample", "select": False, "activate": False})
+        snapped.assert_awaited_once_with({"tabId": "fixture", "interactive": True})
+        filled.assert_awaited_once_with({"tabId": "fixture", "ref": "e-fixture-1", "text": "sample"})
+        closed.assert_awaited_once_with({"tabId": "fixture"})
+
+    async def test_snapshot_lookup_rejects_truncated_or_ambiguous_elements(self):
+        button = {"role": "button", "name": "Save", "ref": "e-fixture-1"}
+        for elements, truncated in (([button], True), ([button, button | {"ref": "e-fixture-2"}], False),
+                                    ([{"role": "button", "name": "Save"}], False)):
+            with self.subTest(elements=elements, truncated=truncated):
+                data = {"elements": elements, "truncated": truncated}
+                official = AsyncMock(side_effect=[
+                    {"content": [{"type": "text", "text": '{"tabId":"fixture"}'}]},
+                    {"content": [{"type": "text", "text": json.dumps(data)}]},
+                ])
+                with self.kernel(mcp__cra__tab_open=official, mcp__cra__page_snapshot=official):
+                    tab = await browser_use.open_cra_tab("https://example.invalid/")
+                    snapshot = await tab.snap()
+                    with self.assertRaises(LookupError):
+                        snapshot.one("Save", role="button")
+
+    async def test_unknown_close_is_not_resent_by_context_manager(self):
+        opened = AsyncMock(return_value={"content": [{"type": "text", "text": '{"tabId":"fixture"}'}]})
+        lost = RuntimeError("connection lost")
+        closed = AsyncMock(side_effect=lost)
+        with self.kernel(mcp__cra__tab_open=opened, mcp__cra__tab_close=closed):
+            tab = await browser_use.open_cra_tab("https://example.invalid/")
+            with self.assertRaises(RuntimeError) as raised:
+                async with tab:
+                    await tab.close()
+        self.assertIs(raised.exception, lost)
+        closed.assert_awaited_once_with({"tabId": "fixture"})
+
 
 class ExtendedApiTests(unittest.IsolatedAsyncioTestCase):
     def login_fixture(self):

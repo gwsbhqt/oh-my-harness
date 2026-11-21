@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import functools
 from pathlib import Path
-import re
 import sys
 import warnings
 
@@ -20,25 +19,10 @@ from .browsers import NAMES as BROWSER_NAMES
 from .errors import BrowserUseError
 from .client import DEFAULT_SESSION, get_client, validate_context, resolve_host, routing
 from .contexts import session_control
+from .cra_tools import cra, open_cra_tab
 from .lane import lane_params
 
 __version__ = "2.1.0"
-
-
-async def cra(tool: str, /, **arguments):
-    """调用当前 DSH Python 格已注册的 Cra 官方 MCP 工具，原样返回回执。"""
-    if not isinstance(tool, str) or not re.fullmatch(r"[a-z][a-z0-9_]*", tool):
-        raise BrowserUseError("请传入 Cra 官方工具名，例如 tab_open", 2)
-    try:
-        from dsh_kernel import tools
-    except ModuleNotFoundError as exc:
-        if exc.name != "dsh_kernel":
-            raise
-        raise BrowserUseError("Cra 入口需要 DSH Python 技能内核及当前会话中的 Cra MCP 工具", 5) from None
-    name = f"mcp__cra__{tool}"
-    if name not in tools:
-        raise BrowserUseError(f"当前 DSH 会话未提供 {name}；请检查 Cra MCP 的连接、授权和会话工具配置", 5)
-    return await tools[name](arguments)
 
 
 class LaneWarning(UserWarning):
