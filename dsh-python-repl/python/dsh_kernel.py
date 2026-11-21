@@ -636,7 +636,7 @@ def _hint_name_errors(repl_module: Any) -> None:
 
             hint = _name_error_hint(getattr(exc, "name", None)) if isinstance(exc, NameError) else None
             if isinstance(exc, ToolCallError):
-                hint = cell_errors.tool_hint(str(exc), getattr(exc, "_dsh_args", None))
+                hint = cell_errors.tool_hint(str(exc), getattr(exc, "_dsh_args", None), tool_name=exc.toolName)
                 hint = None if hint is None else hint + "\n"
             elif hint is None:
                 hint = cell_errors.exception_hint(exc)

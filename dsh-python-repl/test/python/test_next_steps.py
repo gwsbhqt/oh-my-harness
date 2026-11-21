@@ -54,8 +54,39 @@ class NextSteps(unittest.TestCase):
         self.assertIn("The file has 2 lines", hint)
 
 
+def missing_grep_root(path, workdir):
+    return f"grep 路径不存在：{path}（相对路径按工作区 {workdir} 解析）。请检查拼写，或先用 glob 找到正确路径。"
+
+
 class MissingSkillReferences(unittest.TestCase):
-    def test_ambiguous_unavailable_and_traversing_paths_offer_no_alternate_read(self):
+    def test_only_the_missing_root_of_this_grep_offers_a_replacement_path(self):
+        path = "other/skills/demo-reader/references/guide.md"
+        directory = Path("/fixture/reader's shelf/skills/demo-reader")
+        namespace = skills._SkillsNamespace()
+        skills.load([{"skill": "demo-reader", "path": str(directory), "instructions_file": "SKILL.md"}], namespace)
+        args = {"pattern": "fixture query", "path": path, "scope": "all"}
+        missing = missing_grep_root(path, "/fixture/project")
+        denied = f"grep 无法读取搜索路径 {path}：Permission denied (os error 13)"
+        invalid = f"grep 路径无效：{path} 中有一段是文件而不是目录（Not a directory (os error 20)）。"
+        with patch.object(dsh_kernel, "skills", namespace):
+            hint = cell_errors.tool_hint(missing, args, tool_name="grep")
+            expected = str(directory / "references" / "guide.md")
+            self.assertIn(f"`path={expected!r}`", hint)
+            self.assertNotIn(args["pattern"], hint)
+            self.assertNotIn("await read", hint)
+            relative = "skills/demo-reader/references/absent.md"
+            same_root = cell_errors.tool_hint(missing_grep_root(relative, directory.parent.parent),
+                                              {**args, "path": relative}, tool_name="grep")
+            self.assertIn("already uses the discovered directory", same_root)
+            self.assertNotIn("`path=", same_root)
+            for message, request, tool in (
+                (denied, args, "grep"), (invalid, args, "grep"),
+                (missing, {**args, "path": "another"}, "grep"), (missing, args, "other"),
+            ):
+                with self.subTest(message=message, tool=tool):
+                    self.assertIsNone(cell_errors.tool_hint(message, request, tool_name=tool))
+
+    def test_ambiguous_unavailable_and_traversing_paths_offer_no_alternate_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             namespace = skills._SkillsNamespace()
@@ -68,9 +99,15 @@ class MissingSkillReferences(unittest.TestCase):
                 for name in ("shared", "broken", "disabled", "unknown", "guide/.."):
                     path = str(root / "guessed" / "skills" / name / "references" / "common.md")
                     with self.subTest(name=name):
-                        hint = cell_errors.tool_hint(f'cannot read "{path}": not found', {"file_path": path})
-                        self.assertNotIn("await read", hint)
-                        self.assertNotIn(str(root), hint)
+                        hints = (
+                            cell_errors.tool_hint(f'cannot read "{path}": not found', {"file_path": path}),
+                            cell_errors.tool_hint(missing_grep_root(path, tmp), {"path": path, "pattern": "guide"},
+                                                  tool_name="grep"),
+                        )
+                        for hint in hints:
+                            self.assertNotIn("await read", hint)
+                            self.assertNotIn("`path=", hint)
+                            self.assertNotIn(str(root), hint)
                 path = str(root / "catalog" / "skills" / "guide" / "SKILL.md")
                 self.assertIsNone(cell_errors.tool_hint(f'cannot read "{path}": permission denied', {"file_path": path}))
 

@@ -388,7 +388,7 @@ class _SkillsNamespace(_Namespace):
         return {"items": items}
 
 
-def missing_resource_hint(path: str) -> str | None:
+def missing_resource_hint(path: str, *, grep_workdir: str | None = None) -> str | None:
     """Resolve only the skill directory from this session's catalog, without probing either path."""
     from dsh_kernel import skills
 
@@ -406,10 +406,13 @@ def missing_resource_hint(path: str) -> str | None:
     if record["status"] not in {"available", "docs-only"} or not record.get("path"):
         return check
     directory = Path(record["path"])
-    if guessed == directory:
+    if Path(grep_workdir or ".") / guessed == directory:
         return f"This path already uses the discovered directory for {guessed.name!r}. Check the relative reference in its instructions."
     candidate = directory / missing.relative_to(guessed)
-    return f"The discovered directory for {guessed.name!r} is {directory}. Try `await read({str(candidate)!r})`."
+    location = f"The discovered directory for {guessed.name!r} is {directory}."
+    if grep_workdir is not None:
+        return f"{location} Retry the same grep with `path={str(candidate)!r}`."
+    return f"{location} Try `await read({str(candidate)!r})`."
 
 
 def _missing_skill(name: str, available: list[str], renames=None) -> str:

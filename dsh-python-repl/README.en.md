@@ -137,6 +137,8 @@ Runtime state lives below `DSH_HOME/plugins/python-repl/`. Each session has its 
 
 Each trusted skill has a standard `SKILL.md` identity and a Python package under `src/<import_name>/`. When present, `PYSKILL.md` supplies Python instructions; otherwise `SKILL.md` is used. Invalid Python instructions are reported without silently switching documents. Import names replace hyphens with underscores. Skills are available through `skills.<import_name>`; use `await skills.list()` and `await skills.describe("demo_reader")` to discover their functions and instructions.
 
+Use the returned skill entry’s `directory` to resolve relative references. When `dsh-grep-scope` reports a missing reference under the wrong skill root, the kernel suggests a new `path` if the session catalog identifies one available directory for that skill. Use that path to repeat the original search.
+
 Do not use `import skills.demo_reader` or install a package named `skills`. `skills` is already a bound namespace and needs no import; `import skills` returns that same namespace. Documentation-only skills remain accessible through the Harness `skill` tool.
 
 ## Trust and cancellation

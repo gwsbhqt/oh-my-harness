@@ -212,7 +212,7 @@ def _line_count(path: str) -> int | None:
     return breaks + (1 if last not in (b"", b"\n") else 0)
 
 
-def tool_hint(message: str, args=None) -> str | None:
+def tool_hint(message: str, args=None, *, tool_name: str | None = None) -> str | None:
     """Suggest a next step for tool argument and file-access failures.
 
     Where the file system can say more (a near path, the closest text, the
@@ -220,7 +220,7 @@ def tool_hint(message: str, args=None) -> str | None:
     says what to do.
     """
     try:
-        extra = _next_step(message, args)
+        extra = _next_step(message, args, tool_name)
     except Exception:  # noqa: BLE001 - a hint must never break error reporting
         extra = None
     if extra is not None:
@@ -315,8 +315,20 @@ def skipped_note(exc: BaseException) -> str | None:
     return f"The cell stopped at line {line}; {span} did not run, so {'; '.join(parts)}.\n"
 
 
-def _next_step(message: str, args) -> str | None:
-    """A hint built from the file system: near paths, closest text, line count."""
+def _next_step(message: str, args, tool_name: str | None) -> str | None:
+    """Use the session catalog for missing skill references and file evidence for read/edit errors."""
+    if tool_name == "grep":
+        path = args.get("path") if isinstance(args, dict) else None
+        # The bridge carries the rendered root error with grep's own working directory.
+        diagnostic, end, _ = message.rpartition(" 解析）。")
+        if not end or not isinstance(path, str):
+            return None
+        prefix = f"grep 路径不存在：{path}（相对路径按工作区 "
+        if diagnostic.startswith(prefix):
+            from skills import missing_resource_hint
+
+            return missing_resource_hint(path, grep_workdir=diagnostic[len(prefix):])
+        return None
     if re.search(r"old_string (?:was )?not found", message):
         target = _edit_target(message, args)
         return None if target is None else _closest_text(*target)

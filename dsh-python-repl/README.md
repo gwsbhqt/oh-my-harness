@@ -137,6 +137,8 @@ pnpm run check
 
 每个可信技能都有标准的 `SKILL.md` 身份说明，以及 `src/<import_name>/` 下的 Python 包。如果存在 `PYSKILL.md`，就用它提供 Python 使用说明；否则使用 `SKILL.md`。Python 说明无效时会报告错误，不会悄悄改读另一个文件。导入名中的连字符会换成下划线。通过 `skills.<import_name>` 使用技能；用 `await skills.list()` 和 `await skills.describe("demo_reader")` 查函数和说明。
 
+用返回条目中的 `directory` 解析技能说明里的相对路径。用 `dsh-grep-scope` 搜索参考文件时，如果搜错技能目录并收到路径不存在的报错，内核会从本会话的清单里查找同名技能。找到唯一可用的目录时，提示会给出可以替换的 `path`。
+
 不要执行 `import skills.demo_reader`，也不要安装名叫 `skills` 的包。`skills` 已经是绑定好的命名空间，不用导入；写了 `import skills` 拿到的也是同一个命名空间。只有文档、没有 Python 入口的技能，仍通过 DSH 的 `skill` 工具使用。
 
 ## 信任和取消
