@@ -111,7 +111,7 @@ computer-use --local element com.apple.calculator scroll --selector '{"role":"sc
 
 ### 共享浏览器窗口
 
-`await skills.computer_use.windows("Arc", host="local", scope="task-a")` 与 `await app.windows()` 返回 `{mode:"windows", windows:[...]}`。每项包含 `id`（真实 CGWindowID）、`pid`、`startedAt`（NSRunningApplication.launchDate 的 Unix 秒）、`bundleId`，以及观察信息 `title/x/y/w/h/isFocused/isFrontmost/minimized`。用本任务创建窗口的字典构造 `skills.computer_use.app("Arc", window=ref, host="local", scope="task-a")`。引用只使用身份字段，标题和位置不是替代依据；来自浏览器调试协议或 AppleScript 的 ID 不可混用。
+`await skills.computer_use.windows("Cra", host="local", scope="task-a")` 与 `await app.windows()` 返回 `{mode:"windows", windows:[...]}`。每项包含 `id`（真实 CGWindowID）、`pid`、`startedAt`（NSRunningApplication.launchDate 的 Unix 秒）、`bundleId`，以及观察信息 `title/x/y/w/h/isFocused/isFrontmost/minimized`。用本任务创建窗口的字典构造 `skills.computer_use.app("Cra", window=ref, host="local", scope="task-a")`。引用只使用身份字段，标题和位置不是替代依据；来自浏览器调试协议或 AppleScript 的 ID 不可混用。
 
 App 首个完整 snap 保存稳定引用，后续动作、等待和截图固定它。模块应用函数接受 window=ref；snap、winmove、winsize 的 window=整数仅用于首次观察选择，不是稳定身份。浏览器使用每条命令的窗口锁和独立任务缓存，无长期 owner/lease；release 无需 lease，只结束绑定。同一窗口正执行命令时其他命令立即拒绝；不同窗口可使用。已释放窗口对象需重新构造绑定，不能通过 claim 取得整个浏览器。
 

@@ -49,12 +49,12 @@ ID 优先，其次唯一标签，最后编号；ID 来自开发者，不是编�
 
 应用绑定是同步工厂，固定创建时的机器和任务；取态、动作与释放是异步方法。命令每步显式携带同一机器与任务。绑定与任务规则见 [共用规则](references/common.md#机器应用与任务)，定位与快照参数同时参阅 [命令参数参考](references/cli.md#应用归属和元素) 和 [内核参数参考](references/interfaces.md#python-内核里调用)。
 
-共享浏览器复用同一实例、用户 profile 和登录状态，真人与各任务各用独立窗口。先发现窗口，再明确选择本任务创建的那一个；不要按标题认领真人窗口。ref 的 id 是 CGWindowID，不能用浏览器调试协议或 AppleScript 的窗口编号替代。首次完整 snap 也会固定返回的稳定引用；之后每个动作都带它。窗口消失、进程重启、身份不唯一即拒绝，不按同名同位置找替代窗口。
+Cra、Chrome、Arc 等共享浏览器复用同一实例、用户 profile 和登录状态，真人与各任务各用独立窗口。先发现窗口，再明确选择本任务创建的那一个；不要按标题认领真人窗口。ref 的 id 是 CGWindowID，不能用浏览器调试协议或 AppleScript 的窗口编号替代。首次完整 snap 也会固定返回的稳定引用；之后每个动作都带它。窗口消失、进程重启、身份不唯一即拒绝，不按同名同位置找替代窗口。
 
 ```bash
-computer-use --local windows Arc --scope task-a --json
+computer-use --local windows Cra --scope task-a --json
 # WINDOW_REF 是上一步本任务窗口的完整 JSON 字典。
-computer-use --local snap Arc --window-ref "$WINDOW_REF" --scope task-a --max 800 --json
+computer-use --local snap Cra --window-ref "$WINDOW_REF" --scope task-a --max 800 --json
 # 每条后续命令都带相同 --window-ref；无需长期 owner 或 lease。
 ```
 

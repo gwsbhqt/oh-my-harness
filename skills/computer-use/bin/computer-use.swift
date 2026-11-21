@@ -371,7 +371,9 @@ func nativeWindowID(_ window: AXUIElement) -> CGWindowID? {
 }
 
 func isBrowserBundle(_ key: String) -> Bool {
-    return ["com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.dev", "com.google.Chrome.canary", "company.thebrowser.Browser", "org.chromium.Chromium", "com.microsoft.edgemac", "com.brave.Browser", "com.apple.Safari"].contains(key)
+    return ["com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.dev", "com.google.Chrome.canary",
+            "dk.kildahl.cra", "company.thebrowser.Browser", "org.chromium.Chromium",
+            "com.microsoft.edgemac", "com.brave.Browser", "com.apple.Safari"].contains(key)
 }
 
 var requestedWindowIndex: Int? = nil
@@ -1678,7 +1680,7 @@ func skyScroll(_ t: MouseTarget, dx: Int32, dy: Int32) -> Bool {
     return true
 }
 
-/// 让 Chrome/Arc/Electron 把网页内容交给辅助功能，等到网页元素出现或超时。返回是否已读得到网页。
+/// 让 Chromium 系浏览器和 Electron 应用把网页内容交给辅助功能，等到网页元素出现或超时。返回是否已读得到网页。
 /// Chrome 默认只暴露浏览器外壳；给应用根元素设 AXEnhancedUserInterface（VoiceOver 的做法）后约 1~2 秒网页元素才出现。
 /// Chrome 对这次写入返回 -25208 但实际已生效，所以不看返回码，按树里有没有带内容的 AXWebArea 判断。
 /// AXManualAccessibility 是 Electron 的专用开关，对 Chrome 返回 -25205；两个都写，互不影响。
@@ -1707,7 +1709,7 @@ func enableWebContent(_ pid: pid_t, timeout: Double) -> (ok: Bool, seconds: Doub
 
 /// 已知会把网页内容藏起来的应用：Chromium 系浏览器和 Electron 应用。不在名单里的应用 snap 时不会被改设置。
 let webHosts: Set<String> = ["com.google.Chrome", "com.google.Chrome.canary", "com.google.chrome.for.testing",
-                             "company.thebrowser.Browser",
+                             "dk.kildahl.cra", "company.thebrowser.Browser",
                              "com.microsoft.edgemac", "com.brave.Browser", "org.chromium.Chromium",
                              "com.vivaldi.Vivaldi", "com.operasoftware.Opera", "com.electron.lark",
                              "com.tinyspeck.slackmacgap", "com.microsoft.VSCode", "com.hnc.Discord",
@@ -3185,10 +3187,12 @@ case "open":
     if let running = resolveApp(name), let u = running.bundleURL, let b = running.bundleIdentifier {
         bindTaskOwnership(running)
         url = u; bid = b
-    } else if let u = installedAppURL(name) {
+    } else {
+        guard boundWindowRef == nil else { die("绑定窗口的进程已退出，未自动重启", 4) }
+        guard let u = installedAppURL(name) else { appNotFound(name, installed: true) }
         bid = claimInstalledApp(u)
         url = u
-    } else { appNotFound(name, installed: true) }
+    }
     if boundWindowRef != nil {
         guard !front else { die("绑定窗口不会自动激活应用，请手动置前目标窗", 6) }
         emitOK("目标窗口已运行", ["mode": "open", "window": boundWindowRef!])

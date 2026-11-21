@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import plistlib
 import subprocess
 import sys
 import tempfile
@@ -132,7 +133,7 @@ if mode == "flags" {
     let found = CommandLine.arguments.dropFirst(2).map { installedAppURL($0)?.path ?? "" }
     emitJSON(["ok": true, "paths": found])
 } else if mode == "open-missing" {
-    args = [CommandLine.arguments[2], "--scope", "fixture"]
+    args = [CommandLine.arguments[2], "--scope", "fixture"] + CommandLine.arguments.dropFirst(3)
     optionBoundary = nil
     runCommand("open")
 } else if mode == "quit" {
@@ -169,6 +170,10 @@ if mode == "flags" {
               "flags": Int(parsed.flags.rawValue),
               "plan": plan.map { ["code": Int($0.keyCode), "down": $0.keyDown, "modifier": $0.modifier,
                                   "flags": Int($0.flags.rawValue)] }])
+} else if mode == "browser-owner" {
+    args = Array(CommandLine.arguments.dropFirst(2))
+    optionBoundary = nil
+    runCommand("owner")
 } else if mode == "window-ref" {
     let scenario = CommandLine.arguments[2]
     let app = NSRunningApplication.current
@@ -253,6 +258,19 @@ class Native(unittest.TestCase):
 
     def invoke(self, *args):
         return subprocess.run([str(self.binary), *args], env=self.env, capture_output=True, text=True)
+
+    def test_shared_browser_status_uses_windows_and_refuses_app_release(self):
+        for bundle in ("dk.kildahl.cra", "com.google.Chrome", "company.thebrowser.Browser"):
+            with self.subTest(bundle=bundle):
+                status = self.invoke("browser-owner", bundle, "status")
+                self.assertEqual(status.returncode, 0, status.stdout + status.stderr)
+                data = json.loads(status.stdout)
+                self.assertEqual((data["appKey"], data["resourceMode"]), (bundle, "window"))
+                self.assertEqual(data["ownership"], {"owner": None, "lease": None})
+
+                released = self.invoke("browser-owner", bundle, "release")
+                self.assertEqual(released.returncode, 6, released.stdout + released.stderr)
+                self.assertEqual(json.loads(released.stdout)["outcome"], "not_sent")
 
     def test_stable_window_ref_rejects_pid_generation_disappearance_and_duplicate(self):
         good = self.invoke("window-ref", "valid")
@@ -446,6 +464,19 @@ class Native(unittest.TestCase):
         paths = json.loads(result.stdout)["paths"]
         self.assertEqual(len(set(paths)), 1, paths)
         self.assertTrue(paths[0].endswith("/Calculator.app"), paths)
+
+    def test_open_with_stale_window_ref_refuses_for_installed_browser(self):
+        app = self.directory / "Cra Fixture.app"
+        contents = app / "Contents"
+        contents.mkdir(parents=True)
+        bundle = "dk.kildahl.cra"
+        (contents / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": bundle}))
+        ref = {"id": 42, "pid": 123, "startedAt": 123.5, "bundleId": bundle}
+
+        result = self.invoke("open-missing", str(app), "--window-ref", json.dumps(ref))
+
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout)["outcome"], "not_sent")
 
     def test_open_unknown_app_lists_similar_without_launching(self):
         result = self.invoke("open-missing", "Calculater")
