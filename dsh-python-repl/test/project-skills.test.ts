@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { it } from 'node:test'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -56,6 +56,42 @@ it('imports the session project\'s .agents/skills ahead of same-named configured
   try {
     assert.deepEqual(off.knownSkills('off', join(repo, 'docs')).map((s) => s.skill), ['global-only', 'shared'], 'projectSkillRoots: [] scans only skillRoots')
   } finally { await off.disposeAll(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+it('points a missing skill reference at its discovered directory and leaves the read to the caller', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-repl-skill-reference-'))
+  const trusted = join(dir, 'project', '.agents', 'skills')
+  addSkill(trusted, 'demo-reader', 'project')
+  const actual = join(trusted, 'demo-reader', 'references', 'common.md')
+  const guessed = join(dir, 'other', 'skills', 'demo-reader', 'references', 'common.md')
+  mkdirSync(join(trusted, 'demo-reader', 'references'))
+  writeFileSync(actual, 'fixture guide')
+  mkdirSync(join(dir, 'other', 'skills', 'demo-reader', 'references'), { recursive: true })
+  writeFileSync(join(dir, 'other', 'skills', 'demo-reader', 'references', 'commons.md'), 'unrelated fixture')
+  const calls: string[] = []
+  const read = new Map([['read', async (args: unknown) => {
+    const { file_path: path } = args as { file_path: string }
+    calls.push(path)
+    if (path === guessed) throw new Error(`cannot read "${path}": not found`)
+    assert.equal(path, actual)
+    return { path, offset: 1, totalLines: 1, lines: [{ number: 1, text: readFileSync(path, 'utf8') }] }
+  }]])
+  const runtime = await runtimeWith({ skillRoots: [trusted], projectSkillRoots: [] })
+  try {
+    const session = runtime.sessionFor('missing-reference', dir)
+    const failed = await session.runCell(`await read(${JSON.stringify(guessed)})`, read)
+    const message = failed.error?.message ?? ''
+    assert.match(message, /cannot read .*: not found/)
+    assert.ok(message.includes(actual), message)
+    assert.doesNotMatch(message, /commons\.md/)
+    assert.deepEqual(calls, [guessed])
+    const suggested = message.match(/`(await read\(.+?\))`/)?.[1]
+    assert.ok(suggested, message)
+    const retry = await session.runCell(`print((${suggested}).text)`, read)
+    assert.equal(retry.error, undefined)
+    assert.match(retry.logs.join(''), /fixture guide/)
+    assert.deepEqual(calls, [guessed, actual])
+  } finally { await runtime.disposeAll(); rmSync(dir, { recursive: true, force: true }) }
 })
 
 it('passes profile rename hints into new kernels without creating aliases', async () => {

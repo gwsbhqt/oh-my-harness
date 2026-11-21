@@ -388,6 +388,30 @@ class _SkillsNamespace(_Namespace):
         return {"items": items}
 
 
+def missing_resource_hint(path: str) -> str | None:
+    """Resolve only the skill directory from this session's catalog, without probing either path."""
+    from dsh_kernel import skills
+
+    missing = Path(path)
+    guessed = next((parent for parent in missing.parents if parent.parent.name == "skills"), None)
+    if guessed is None:
+        return None
+    check = "Check the skill's base directory and relative reference in its instructions."
+    if ".." in missing.parts or not isinstance(skills, _SkillsNamespace):
+        return check
+    matches = [record for record in skills._records() if record["skill"] == guessed.name]
+    if len(matches) != 1:
+        return check
+    record = matches[0]
+    if record["status"] not in {"available", "docs-only"} or not record.get("path"):
+        return check
+    directory = Path(record["path"])
+    if guessed == directory:
+        return f"This path already uses the discovered directory for {guessed.name!r}. Check the relative reference in its instructions."
+    candidate = directory / missing.relative_to(guessed)
+    return f"The discovered directory for {guessed.name!r} is {directory}. Try `await read({str(candidate)!r})`."
+
+
 def _missing_skill(name: str, available: list[str], renames=None) -> str:
     """Say which skill was probably meant: a retired name's successor, or a close spelling."""
     import difflib

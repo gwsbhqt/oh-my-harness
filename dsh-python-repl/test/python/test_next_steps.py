@@ -4,10 +4,12 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python"))
 
 import cell_errors  # noqa: E402
+import dsh_kernel  # noqa: E402
 import output_notes  # noqa: E402
 import skills  # noqa: E402
 
@@ -50,6 +52,27 @@ class NextSteps(unittest.TestCase):
     def test_offset_out_of_range_gives_the_line_count(self):
         hint = cell_errors.tool_hint(f'offset 90 is out of range for "{self.dir}/session.ts"')
         self.assertIn("The file has 2 lines", hint)
+
+
+class MissingSkillReferences(unittest.TestCase):
+    def test_ambiguous_unavailable_and_traversing_paths_offer_no_alternate_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            namespace = skills._SkillsNamespace()
+            def entry(name, source):
+                return {"skill": name, "path": str(root / source / name), "instructions_file": "SKILL.md"}
+            entries = [entry("shared", "first"), entry("shared", "second"), entry("guide", "catalog"),
+                       {**entry("broken", "private"), "document_error": "invalid fixture"}]
+            skills.load(entries, namespace, disabled=["disabled"])
+            with patch.object(dsh_kernel, "skills", namespace):
+                for name in ("shared", "broken", "disabled", "unknown", "guide/.."):
+                    path = str(root / "guessed" / "skills" / name / "references" / "common.md")
+                    with self.subTest(name=name):
+                        hint = cell_errors.tool_hint(f'cannot read "{path}": not found', {"file_path": path})
+                        self.assertNotIn("await read", hint)
+                        self.assertNotIn(str(root), hint)
+                path = str(root / "catalog" / "skills" / "guide" / "SKILL.md")
+                self.assertIsNone(cell_errors.tool_hint(f'cannot read "{path}": permission denied', {"file_path": path}))
 
 
 class RetiredSkillNames(unittest.TestCase):

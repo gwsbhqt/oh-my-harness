@@ -322,7 +322,16 @@ def _next_step(message: str, args) -> str | None:
         return None if target is None else _closest_text(*target)
     if re.search(r"cannot read .*not found|no such file", message, re.I):
         quoted = _QUOTED_PATH.search(message)
-        near = None if quoted is None else _near_paths(quoted.group(1))
+        if quoted is None:
+            return None
+        path = quoted[1]
+        if isinstance(args, dict) and "file_path" in args and message == f'cannot read "{path}": not found':
+            from skills import missing_resource_hint
+
+            skill_hint = missing_resource_hint(path)
+            if skill_hint is not None:
+                return skill_hint
+        near = _near_paths(path)
         return None if near is None else f"{near} await glob('**/<name>', path=<dir>) searches deeper."
     found = re.search(r"offset (\d+) is out of range", message)
     if found:
