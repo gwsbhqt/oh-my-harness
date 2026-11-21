@@ -62,7 +62,12 @@ test('子进程失败说明：超时排在输出前面，正常退出码与输�
  const slow=await run(process.execPath,['-e','process.emitWarning("fs.Stats constructor is deprecated","DeprecationWarning","DEP0180");setInterval(()=>{},1000)'],{timeoutMs:300});
  assert.equal(slow.timedOut,true);
  const text=failureText(slow,120000,'试启动');
- assert.match(text.split('\n')[0],/试启动没在整次检查的 120 秒时限内跑完/);assert.match(text,/DEP0180/);
+ assert.ok(Number.isInteger(slow.elapsedMs) && slow.elapsedMs >= 250);
+ const firstLine = text.split('\n')[0];
+ assert.match(firstLine, /试启动超时/);
+ assert.ok(firstLine.includes(`本步骤实际运行 ${slow.elapsedMs} 毫秒`));
+ assert.match(firstLine, /整次检查时限 120 秒/);
+ assert.match(text.slice(firstLine.length), /DEP0180/);
  const exit=await run(process.execPath,['-e','console.error("boom");process.exit(3)']);
  const exitText=failureText(exit,120000,'试启动');assert.doesNotMatch(exitText,/时限/);assert.match(exitText.split('\n')[0],/退出码 3/);assert.match(exitText,/boom/);
  assert.match(failureText({ok:false,code:null,timedOut:false,overflow:true,stdout:'',stderr:''},120000,'试启动'),/超过 8MB/);

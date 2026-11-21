@@ -18,6 +18,7 @@ export async function exists(p) { try { await fs.lstat(p); return true; } catch(
 export async function run(file,args,{env=process.env,cwd,timeoutMs=120000}={}) {
   return new Promise(resolve => {
     let stdout='',stderr='',overflow=false,timedOut=false,settled=false;
+    const started = performance.now();
     const child=spawn(file,args,{env,cwd,detached:true,stdio:['ignore','pipe','pipe']});
     const stop=signal=>{try{process.kill(-child.pid,signal);}catch{}};
     const capture=key=>chunk=>{if((stdout.length+stderr.length)>8*1024*1024){overflow=true;stop('SIGTERM');return;}if(key==='stdout')stdout+=chunk;else stderr+=chunk;};
@@ -25,13 +26,14 @@ export async function run(file,args,{env=process.env,cwd,timeoutMs=120000}={}) {
     child.stdout.on('data',capture('stdout')); child.stderr.on('data',capture('stderr'));
     const timer=setTimeout(()=>{timedOut=true;stop('SIGTERM');},timeoutMs);
     const hard=setTimeout(()=>stop('SIGKILL'),timeoutMs+3000);
-    const finish=(code,signal,error)=>{if(settled)return;settled=true;clearTimeout(timer);clearTimeout(hard);stop('SIGKILL');resolve({ok:code===0&&!timedOut&&!overflow&&!error,code,signal,timedOut,overflow,stdout,stderr,...(error?{error:error.message}:{})});};
+    const finish=(code,signal,error)=>{if(settled)return;settled=true;clearTimeout(timer);clearTimeout(hard);stop('SIGKILL');resolve({ok:code===0&&!timedOut&&!overflow&&!error,code,signal,timedOut,elapsedMs:Math.round(performance.now()-started),overflow,stdout,stderr,...(error?{error:error.message}:{})});};
     child.on('error',e=>finish(null,null,e)); child.on('close',(c,s)=>finish(c,s));
   });
 }
 /** 子进程没成功时的说明：超时、输出过多、进程没起来、退出码，排在程序输出前面。 */
 export function failureText(result,budgetMs,label) {
-  const cause=result.timedOut?`${label}没在整次检查的 ${Math.round(budgetMs/1000)} 秒时限内跑完，被停掉。下面是被停掉前的输出，里面的警告不一定是原因`
+  const elapsed = Number.isFinite(result.elapsedMs) ? `本步骤实际运行 ${result.elapsedMs} 毫秒，` : '';
+  const cause=result.timedOut?`${label}超时，${elapsed}整次检查时限 ${Math.round(budgetMs/1000)} 秒。以下为停止前的输出`
     :result.overflow?`${label}输出超过 8MB 被停掉`
     :result.error?`${label}没能启动：${result.error}`
     :result.code!==0?`${label}退出码 ${result.code}${result.signal?`（信号 ${result.signal}）`:''}`:'';
