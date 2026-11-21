@@ -105,6 +105,34 @@ class TextOrListUsedAsDict(unittest.TestCase):
         self.assertIn("`rows` is a list of 2 items", hint("rows = [{'id': 1}, {'id': 2}]\nrows['id']\n"))
 
 
+class StructuredText(unittest.TestCase):
+    def test_only_suggests_fields_that_actually_hold_text(self):
+        source = "body.splitlines()\n"
+        self.assertIn("`body['text'].splitlines()`", hint(source, body={"text": "line", "content": ["line"]}))
+        self.assertIsNone(hint(source, body={"kind": "text", "content": {"value": "line"}}))
+
+    def test_does_not_repeat_a_call_to_obtain_the_body(self):
+        calls = []
+
+        def fetch():
+            calls.append(1)
+            return {"body": {"content": "line"}}
+
+        self.assertIsNone(hint("fetch()['body'].splitlines()\n", fetch=fetch))
+        self.assertEqual(calls, [1])
+
+
+class GatherReceipts(unittest.TestCase):
+    def test_other_unhashable_values_and_other_calls_get_no_receipt_advice(self):
+        class _BashResult(dict):
+            pass
+
+        for value in ({}, _BashResult()):
+            self.assertIsNone(hint("await asyncio.gather(value)\n", asyncio=asyncio, value=value))
+        receipt = dsh_kernel._BashResult(kind="foreground", exitCode=0)
+        self.assertIsNone(hint("hash(receipt)\n", receipt=receipt))
+
+
 class UnknownParameters(unittest.TestCase):
     def test_method_lists_its_real_parameters(self):
         text = hint("snap = Snap()\nsnap.find(idx=1)\n", Snap=Snap)

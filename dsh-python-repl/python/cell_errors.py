@@ -548,6 +548,14 @@ def _exception_hint(exc: BaseException) -> str | None:
     if frame is None:
         return None
 
+    if isinstance(exc, TypeError) and "unhashable type: '_BashResult'" in message:
+        import asyncio
+        from dsh_kernel import _BashResult
+
+        if frame.f_code is asyncio.gather.__code__ and any(type(v) is _BashResult for v in frame.f_locals.values()):
+            return ("asyncio.gather hashes its inputs. A bash receipt is a dict for a command already started. "
+                    "Collect one with `await receipt`, or a list with `[await receipt for receipt in receipts]`.\n")
+
     if isinstance(exc, TypeError) and re.fullmatch(r"'[\w.]+' object can't be awaited|object [\w.]+ can't be used in 'await' expression", message):
         kind = re.search(r"'?([\w.]+)'? (?:object )?can't", message).group(1)
         kind = "dict" if kind in ("_ToolResult", "_NestedResult") else kind
@@ -567,6 +575,15 @@ def _exception_hint(exc: BaseException) -> str | None:
             rest = _code(node)[len(_code(target)):]
             return f"`{_code(target)}` is async and was not awaited yet: write `(await {_code(target)}){rest}`.\n"
         return "This value is a coroutine that has not run: put `await` before the call that made it, in parentheses before indexing: `(await f(...))['key']`.\n"
+
+    if (isinstance(exc, AttributeError) and exc.name == "splitlines" and type(exc.obj) is dict
+            and isinstance(node, ast.Attribute) and _lookup(node.value, frame) is exc.obj):
+        receiver = _code(node.value)
+        fields = [key for key, field in exc.obj.items()
+                  if type(key) is str and key in ("content", "text") and type(field) is str]
+        if fields and not receiver.endswith("…"):
+            choices = " or ".join(f"`{receiver}[{key!r}].splitlines()`" for key in fields)
+            return f"To split the text in this dict into lines, use {choices}.\n"
 
     if isinstance(exc, AttributeError) and isinstance(getattr(exc, "obj", None), (str, list)) and type(exc.obj).__module__ in ("builtins", "dsh_kernel"):
         value, name = exc.obj, exc.name

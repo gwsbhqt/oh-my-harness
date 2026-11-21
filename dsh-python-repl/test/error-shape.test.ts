@@ -10,6 +10,7 @@ import { dirname, join } from 'node:path'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { ReplSession } from '../src/session.ts'
+import type { BoundTool } from '../src/lease.ts'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const dir = mkdtempSync(join(tmpdir(), 'dsh-error-shape-'))
@@ -72,6 +73,46 @@ it('a missing key on a tool result names its keys; slicing it says it is a dict'
   assert.match(text, /'body' is not a key of this tool result; its keys are 'path', 'offset', 'lines', 'totalLines'/)
   const sliced = message(await session.runCell('r[:10]', new Map()))
   assert.match(sliced, /is a dict, not text or a list, so it cannot be sliced/)
+})
+
+it('points splitlines at the text field of a structured body', async () => {
+  const setup = await session.runCell('doc = {"body": {"kind": "text", "content": "first line\\nsecond line"}}', new Map())
+  assert.equal(setup.error, undefined)
+  const failed = message(await session.runCell("doc['body'].splitlines()", new Map()))
+  assert.match(failed, /^AttributeError: 'dict' object has no attribute 'splitlines'/)
+  const fixed = "doc['body']['content'].splitlines()"
+  assert.ok(failed.includes('`' + fixed + '`'), failed)
+  assert.doesNotMatch(failed, /first line|second line/)
+  const retry = await session.runCell(`assert ${fixed} == ['first line', 'second line']`, new Map())
+  assert.equal(retry.error, undefined)
+})
+
+it('collects existing bash receipts after gather rejects them, without starting either command again', async () => {
+  let starts = 0
+  let waits = 0
+  const tools = new Map<string, BoundTool>([
+    ['bash', async () => ++starts === 1
+      ? { kind: 'foreground', cwd: dir, exitCode: 0 }
+      : { kind: 'background', cwd: dir, jobId: 'fixture-job' }],
+    ['job_output', async (args) => {
+      const { job_id, wait } = args as { job_id: string; wait?: boolean }
+      assert.equal(job_id, 'fixture-job')
+      if (wait) waits++
+      return { text: '', job: { id: job_id, kind: 'bash', label: 'fixture', startedAt: 1,
+        status: wait ? 'completed' : 'running', detail: wait ? 'exit code: 7' : '' } }
+    }],
+  ])
+  const setup = await session.runCell("receipts = [await bash('fixture', 'fixture') for _ in range(2)]", tools)
+  assert.equal(setup.error, undefined)
+  const failed = message(await session.runCell('await asyncio.gather(*(r for r in receipts))', tools))
+  assert.match(failed, /unhashable type: '_BashResult'/)
+  assert.equal(waits, 0)
+  const fixed = '[await receipt for receipt in receipts]'
+  assert.ok(failed.includes('`' + fixed + '`'), failed)
+  const retry = await session.runCell(`done = ${fixed}\nassert [r.exitCode for r in done] == [0, 7]`, tools)
+  assert.equal(retry.error, undefined, retry.error?.message)
+  assert.equal(starts, 2)
+  assert.equal(waits, 1)
 })
 
 it('awaiting a plain value names the synchronous function and says to remove await, once', async () => {
