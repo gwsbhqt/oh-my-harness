@@ -37,7 +37,7 @@ import { PendingQuestions, type AnswerBatch } from './questions.ts'
 import { startServer } from './server.ts'
 import { MachinePage, machineRoutes, realMachineDeps, type FetchRoute, type Layout } from './machines.ts'
 import { collectQuitBlockers, nextStepInsertionProjection, type LiveAgent, type NoticeInsertions } from './quit-blockers.ts'
-import { RemoteService, type CommandResult, type AutomaticSelectLike, type RestartRecoveryResult, type MonitorStartRequest, type RuntimeConfig, type SessionQueryLike } from './service.ts'
+import { RemoteService, type Deps, type CommandResult, type AutomaticSelectLike, type RestartRecoveryResult, type MonitorStartRequest, type RuntimeConfig, type SessionQueryLike } from './service.ts'
 
 export const name = 'dsh-use'
 export const inject = ['typertGateway', 'typert', 'sessionQuery', 'connection']
@@ -339,11 +339,18 @@ export async function apply(ctx: Context, config: ConfigCells): Promise<void> {
       goals.disarm(agent)
       return true
     },
+    explicitBashStart: (owner, id) => {
+      const runtime = ctx.get('ptcRuntime') as { explicitBashStart?: NonNullable<Deps['explicitBashStart']> } | undefined
+      return runtime?.explicitBashStart?.(owner, id)
+    },
     killJob: (jobId, reason) => {
       const jobs = ctx.get('jobs') as JobsLike | undefined
       if (jobs === undefined) throw new Error('后台任务服务不可用')
-      const owner = (jobs.list().find((j) => j.id === jobId) ?? (ctx.get('agents') as AgentsLike | undefined)?.list()
-        .flatMap((a) => jobs.list(a.id)).find((j) => j.id === jobId))?.owner
+      const job = jobs.list().find((j) => j.id === jobId) ?? (ctx.get('agents') as AgentsLike | undefined)?.list()
+        .flatMap((a) => jobs.list(a.id)).find((j) => j.id === jobId)
+      // The registry accepts another kill while stopping and would overwrite the previous cancel reason.
+      if (job?.status === 'stopping') return 'already-stopping'
+      const owner = job?.owner
       // 有人在等，宿主就不给主人发「任务结束」：闲着的会话收到它会开一轮，当成要接着干（dsh-monitor 暂停监听也是这么做的）。
       void jobs.wait(jobId, 30_000, owner).catch(() => {})
       return jobs.kill(jobId, owner, reason)

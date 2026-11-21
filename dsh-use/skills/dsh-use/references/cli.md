@@ -63,7 +63,7 @@ dsh-use use --clear         # 清除默认机器，恢复本机
 | 插件 | `dsh-use plugins`（描述以 … 结尾是被截断了，`--json` 看全文）、`dsh-use plugin install|remove|enable|disable <包名>` |
 | 配置 | `dsh-use config`、`dsh-use config <命名空间>`、`dsh-use config <命名空间> --set '{"字段":值}'` |
 | 启动检查 | `dsh-use doctor`（离线检查并隔离试启动；运行时还会调用在线 doctor 工具；全部通过才退出 0） |
-| 重启 | 先 `dsh-use doctor`，全部通过再 `dsh-use restart`：一律中止在跑的会话后直接重启，没有等空闲模式；会话里自动转后台并通知你。重启后被中止的会话（包括你自己）自动收到「继续」，被停的后台任务在原会话自动重新拉起、不叫醒闲着的会话 |
+| 重启 | 先 `dsh-use doctor`，全部通过再 `dsh-use restart`：一律中止在跑的会话后直接重启，没有等空闲模式；会话里自动转后台并通知你。重启后被中止的会话（包括你自己）自动收到「继续」，本次停下的显式后台 bash 有原目录才在原会话重新拉起；前台和意图不明的任务只报告中断，闲着的主人不被叫醒 |
 | 升级 App | `dsh-use upgrade [--check] [--before <命令>]`：按更新源取包，校验大小、sha512、签名、公证和开发者，用新版 App 对实际配置跑启动检查，全过才重启；旧 App 退出后才替换，新版拉不起来自动换回旧版，新版就绪后删掉旧版。`--check` 只备好并检查不替换，已是最新直接退出 0 |
 | 网页登录网址 | `dsh-use web-url [--base 网址]`：带这次启动的一次性口令，等同登录凭据，别外传；DSH 重启后失效。从别的机器打开 DSH 网页一般直接用下一行的 `open` |
 | 打开别的机器上的服务 | `dsh-use open <机器> <服务>`：拉起隧道并在本机浏览器打开，例如 `dsh-use open beta dsh`、`dsh-use open beta hermes`；`dsh-use tunnel close <机器> <服务>` 关掉。机器和服务由 profile 的 `dsh-use` 配置提供，插件默认清单为空 |

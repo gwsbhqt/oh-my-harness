@@ -88,6 +88,24 @@ describe('bash runs as a job the cell waits on', () => {
     assert.equal(h.jobs.jobs.get('bash-1')!.removed, true)
   })
 
+  it('records only explicit background receipts, including with the foreground wait cap disabled', async () => {
+    for (const [cap, schema] of [[20, SCHEMA], [0, SCHEMA], [20, undefined]] as const) {
+      const h = harness()
+      const recorded: string[] = []
+      const start: BoundTool = async () => ({ kind: 'background', jobId: h.jobs.spawn('printf fixture', 80), cwd: '/fixture' })
+      const bind = withJobBash(start, schema, cap, { jobs: h.jobs, owner: 'owner', notices: h.notices,
+        recordExplicitBash: (id, cwd) => { assert.equal(cwd, '/fixture'); recorded.push(id) },
+      }, undefined, start)
+      try {
+        const args = { command: 'printf fixture', description: 'fixture' }
+        const [front, back] = await Promise.all([bind(args), bind({ ...args, run_in_background: true })]) as { kind: string; jobId: string }[]
+        assert.deepEqual(recorded, [back!.jobId])
+        assert.notEqual(front!.jobId, back!.jobId)
+        if (cap > 0 && schema !== undefined) assert.equal(front!.kind, 'promoted')
+      } finally { h.notices.dispose() }
+    }
+  })
+
   it('gathered commands run side by side', async () => {
     const h = harness(2_000)
     const started = Date.now()

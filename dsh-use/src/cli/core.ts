@@ -23,9 +23,10 @@ import { spawn, spawnSync } from 'node:child_process'
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { COMMANDS, validateCommand } from '../commands.ts'
+import type { StoppedJob } from '../service.ts'
 import { UsageError } from '../gateway.ts'
 import { appLaunchEnv, backendRunning, fromSsh, hostRunning, offlineDoctor, layeredDoctor, reportText, type Report } from './doctor.ts'
 import { DEFAULT_FEED, appVersion, discardStagedRelease, fetchFeed, keepCheckedRelease, pruneUpgrade, stageRelease, swapBack, swapIn, type Swap } from './upgrade.ts'
@@ -906,8 +907,7 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
   }
 
   /** 重启这一趟里被停掉的东西，重启后要告诉它们的主人。 */
-  /** cwd：bash 任务启动时的目录，查到了重启后才在原会话里用原命令（label）重新拉起。 */
-  interface Casualty { id: string; label: string; owner: string; kind: 'job' | 'subagent'; cwd?: string }
+  interface Casualty { id: string; label: string; owner: string; kind: 'job' | 'subagent'; backgroundStart?: { cwd: string | undefined } }
   /** 为重启暂停、新进程起来后由插件自己接回的监听（插件会通知主人，这里只记日志）。 */
   /** 退出那一刻查到的阻碍；失败记录用它覆盖排队时记下的旧阻碍，没查到就清掉。 */
   let quitTimeBlockers: Partial<Blockers> | undefined
@@ -937,7 +937,7 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
 
   /**
    * 清掉会让 App 弹退出确认框的东西，返回 undefined 表示清干净了，否则返回卡在哪。
-   * 重启一律强制：在跑的会话中止（宿主保留排队消息），后台任务停掉（重启后在原会话重新拉起），
+   * 重启一律强制：在跑的会话中止（宿主保留排队消息），后台任务按启动方式恢复或报告中断，
    * 安装前必须等到清场完成，普通重启可以在较短等待后结束进程。
    */
   async function clearQuitBlockers(running: string[], beforeUpdate = false): Promise<string | undefined> {
@@ -1016,12 +1016,19 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
       const paused = new Set(suspended.map((s) => s.id))
       const hard = b.jobs.filter((j) => !paused.has(j.id) && j.survivable !== true)
       if (hard.length > 0 && !killedJobs) {
-        let killed: { id: string; cwd?: string }[] = []
-        try { killed = ((await run('kill-jobs', hard.map((j) => j.id), {}, 20_000)).data as { killed?: { id: string; cwd?: string }[] } | undefined)?.killed ?? [] } catch { /* 下一轮复查会报出来 */ }
-        stamp(`停掉了 ${hard.length} 个后台任务：${hard.map((j) => j.id).join(', ')}`)
+        let killed: StoppedJob[] = []
+        try {
+          const reply = await run('kill-jobs', hard.map((j) => j.id), {}, 20_000)
+          const receipts = (reply.data as { killed?: StoppedJob[] } | undefined)?.killed
+          if (reply.ok && Array.isArray(receipts)) killed = receipts
+        } catch { /* 下一轮复查会报出来 */ }
+        stamp(`请求停止 ${hard.length} 个任务：${hard.map((j) => j.id).join(', ')}`)
         for (const j of hard) {
-          const cwd = killed.find((k) => k.id === j.id)?.cwd
-          if (j.owner !== undefined) casualties.push({ id: j.id, label: j.label, owner: j.owner, kind: 'job', ...(cwd === undefined ? {} : { cwd }) })
+          const stopped = killed.find(k => k?.id === j.id)
+          if (j.owner === undefined || stopped?.outcome === 'already-finished' || stopped?.outcome === 'already-stopping') continue
+          const explicit = stopped?.outcome === 'requested' && stopped.explicitBackground === true
+            && stopped.kind === 'bash' && stopped.owner === j.owner && stopped.label === j.label
+          casualties.push({ id: j.id, label: j.label, owner: j.owner, kind: 'job', ...(explicit ? { backgroundStart: { cwd: stopped.cwd } } : {}) })
         }
         killedJobs = true
       }
@@ -1328,7 +1335,7 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
   /**
    * 重启后收尾。会话和后台任务分开处理：
    * - 被中止的会话（重启时在跑的，加上清场途中才开跑又被中止的）逐个发「继续」。只因任务被停才被叫醒的闲会话不算。
-   * - 被停的 bash 后台任务，查到了启动目录就在原会话里用原命令重新拉起；主人闲着时只放一条不唤醒的说明。
+   * - 只重新拉起已确认由本次重启停下的显式后台 bash；主人闲着时只放一条不唤醒的说明。
    * - 被中止的子代理算上级会话没做完的活：上级闲着（在等它的结果）也唤醒，让它决定接着派还是自己做。
    * 发起的会话不单独发，返回给调用方并进它那一条结果里。
    */
@@ -1338,9 +1345,11 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
     const unlaunched = new Map<string, string>()
     for (const c of casualties) {
       if (c.kind !== 'job') continue
-      if (c.cwd === undefined) { unlaunched.set(c.id, '查不到它启动时的目录'); continue }
+      if (c.backgroundStart === undefined) { unlaunched.set(c.id, '未确认是本次重启停下的显式后台任务'); continue }
+      const cwd = c.backgroundStart.cwd
+      if (typeof cwd !== 'string' || !isAbsolute(cwd)) { unlaunched.set(c.id, '查不到它启动时的目录'); continue }
       try {
-        const res = await run('monitor', [c.owner], { command: c.label, cwd: c.cwd, label: c.label, restart: 'never', quiet: true }, 90_000)
+        const res = await run('monitor', [c.owner], { command: c.label, cwd, label: c.label, restart: 'never', quiet: true }, 90_000)
         const id = (res.data as { id?: unknown } | undefined)?.id
         if (res.ok && typeof id === 'string') relaunched.set(c.id, id)
         else unlaunched.set(c.id, res.error?.message ?? '没确认拉起')
@@ -1402,7 +1411,7 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
       // 只留着后台任务的闲会话（比如做完活开着预览服务）：不唤醒，唤醒了它会当成要接着干。
       let why = ''
       try {
-        const r = await run('notice', [owner, text], { summary: `Restart stopped and relaunched ${lost.length} of your background jobs`, quiet: true }, 30_000)
+        const r = await run('notice', [owner, text], { summary: `Restart handled ${lost.length} of your jobs`, quiet: true }, 30_000)
         if (!r.ok) why = r.error?.message ?? '未知原因'
         else {
           const notice = stoppedJobNotice(owner, r.data)

@@ -17,6 +17,16 @@ import type { PendingQuestions } from './questions.ts'
 import type { QueuedDetail } from './quit-blockers.ts'
 import type { DesktopNotification } from './desktop-notifications.ts'
 
+export interface StoppedJob {
+  id: string
+  outcome: string
+  kind?: string
+  label?: string
+  owner?: string
+  explicitBackground?: true
+  cwd?: string
+}
+
 export interface CommandResult {
   text: string
   data?: unknown
@@ -109,7 +119,8 @@ export interface Deps {
    */
   scheduledReminders?: () => Promise<ScheduledHold[]>
   /** 停掉一个后台任务（不管属于哪个会话）。返回宿主的受理结果。 */
-  killJob?: (jobId: string, reason: string) => 'requested' | 'already-finished'
+  killJob?: (jobId: string, reason: string) => 'requested' | 'already-finished' | 'already-stopping'
+  explicitBashStart?: (owner: string, id: string) => { cwd?: string } | undefined
   /** 要退出重启了：让能接回的任务（持久监听）记下自己再停掉。返回暂停了哪些。 */
   restartPrepare?: () => { id: string; label: string; owner: string }[]
   /** 重启没成：等待恢复完成，分别返回确认接回的旧编号和失败原因。 */
@@ -1246,7 +1257,7 @@ export class RemoteService {
 
   /**
    * 停掉后台任务。给了 id 就停那几个，`all` 停掉所有在跑的。
-   * bash 任务顺带查出命令和启动时的目录，重启后 dsh-use restart 用它们在原会话里重新拉起。
+   * 只有明确要求在后台启动的 bash，才把启动目录交给重启流程。
    */
   async killJobs(ids: string[]): Promise<CommandResult> {
     this.assertWritable()
@@ -1254,31 +1265,45 @@ export class RemoteService {
     const known = this.deps.quitBlockers().jobs
     const targets = ids.length === 1 && ids[0] === 'all' ? known.map((j) => j.id) : ids
     if (targets.length === 0) return { text: '没有在跑的后台任务', data: { killed: [] } }
-    const results: { id: string; outcome: string; kind?: string; label?: string; owner?: string; cwd?: string }[] = []
+    const results: StoppedJob[] = []
     for (const id of targets) {
       const job = known.find((j) => j.id === id)
-      const cwd = job?.kind === 'bash' && job.owner !== undefined ? await this.jobCwd(job.owner, id) : undefined
+      const start = job?.kind === 'bash' && job.owner !== undefined ? await this.bashStart(job.owner, id, job.label) : undefined
       let outcome: string
       try { outcome = this.deps.killJob(id, 'dsh-use restart') } catch (error) { outcome = `失败：${error instanceof Error ? error.message : String(error)}` }
-      results.push({ id, outcome, ...(job === undefined ? {} : { kind: job.kind, label: job.label }), ...(job?.owner === undefined ? {} : { owner: job.owner }), ...(cwd === undefined ? {} : { cwd }) })
+      const result: StoppedJob = { id, outcome, ...(job === undefined ? {} : { kind: job.kind, label: job.label }),
+        ...(job?.owner === undefined ? {} : { owner: job.owner }),
+      }
+      if (outcome === 'requested' && start !== undefined) {
+        result.explicitBackground = true
+        if (typeof start.cwd === 'string' && isAbsolute(start.cwd)) result.cwd = start.cwd
+      }
+      results.push(result)
     }
     this.deps.log(`kill-jobs ${targets.join(',')}`)
-    return { text: results.map((r) => `${r.id}：${r.outcome === 'requested' ? '已请求停止' : r.outcome === 'already-finished' ? '已经结束' : r.outcome}`).join('\n'), data: { killed: results } }
+    const labels: Record<string, string> = { requested: '已请求停止', 'already-finished': '已经结束', 'already-stopping': '已在停止' }
+    return { text: results.map(r => `${r.id}：${labels[r.outcome] ?? r.outcome}`).join('\n'), data: { killed: results } }
   }
 
-  /** bash 后台任务启动时的目录：按主人会话记录里的任务登记找到那次调用，取调用结果记下的 cwd；找不到就是 undefined。 */
-  private async jobCwd(owner: string, jobId: string): Promise<string | undefined> {
+  private async bashStart(owner: string, jobId: string, command: string): Promise<{ cwd?: string } | undefined> {
     try {
+      const ptc = this.deps.explicitBashStart?.(owner, jobId)
+      if (ptc !== undefined) return ptc
+      // Only a native top-level call records the original arguments. PTC can dispatch foreground work as background.
       const { events } = await this.deps.query.readSession(owner)
-      const callId = obj(obj(events.find((e) => e.type === 'job/registered' && obj(e.data).jobId === jobId)?.data).toolCall).callId
-      if (typeof callId !== 'string') return undefined
-      for (const e of events) {
-        const d = obj(e.data)
-        const cwd = obj(d.meta).cwd
-        if ((d.subCallId === callId || d.toolCallId === callId) && typeof cwd === 'string' && isAbsolute(cwd)) return cwd
-      }
-    } catch { /* 读不到记录就当不知道目录，调用方不会去拉起 */ }
-    return undefined
+      const registration = obj(events.find(e => e.type === 'job/registered' && obj(e.data).jobId === jobId)?.data)
+      const { callId, rootCallId } = obj(registration.toolCall)
+      if (registration.owner !== owner || registration.kind !== 'bash' || registration.label !== command || typeof callId !== 'string'
+        || (rootCallId !== undefined && rootCallId !== callId)) return undefined
+      const call = obj(events.find(e => e.type === 'tool/call' && obj(e.data).callId === callId)?.data)
+      if (call.name !== 'bash' || typeof call.arguments !== 'string') return undefined
+      const args = obj(JSON.parse(call.arguments))
+      if (args.run_in_background !== true || args.command !== command) return undefined
+      const result = obj(events.find(e => e.type === 'tool/result' && obj(obj(e.data).message).toolCallId === callId)?.data)
+      if (obj(result.message).isError === true) return undefined
+      const cwd = obj(result.meta).cwd
+      return typeof cwd === 'string' ? { cwd } : {}
+    } catch { return undefined }
   }
 
   async cancel(raw: string): Promise<CommandResult> {

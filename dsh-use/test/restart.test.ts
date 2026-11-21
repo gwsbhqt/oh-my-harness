@@ -20,7 +20,7 @@ interface Sent { session: string; text: string; via: 'notice' | 'send'; summary?
  * App 换成假的：只记录被要求退出、打开、强杀了几次，绝不碰本机正在运行的 DSH。
  * 假 App 一开始「在运行」，收到退出就「退出」，start 看到通信口还在就算重启完成。
  */
-async function fixture(runningByCall: (call: number) => string[], options: { openFails?: number; onOpen?: () => void; noticeReceiptOnly?: boolean; noticeWakeupUnconfirmed?: boolean; statusRunning?: boolean; sendFails?: (session: string) => boolean; noNotice?: boolean; jobs?: string[]; stubbornJobs?: boolean; notReadyFor?: number; quitExtra?: (call: number) => { running?: string[]; jobs?: string[] }; survivable?: string[]; parents?: Record<string, string>; quitFails?: boolean; quitTimeout?: boolean; goals?: Record<string, string>; resumeFails?: boolean; noHold?: boolean; queued?: string[]; quitCheckFails?: boolean; badHealth?: boolean; oldHealthBroken?: boolean; runningThrowsAfterPrepare?: boolean; sameInstance?: boolean; stuckKill?: boolean; startupUnavailable?: boolean; delayedNotice?: boolean; archived?: string[]; subagents?: string[]; refusedCancel?: string[]; noticeOwner?: string; afterQuietNotice?: (dir: string) => void; queuedDetails?: { id: string; nextTurnCount: number; nextStepCount: number; nextStepSources: { kind: string; form?: string }[] }[]; queueDrained?: () => boolean; scheduled?: { sessionId: string; items: { id: string; label: string }[] }[]; dialog?: 'scheduled' | 'other'; busyAtDialog?: boolean; locked?: boolean; socketGone?: 'crashed' | 'plugin-broken'; jobCwd?: Record<string, string>; wakeOnKill?: boolean; monitorFails?: boolean; lost?: Record<string, { restored?: { target: string; preview: string }[]; otherAborted?: boolean; interruptedUser?: { text: string; at: number } }> } = {}) {
+async function fixture(runningByCall: (call: number) => string[], options: { openFails?: number; onOpen?: () => void; noticeReceiptOnly?: boolean; noticeWakeupUnconfirmed?: boolean; statusRunning?: boolean; sendFails?: (session: string) => boolean; noNotice?: boolean; jobs?: string[]; stubbornJobs?: boolean; notReadyFor?: number; quitExtra?: (call: number) => { running?: string[]; jobs?: string[] }; survivable?: string[]; parents?: Record<string, string>; quitFails?: boolean; quitTimeout?: boolean; goals?: Record<string, string>; resumeFails?: boolean; noHold?: boolean; queued?: string[]; quitCheckFails?: boolean; badHealth?: boolean; oldHealthBroken?: boolean; runningThrowsAfterPrepare?: boolean; sameInstance?: boolean; stuckKill?: boolean; startupUnavailable?: boolean; delayedNotice?: boolean; archived?: string[]; subagents?: string[]; refusedCancel?: string[]; noticeOwner?: string; afterQuietNotice?: (dir: string) => void; queuedDetails?: { id: string; nextTurnCount: number; nextStepCount: number; nextStepSources: { kind: string; form?: string }[] }[]; queueDrained?: () => boolean; scheduled?: { sessionId: string; items: { id: string; label: string }[] }[]; dialog?: 'scheduled' | 'other'; busyAtDialog?: boolean; locked?: boolean; socketGone?: 'crashed' | 'plugin-broken'; jobCwd?: Record<string, string>; killReceipts?: { id: string; outcome: string; cwd?: string; explicitBackground?: boolean }[]; wakeOnKill?: boolean; monitorFails?: boolean; lost?: Record<string, { restored?: { target: string; preview: string }[]; otherAborted?: boolean; interruptedUser?: { text: string; at: number } }> } = {}) {
   const dir = mkdtempSync('/tmp/dshrs-')
   const bin = join(dir, 'profiles/desktop/node_modules/tooling')
   mkdirSync(bin, { recursive: true })
@@ -122,7 +122,10 @@ async function fixture(runningByCall: (call: number) => string[], options: { ope
       killedJobs.push(...args)
       if (!options.stubbornJobs) jobs = []
       if (options.wakeOnKill) woke.push(...args.map((id) => options.parents?.[id] ?? 's'))
-      return { text: '已请求停止', data: { killed: args.map((id) => ({ id, outcome: 'requested', ...(options.jobCwd?.[id] === undefined ? {} : { cwd: options.jobCwd[id] }) })) } }
+      const receipts = options.killReceipts ?? args.map(id => ({ id, outcome: 'requested',
+        ...(options.jobCwd?.[id] === undefined ? {} : { explicitBackground: true, cwd: options.jobCwd[id] }),
+      }))
+      return { text: '已请求停止', data: { killed: receipts.map(r => ({ kind: 'bash', label: 'x', owner: options.parents?.[r.id] ?? 's', ...r })) } }
     }
     if (command === 'monitor') {
       if (options.monitorFails) throw new CommandFailure('监听插件未确认服务及所属会话', 'monitor-unconfirmed')
@@ -664,7 +667,7 @@ test('强制重启：子代理没跟着上级停下，也要中止它，不等�
 
 test('强制重启停掉的后台任务和子代理：子代理的上级被唤醒接着做，闲着的任务主人只收到不唤醒的说明', async () => {
   const f = await fixture(() => ['session-bbbb2222'], {
-    jobs: ['bash-9'],
+    jobs: ['bash-9'], killReceipts: [{ id: 'bash-9', outcome: 'requested', explicitBackground: true }],
     parents: { 'session-sub00001': 'session-cccc3333', 'bash-9': 'session-dddd4444' },
     quitExtra: (n) => (n < 1 ? { running: ['session-sub00001'] } : {}),
   })
@@ -685,6 +688,28 @@ test('强制重启停掉的后台任务和子代理：子代理的上级被唤�
     assert.deepEqual(f.monitors, [], '查不到目录就不拉起')
     const report = f.sent.find((s) => s.session === 'aaaa1111')!
     assert.match(report.text, /Background jobs left by idle sessions.*dddd4444: x \(not relaunched: 查不到它启动时的目录\)/)
+  } finally { await f.close() }
+})
+
+test('旧服务只报目录时不重放，正在取消和已结束的任务也不恢复', async () => {
+  const owner = 'session-child'
+  const parent = 'session-parent'
+  const ids = ['legacy', 'stopping', 'finished', 'failed', 'background']
+  const f = await fixture(() => [], {
+    jobs: ids, parents: { ...Object.fromEntries(ids.map(id => [id, owner])), [owner]: parent },
+    killReceipts: ids.map(id => ({ id, cwd: '/fixture/work', ...(id === 'legacy' ? {} : { explicitBackground: true }),
+      outcome: id === 'stopping' ? 'already-stopping' : id === 'finished' ? 'already-finished' : id === 'failed' ? 'failed' : 'requested' })),
+  })
+  try {
+    assert.equal(await f.cli(['restart']), 0, f.err())
+    assert.equal(f.monitors.length, 1, '只有确认由本次重启停下的显式后台任务能执行第二次')
+    assert.equal(f.monitors[0]!.owner, owner)
+    const notice = f.sent.find(item => item.session === parent)!
+    assert.equal(notice.quiet, true)
+    assert.match(notice.text, /legacy/)
+    assert.match(notice.text, /background.*new ids/)
+    assert.match(notice.text, /legacy.*未确认/)
+    assert.ok(!f.sent.some(item => item.session === owner))
   } finally { await f.close() }
 })
 
@@ -806,7 +831,7 @@ test('强制重启 已中止会话、连进程都结束不掉：被中止的会�
     assert.match(resume.text, /Continue the original work/)
     const owner = f.sent.find((s) => s.session === 'session-dddd4444')!
     assert.equal(owner.quiet, true)
-    assert.match(owner.text, /Your background job\(s\) bash-9 \(x, 查不到它启动时的目录\) were stopped and could not be relaunched/)
+    assert.match(owner.text, /Your background job\(s\) bash-9 \(x, 未确认是本次重启停下的显式后台任务\) were stopped and could not be relaunched/)
     const report = f.sent.filter((s) => s.session === 'aaaa1111')
     assert.equal(report.length, 1, '发起的会话只收一条结果')
     assert.match(report[0]!.text, /DSH did not restart/)

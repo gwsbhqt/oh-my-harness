@@ -47,6 +47,7 @@ export interface HostJobs {
   jobs: JobsService
   owner: string
   notices: JobNotices
+  recordExplicitBash?(id: string, cwd: unknown): void
   /** The live agent behind `owner`; `repl.background` work calls tools in its scope (src/background-tools.ts). */
   agent?: unknown
 }
@@ -165,17 +166,22 @@ function startsBackground(schema: ToolSchemaLike | undefined): boolean {
  */
 export function withJobBash(fn: BoundTool, schema: ToolSchemaLike | undefined, capMs: number, host: HostJobs | undefined,
   signal: AbortSignal | undefined, fallback: BoundTool): BoundTool {
-  if (host === undefined || !(capMs > 0) || !startsBackground(schema)) return fallback
+  if (host === undefined) return fallback
+  const managedWait = capMs > 0 && startsBackground(schema)
   const { jobs, owner, notices } = host
   return async (args) => {
     if (args === null || typeof args !== 'object' || Array.isArray(args)) return fallback(args)
     const request = args as Record<string, unknown>
     const label = typeof request['command'] === 'string' ? request['command'] : 'bash'
     if (request['run_in_background'] === true) {
-      const receipt = await fn(args) as Record<string, unknown>
-      if (receipt?.['kind'] === 'background' && typeof receipt['jobId'] === 'string') notices.watch(receipt['jobId'], owner, label)
+      const receipt = await (managedWait ? fn : fallback)(args) as Record<string, unknown>
+      if (receipt?.['kind'] === 'background' && typeof receipt['jobId'] === 'string') {
+        host.recordExplicitBash?.(receipt['jobId'], receipt['cwd'])
+        if (managedWait) notices.watch(receipt['jobId'], owner, label)
+      }
       return receipt
     }
+    if (!managedWait) return fallback(args)
     const wanted = typeof request['timeoutMs'] === 'number' && request['timeoutMs'] > 0 ? Math.min(request['timeoutMs'], capMs) : capMs
     const { timeoutMs: _drop, ...rest } = request
     // A queued command waits for a slot at most `wanted`, then gets its own full wait once started.

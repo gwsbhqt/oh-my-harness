@@ -289,7 +289,7 @@ test('monitor --restart 原样交给监听插件，只认 never 和 on-failure',
   assert.equal(requests.length, 2)
 })
 
-test('kill-jobs 停 bash 任务时从主人会话记录查出启动目录，查不到就不填', async () => {
+test('旧 PTC 记录即使带目录也只报告被停的任务', async () => {
   const f = makeFake()
   const owner = 'session-aaaa1111-0000'
   f.events[owner]!.push(
@@ -307,10 +307,38 @@ test('kill-jobs 停 bash 任务时从主人会话记录查出启动目录，查�
   const result = await run(s, 'kill-jobs', ['all'])
   assert.deepEqual(killed, ['bash-1', 'bash-2', 'sub-1'])
   assert.deepEqual((result.data as { killed: unknown[] }).killed, [
-    { id: 'bash-1', outcome: 'requested', kind: 'bash', label: 'pnpm dev', owner, cwd: '/repo/a/site' },
+    { id: 'bash-1', outcome: 'requested', kind: 'bash', label: 'pnpm dev', owner },
     { id: 'bash-2', outcome: 'requested', kind: 'bash', label: 'sleep 9', owner },
     { id: 'sub-1', outcome: 'requested', kind: 'subagent', label: '子代理', owner },
   ])
+})
+
+test('kill-jobs 只给有显式后台启动凭据的任务返回恢复目录', async () => {
+  const f = makeFake()
+  const owner = f.sessions[0]!.sessionId
+  const label = 'printf fixture'
+  const cwd = '/fixture/work'
+  const ids = ['paired', 'legacy', 'native', 'promoted', 'missing', 'settled', 'cancelled']
+  for (const id of ids) {
+    const native = ['native', 'promoted', 'missing'].includes(id)
+    const callId = `call-${id}`
+    const args = { command: label, run_in_background: id !== 'promoted' }
+    const events = f.events[owner]!
+    events.push({ type: 'job/registered', seq: events.length, data: { owner, kind: 'bash', label, jobId: id, toolCall: { callId, rootCallId: native ? callId : 'cell' } } })
+    if (native) {
+      events.push({ type: 'tool/call', seq: events.length, data: { callId, name: 'bash', arguments: JSON.stringify(args) } })
+      events.push({ type: 'tool/result', seq: events.length, data: { message: { toolCallId: callId, isError: false }, meta: id === 'missing' ? {} : { cwd } } })
+    } else {
+      events.push({ type: 'tool/ptc-dispatch', seq: events.length, data: { subCallId: callId, name: 'bash', arguments: args, isError: false, meta: { cwd } } })
+    }
+  }
+  const s = service(f, undefined, () => ({ running: [], queued: [], jobs: ids.map(id => ({ id, kind: 'bash', label, owner })) }), undefined, {
+    explicitBashStart: (session, id) => session === owner && ['paired', 'settled', 'cancelled'].includes(id) ? { cwd } : undefined,
+    killJob: id => id === 'settled' ? 'already-finished' : id === 'cancelled' ? 'already-stopping' : 'requested',
+  })
+  const { killed } = (await run(s, 'kill-jobs', ['all'])).data as { killed: { id: string; explicitBackground?: boolean; cwd?: string }[] }
+  assert.deepEqual(killed.filter(job => job.cwd !== undefined).map(job => job.id), ['paired', 'native'])
+  assert.deepEqual(killed.filter(job => job.explicitBackground === true).map(job => job.id), ['paired', 'native', 'missing'])
 })
 
 test('旧会话只留子代理停止通知：不算运行、不算下一轮排队，也不阻挡等待', async () => {

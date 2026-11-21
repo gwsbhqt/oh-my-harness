@@ -284,6 +284,7 @@ export class PythonReplRuntime extends PtcRuntime {
   private readonly sessionDiscoveries = new Map<string, SkillDiscovery>()
   /** One notice for background jobs a cell left running that end close together (src/bash-jobs.ts). */
   readonly jobNotices: JobNotices
+  private readonly explicitBashStarts = new Map<string, { owner: string; cwd?: string }>()
   /** Where kernels load `python/` and `vendor/` from: a copy taken when this host started (src/kernel-sources.ts). */
   readonly kernelRoot: string
 
@@ -340,7 +341,10 @@ export class PythonReplRuntime extends PtcRuntime {
       timer.unref?.()
       return () => clearInterval(timer)
     }, 'python-repl idle kernel sweep')
-    ctx.on('session/event' as never, ((session: { id?: unknown } | undefined, event: { type?: unknown } | undefined) => {
+    ctx.on('session/event' as never, ((session: { id?: unknown } | undefined, event: { type?: unknown; data?: { jobId?: unknown } } | undefined) => {
+      if (event?.type === 'job/settled' && typeof event.data?.jobId === 'string') {
+        this.explicitBashStarts.delete(event.data.jobId)
+      }
       if (event?.type === 'compaction/end' && typeof session?.id === 'string') {
         const repl = this.sessions.get(session.id)
         repl?.noteCompaction()
@@ -888,6 +892,12 @@ export class PythonReplRuntime extends PtcRuntime {
     return this.pipeline.pending
   }
 
+  /** Original explicit PTC starts still owned by this host, for restart preparation. */
+  explicitBashStart(owner: string, id: string): { cwd?: string } | undefined {
+    const start = this.explicitBashStarts.get(id)
+    return start?.owner === owner ? start : undefined
+  }
+
   /** DSH's job service and the calling agent, read before the first await like the session identity; undefined runs bash as before. */
   private hostJobs(): HostJobs | undefined {
     const jobs = this.ctx.get('jobs' as never) as JobsService | undefined
@@ -898,7 +908,16 @@ export class PythonReplRuntime extends PtcRuntime {
       return undefined
     }
     const owner = agent?.id
-    return jobs === undefined || typeof owner !== 'string' ? undefined : { jobs, owner, notices: this.jobNotices, agent }
+    if (jobs === undefined || typeof owner !== 'string') return undefined
+    return {
+      jobs, owner, notices: this.jobNotices, agent,
+      recordExplicitBash: (id, cwd) => {
+        // A fast job may already have emitted its settlement before the start receipt arrived.
+        if (jobs.list?.(owner).some(job => job.id === id && job.status === 'running')) {
+          this.explicitBashStarts.set(id, { owner, ...(typeof cwd === 'string' ? { cwd } : {}) })
+        }
+      },
+    }
   }
 
   /**
