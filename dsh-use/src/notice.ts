@@ -3,12 +3,15 @@ import { reminderSummary, reminderText } from '../../tooling/runtime/notice.mjs'
 
 export interface NoticeReceipt {
   accepted: true
+  messageId?: string
+  insertionSeq?: number
   scheduled: boolean
   delivery: 'followup' | 'steer' | 'inject'
   agentStatus: string
 }
 export interface NoticeAgent {
   readonly status: string
+  readonly session?: { readonly seq: number }
   followup(message: unknown): void
   steer(message: unknown): void
   inject(message: unknown): void
@@ -27,9 +30,11 @@ export async function deliverNotice(controller: SessionControllerLike, sessionId
   const agent = found.agent
   const delivery = quiet ? 'inject' : agent.status === 'running' ? 'steer' : 'followup'
   const title = summary.replace(/^dsh-use\s*[：:]\s*/, '')
-  agent[delivery](createUserMessage({
+  const message = createUserMessage({
     content: [{ type: 'text', text: reminderText('dsh-use', title, text) }],
     source: { kind: 'dsh-use', form: 'notice', summary: boundContextSummary(reminderSummary('dsh-use', title)) },
-  }))
-  return { accepted: true, scheduled: agent.status === 'running', delivery, agentStatus: agent.status }
+  })
+  const insertionSeq = quiet ? agent.session?.seq : undefined
+  agent[delivery](message)
+  return { accepted: true, ...(quiet ? { messageId: message.id } : {}), ...(insertionSeq === undefined ? {} : { insertionSeq }), scheduled: agent.status === 'running', delivery, agentStatus: agent.status }
 }

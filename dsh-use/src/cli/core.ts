@@ -17,6 +17,8 @@
  */
 import { randomUUID } from 'node:crypto'
 import { FailureReasonCollector } from './failure.ts'
+import type { QueuedDetail } from '../quit-blockers.ts'
+import { allowsQueuedNotices, isUuid, readStoppedJobNotices, stoppedJobNotice, type StoppedJobNotice } from './restart-job-notices.ts'
 import { spawn, spawnSync } from 'node:child_process'
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
@@ -515,7 +517,7 @@ export function createCli(
   const RESTART_REQUESTS = join(HOME, 'dsh-use', 'restart-requests')
   const requestId = env['DSH_USE_RESTART_REQUEST_ID'] ?? randomUUID()
   const requestPath = (id: string) => {
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw new UsageError('重启 request-id 必须是 UUID')
+    if (!isUuid(id)) throw new UsageError('重启 request-id 必须是 UUID')
     return join(RESTART_REQUESTS, `${id}.json`)
   }
   function writeRequest(id: string, state: Record<string, unknown>): void {
@@ -887,7 +889,7 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
 
   interface BlockerJob { id: string; label: string; owner?: string; survivable?: boolean }
   interface ScheduledHold { sessionId: string; items: { id: string; label: string }[] }
-  interface Blockers { running: string[]; queued: string[]; jobs: BlockerJob[]; clear: boolean; parents?: Record<string, string>; scheduled?: ScheduledHold[]; queuedDetails?: { id: string; nextTurnCount: number; nextStepCount: number; nextStepSources: { kind: string; form?: string }[] }[] }
+  interface Blockers { running: string[]; queued: string[]; jobs: BlockerJob[]; clear: boolean; parents?: Record<string, string>; scheduled?: ScheduledHold[]; queuedDetails?: QueuedDetail[] }
 
   function scheduledText(holds: readonly ScheduledHold[]): string {
     const items = holds.flatMap((h) => h.items.map((i) => `「${i.label}」（${i.id.replace(/^schedule-/, '').slice(0, 8)}，会话 ${shortId(h.sessionId)}）`))
@@ -1001,15 +1003,13 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
     await cancel([...new Set([...running, ...(before?.running ?? [])])])
     const deadline = Date.now() + waitMs
     let killedJobs = false
+    let receipts: ReadonlyMap<string, StoppedJobNotice> | undefined
+    const loadReceipts = () => receipts ??= readStoppedJobNotices(RESTART_REQUESTS)
     for (;;) {
       const b = await quitBlockers()
       if (b === undefined) return appRunning() ? '无法确认退出状态，' : undefined
       if (b.clear) return undefined
-      const quietOnly = beforeUpdate && b.running.length === 0 && b.jobs.length === 0 && b.queued.length > 0 && b.queued.every((id) => {
-        const detail = b.queuedDetails?.find((item) => item.id === id)
-        return detail !== undefined && detail.nextTurnCount === 0 && detail.nextStepCount > 0 && detail.nextStepCount === detail.nextStepSources.length && detail.nextStepSources.every((source) => source.form === 'notice' && (source.kind === 'dsh-monitor' || source.kind === 'python-repl-jobs'))
-      })
-      if (quietOnly) return undefined
+      if (beforeUpdate && b.running.length === 0 && b.jobs.length === 0 && allowsQueuedNotices(b.queued, b.queuedDetails, loadReceipts)) return undefined
       Object.assign(parents, b.parents ?? {})
       await cancel(b.running)
       // 刚暂停的监听正在停（stopping），等它停完就行，不算要强停的任务。
@@ -1301,7 +1301,7 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
         affected.selfLost,
         'Tell the user why.',
       ].join(' '), 'DSH restart failed')
-      recordRestart('failed', { notification: notify === undefined ? 'not-requested' : delivered ? 'scheduled' : notificationState })
+      recordRestart('failed', { notification: notify === undefined ? 'not-requested' : delivered ? 'scheduled' : notificationState, stoppedJobNotices: affected.stoppedJobNotices })
       return outcome.code
     }
     recordRestart('completed', { message: '旧实例已退出，新实例及会话服务已就绪；功能是否生效仍需验收', finishedAt: Date.now() })
@@ -1309,7 +1309,7 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
       text: `DSH restarted successfully (your restart request was folded into the restart that was already queued). ${logHint()}Confirm that the change you wanted is in effect, then report to the user.`,
       summary: 'DSH restarted successfully',
     }
-    const { resumed, failed, self, selfLost } = await resumeAffected(outcome.interrupted, notify)
+    const { resumed, failed, self, selfLost, stoppedJobNotices } = await resumeAffected(outcome.interrupted, notify)
     stamp(`DSH 已重启完成${resumed.length + failed.length > 0 ? `；让 ${resumed.length} 个被打断的会话继续${failed.length > 0 ? `，${failed.length} 个没发出去：${failed.map(shortId).join(', ')}` : ''}` : ''}`)
     if (suspended.length > 0) stamp(`暂停的 ${suspended.length} 条监听由 dsh-monitor 在新进程里接回，并各自通知所属会话`)
     const delivered = await tell(notify, [
@@ -1321,7 +1321,7 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
       selfLost,
       'Confirm that the change you wanted is in effect, then report to the user.',
     ].join(' '), 'DSH restarted successfully')
-    recordRestart('completed', { notification: notify === undefined ? 'not-requested' : delivered ? 'scheduled' : notificationState })
+    recordRestart('completed', { notification: notify === undefined ? 'not-requested' : delivered ? 'scheduled' : notificationState, stoppedJobNotices })
     return EXIT.ok
   }
 
@@ -1332,7 +1332,8 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
    * - 被中止的子代理算上级会话没做完的活：上级闲着（在等它的结果）也唤醒，让它决定接着派还是自己做。
    * 发起的会话不单独发，返回给调用方并进它那一条结果里。
    */
-  async function resumeAffected(interrupted: string[], notify: string | undefined): Promise<{ resumed: string[]; failed: string[]; self: boolean; selfLost: string }> {
+  async function resumeAffected(interrupted: string[], notify: string | undefined): Promise<{ resumed: string[]; failed: string[]; self: boolean; selfLost: string; stoppedJobNotices: StoppedJobNotice[] }> {
+    const stoppedJobNotices: StoppedJobNotice[] = []
     const relaunched = new Map<string, string>()
     const unlaunched = new Map<string, string>()
     for (const c of casualties) {
@@ -1403,6 +1404,10 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
       try {
         const r = await run('notice', [owner, text], { summary: `Restart stopped and relaunched ${lost.length} of your background jobs`, quiet: true }, 30_000)
         if (!r.ok) why = r.error?.message ?? '未知原因'
+        else {
+          const notice = stoppedJobNotice(owner, r.data)
+          if (notice !== undefined) stoppedJobNotices.push(notice)
+        }
       } catch (error) { why = error instanceof Error ? error.message : String(error) }
       if (why !== '') stamp(`给 ${shortId(owner)} 放说明失败：${why}`)
       quiet.push(`${shortId(owner)}: ${lost.map((c) => relaunched.has(c.id) ? `${c.label} (new id ${relaunched.get(c.id)})` : `${c.label} (not relaunched: ${unlaunched.get(c.id) ?? 'unknown'})`).join(', ')}${why === '' ? '' : ` [notice not delivered: ${why}]`}`)
@@ -1418,7 +1423,7 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
     const failed = others.filter((id) => !resumed.some((r) => sameSession(r, id)))
     const requeuedText = requeued.length > 0 ? `User messages that were swallowed when the turn was interrupted have been put back in the original session's queue: ${requeued.join(', ')}. ` : ''
     const quietText = quiet.length > 0 ? `Background jobs left by idle sessions before the restart were handled in their original sessions without waking them: ${quiet.join('; ')}. Tell the user about any that were not relaunched or whose notices could not be delivered. ` : ''
-    return { resumed, failed, self: notify !== undefined && all.some((id) => sameSession(id, notify)), selfLost: `${selfLost}${quietText}${requeuedText}` }
+    return { resumed, failed, stoppedJobNotices, self: notify !== undefined && all.some((id) => sameSession(id, notify)), selfLost: `${selfLost}${quietText}${requeuedText}` }
   }
 
   /** 给派出后台任务或子代理的会话的说明：哪些已经重新拉起、哪些停了不会再来。 */

@@ -6,6 +6,8 @@ import { mkdtempSync, mkdirSync, renameSync, rmSync, writeFileSync, readFileSync
 import { join } from 'node:path'
 import { createCli, type AppControl } from '../src/cli/core.ts'
 import { appVersion, parseFeed, type stageRelease } from '../src/cli/upgrade.ts'
+import { collectQuitBlockers, nextStepInsertionProjection } from '../src/quit-blockers.ts'
+import { deliverNotice } from '../src/notice.ts'
 import { startServer } from '../src/server.ts'
 import { CommandFailure, UsageError } from '../src/gateway.ts'
 
@@ -18,13 +20,21 @@ interface Sent { session: string; text: string; via: 'notice' | 'send'; summary?
  * App 换成假的：只记录被要求退出、打开、强杀了几次，绝不碰本机正在运行的 DSH。
  * 假 App 一开始「在运行」，收到退出就「退出」，start 看到通信口还在就算重启完成。
  */
-async function fixture(runningByCall: (call: number) => string[], options: { openFails?: number; onOpen?: () => void; noticeReceiptOnly?: boolean; noticeWakeupUnconfirmed?: boolean; statusRunning?: boolean; sendFails?: (session: string) => boolean; noNotice?: boolean; jobs?: string[]; stubbornJobs?: boolean; notReadyFor?: number; quitExtra?: (call: number) => { running?: string[]; jobs?: string[] }; survivable?: string[]; parents?: Record<string, string>; quitFails?: boolean; quitTimeout?: boolean; goals?: Record<string, string>; resumeFails?: boolean; noHold?: boolean; queued?: string[]; quitCheckFails?: boolean; badHealth?: boolean; oldHealthBroken?: boolean; runningThrowsAfterPrepare?: boolean; sameInstance?: boolean; stuckKill?: boolean; startupUnavailable?: boolean; delayedNotice?: boolean; archived?: string[]; subagents?: string[]; refusedCancel?: string[]; queuedDetails?: { id: string; nextTurnCount: number; nextStepCount: number; nextStepSources: { kind: string; form?: string }[] }[]; queueDrained?: () => boolean; scheduled?: { sessionId: string; items: { id: string; label: string }[] }[]; dialog?: 'scheduled' | 'other'; busyAtDialog?: boolean; locked?: boolean; socketGone?: 'crashed' | 'plugin-broken'; jobCwd?: Record<string, string>; wakeOnKill?: boolean; monitorFails?: boolean; lost?: Record<string, { restored?: { target: string; preview: string }[]; otherAborted?: boolean; interruptedUser?: { text: string; at: number } }> } = {}) {
+async function fixture(runningByCall: (call: number) => string[], options: { openFails?: number; onOpen?: () => void; noticeReceiptOnly?: boolean; noticeWakeupUnconfirmed?: boolean; statusRunning?: boolean; sendFails?: (session: string) => boolean; noNotice?: boolean; jobs?: string[]; stubbornJobs?: boolean; notReadyFor?: number; quitExtra?: (call: number) => { running?: string[]; jobs?: string[] }; survivable?: string[]; parents?: Record<string, string>; quitFails?: boolean; quitTimeout?: boolean; goals?: Record<string, string>; resumeFails?: boolean; noHold?: boolean; queued?: string[]; quitCheckFails?: boolean; badHealth?: boolean; oldHealthBroken?: boolean; runningThrowsAfterPrepare?: boolean; sameInstance?: boolean; stuckKill?: boolean; startupUnavailable?: boolean; delayedNotice?: boolean; archived?: string[]; subagents?: string[]; refusedCancel?: string[]; noticeOwner?: string; afterQuietNotice?: (dir: string) => void; queuedDetails?: { id: string; nextTurnCount: number; nextStepCount: number; nextStepSources: { kind: string; form?: string }[] }[]; queueDrained?: () => boolean; scheduled?: { sessionId: string; items: { id: string; label: string }[] }[]; dialog?: 'scheduled' | 'other'; busyAtDialog?: boolean; locked?: boolean; socketGone?: 'crashed' | 'plugin-broken'; jobCwd?: Record<string, string>; wakeOnKill?: boolean; monitorFails?: boolean; lost?: Record<string, { restored?: { target: string; preview: string }[]; otherAborted?: boolean; interruptedUser?: { text: string; at: number } }> } = {}) {
   const dir = mkdtempSync('/tmp/dshrs-')
   const bin = join(dir, 'profiles/desktop/node_modules/tooling')
   mkdirSync(bin, { recursive: true })
   mkdirSync(join(dir,'profiles/desktop/node_modules/dsh-use'), {recursive:true})
   writeFileSync(join(bin, 'doctor-cli.mjs'), `console.log(JSON.stringify(${JSON.stringify(good)}))`)
   const socketPath = join(dir, 'dsh-use/dsh.sock')
+  const inbox = { nextTurn: [] as unknown[], nextStep: [] as unknown[] }
+  const session = { header: {}, seq: 0 }
+  let insertionSeqs = nextStepInsertionProjection.init()
+  const spliceNextStep = (start: number, removedCount: number, message: unknown) => {
+    const data = { target: 'next-step', start, removedCount, inserted: [message] }
+    insertionSeqs = nextStepInsertionProjection.apply(insertionSeqs, { type: 'agent/inbox/spliced', seq: session.seq++, data })
+    inbox.nextStep.splice(start, removedCount, message)
+  }
   const sent: Sent[] = []
   const cancelled: string[] = []
   let jobs = [...(options.jobs ?? [])]
@@ -64,7 +74,8 @@ async function fixture(runningByCall: (call: number) => string[], options: { ope
       if (dialogOpen && options.busyAtDialog) r.push('session-late')
       const j = [...jobs, ...(extra.jobs ?? [])]
       const owners = options.parents ?? {}
-      return { text: '', data: { running: r, queued: options.queueDrained?.() ? [] : options.queued ?? [], queuedDetails: options.queuedDetails, parents: options.parents ?? {}, jobs: j.map((id) => ({ id, label: 'x', owner: owners[id] ?? 's', ...(options.survivable?.includes(id) ? { survivable: true } : {}) })), clear: r.length === 0 && j.length === 0, ...(options.scheduled === undefined ? {} : { scheduled: options.scheduled }) } }
+      const loaded = options.noticeOwner === undefined ? undefined : collectQuitBlockers([{ id: options.noticeOwner, status: 'idle', session, inbox }], { stateOf: () => insertionSeqs })
+      return { text: '', data: { running: r, queued: loaded?.queued ?? (options.queueDrained?.() ? [] : options.queued ?? []), queuedDetails: loaded?.queuedDetails ?? options.queuedDetails, parents: options.parents ?? {}, jobs: j.map((id) => ({ id, label: 'x', owner: owners[id] ?? 's', ...(options.survivable?.includes(id) ? { survivable: true } : {}) })), clear: r.length === 0 && j.length === 0, ...(options.scheduled === undefined ? {} : { scheduled: options.scheduled }) } }
     }
     if (command === 'api' && args[0] === 'call' && args[1] === 'subagents/interruptByUser') {
       const body = JSON.parse(args[2]!) as { childSessionId: string }
@@ -131,6 +142,12 @@ async function fixture(runningByCall: (call: number) => string[], options: { ope
       }
       if (options.sendFails?.(args[0]!)) throw new Error('会话不存在')
       sent.push({ session: args[0]!, text: args[1]!, via: command, ...(typeof opts['summary'] === 'string' ? { summary: opts['summary'] } : {}), ...(opts['quiet'] === true ? { quiet: true } : {}) })
+      if (command === 'notice' && opts['quiet'] === true && args[0] === options.noticeOwner) {
+        const agent = { status: 'idle', session, followup: assert.fail, steer: assert.fail, inject: (message: unknown) => spliceNextStep(inbox.nextStep.length, 0, message) }
+        const receipt = await deliverNotice({ resolveAgent: async () => ({ agent }) }, args[0]!, args[1]!, String(opts['summary']), true)
+        options.afterQuietNotice?.(dir)
+        return { text: '', data: { sessionId: args[0], ...receipt } }
+      }
       if (options.noticeWakeupUnconfirmed) throw new CommandFailure('通知已记录，未确认调度', 'notice-wakeup-unconfirmed', { accepted: true, scheduled: false })
       return { text: '已发出', data: { since: 1, ...(options.noticeReceiptOnly ? {} : { scheduled: true }) } }
     }
@@ -166,7 +183,7 @@ async function fixture(runningByCall: (call: number) => string[], options: { ope
     out = ''; err = ''
     return createCli({ ...env, ...extra }, (t) => { out += t }, (t) => { err += t }, (a, e, log) => { spawned.push({ args: a, env: e, log }); return 4242 }, app, prepareRelease)(args)
   }
-  return { dir, sent, spawned, appCalls, quitStrategies, goals, goalCalls, cancelled, killedJobs, monitors, prepared, requeueCalls, aborted: () => aborted, cli, out: () => out, err: () => err, health: () => healthCalls, close: async () => { await server.close(); rmSync(dir, { recursive: true, force: true }) } }
+  return { dir, inbox, spliceNextStep, addJob: (id: string) => jobs.push(id), sent, spawned, appCalls, quitStrategies, goals, goalCalls, cancelled, killedJobs, monitors, prepared, requeueCalls, aborted: () => aborted, cli, out: () => out, err: () => err, health: () => healthCalls, close: async () => { await server.close(); rmSync(dir, { recursive: true, force: true }) } }
 }
 
 
@@ -816,6 +833,111 @@ test('--before：按目标会话中止子代理，保留后台通知并执行更
     assert.ok(f.cancelled.includes(child))
     assert.deepEqual(f.appCalls, ['quit', 'open'])
   } finally { await f.close() }
+})
+
+test('--before 核对同一空闲会话的两份停机回执，保留全部待领消息', async () => {
+  const owner = 'session-idle-receipts'
+  const f = await fixture(() => [], { noticeOwner: owner, jobs: ['job-first'], parents: { 'job-first': owner, 'job-second': owner } })
+  try {
+    const requests: string[] = []
+    for (const stage of ['first', 'second']) {
+      if (stage === 'second') f.addJob('job-second')
+      assert.equal(await f.cli(['restart', '--json']), 0, f.err())
+      requests.push(JSON.parse(f.out()).data.requestId)
+    }
+    const original = structuredClone(f.inbox)
+    assert.equal(original.nextTurn.length, 0)
+    assert.equal(original.nextStep.length, 2)
+    assert.notEqual(requests[0], requests[1])
+    for (const [index, request] of requests.entries()) {
+      const file = join(f.dir, 'dsh-use/restart-requests', `${request}.json`)
+      const { id } = original.nextStep[index] as { id: string }
+      assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).stoppedJobNotices, [{ sessionId: owner, messageId: id, insertionSeq: index }])
+    }
+    const mark = join(f.dir, 'before-ran')
+    const code = await f.cli(['restart', '--before', `printf x >> ${mark}`, '--json'])
+    assert.equal(code, 0, f.out() + f.err())
+    assert.equal(readFileSync(mark, 'utf8'), 'x')
+    assert.deepEqual(f.inbox, original)
+  } finally { await f.close() }
+})
+
+async function assertReceiptQueueBlocks(f: Awaited<ReturnType<typeof fixture>>): Promise<void> {
+  const original = structuredClone(f.inbox)
+  const priorAppCalls = [...f.appCalls]
+  const mark = join(f.dir, 'must-stay-absent')
+  assert.equal(await f.cli(['restart', '--before', `touch ${mark}`, '--json']), 1, f.out() + f.err())
+  assert.equal(JSON.parse(f.out()).data.failure.executed, false)
+  assert.equal(existsSync(mark), false)
+  assert.deepEqual(f.appCalls, priorAppCalls)
+  assert.deepEqual(f.inbox, original)
+}
+
+test('--before 保留同文普通通知、编辑、用户消息、混排和仍运行任务的保护', async (t) => {
+  for (const variant of ['普通静默通知', '编辑过的回执', '下一轮用户消息', '其他后台通知', '仍在运行的任务']) {
+    await t.test(variant, async () => {
+      const owner = 'session-idle-receipts'
+      let busy = false
+      const f = await fixture(() => [], { noticeOwner: owner, jobs: ['job-stopped'], parents: { 'job-stopped': owner }, quitExtra: () => ({ jobs: busy ? ['job-busy'] : [] }) })
+      try {
+        assert.equal(await f.cli(['restart']), 0, f.err())
+        const message = f.inbox.nextStep[0] as { id: string; source: unknown }
+        if (variant === '普通静默通知') {
+          const original = f.sent.find((s) => s.session === owner)!
+          assert.equal(await f.cli(['notice', owner, original.text, '--summary', original.summary!, '--quiet']), 0, f.err())
+          const copy = f.inbox.nextStep[1] as { id: string; source: unknown }
+          assert.deepEqual(copy.source, message.source)
+          assert.notEqual(copy.id, message.id)
+        } else if (variant === '编辑过的回执') {
+          f.spliceNextStep(0, 1, { ...message, content: [{ type: 'text', text: '请先等我确认' }] })
+        } else if (variant === '下一轮用户消息') {
+          f.inbox.nextTurn.push({ role: 'user', source: { kind: 'user' } })
+        } else if (variant === '其他后台通知') {
+          f.spliceNextStep(1, 0, { role: 'user', source: { kind: 'dsh-monitor', form: 'notice' } })
+        } else {
+          busy = true
+        }
+        await assertReceiptQueueBlocks(f)
+      } finally { await f.close() }
+    })
+  }
+})
+
+test('--before 没有成功写入请求档案的回执继续阻挡更新', async () => {
+  const owner = 'session-idle-receipts'
+  let request = ''
+  const f = await fixture(() => [], { noticeOwner: owner, jobs: ['job-stopped'], parents: { 'job-stopped': owner },
+    afterQuietNotice: (dir) => {
+      request = JSON.parse(readFileSync(join(dir, 'dsh-use/restart-state.json'), 'utf8')).requestId
+      mkdirSync(join(dir, 'dsh-use/restart-requests', `${request}.json.${process.pid}.tmp`))
+    },
+  })
+  try {
+    assert.equal(await f.cli(['restart', '--json']), 1)
+    assert.equal(f.inbox.nextStep.length, 1)
+    const record = JSON.parse(readFileSync(join(f.dir, 'dsh-use/restart-requests', `${request}.json`), 'utf8'))
+    assert.equal(record.stoppedJobNotices, undefined)
+    await assertReceiptQueueBlocks(f)
+  } finally { await f.close() }
+})
+
+test('--before 旧回执与错会话的档案均不能证明队列来源', async (t) => {
+  for (const variant of ['旧格式', '会话不符', '请求不符']) {
+    await t.test(variant, async () => {
+      const owner = 'session-idle-receipts'
+      const f = await fixture(() => [], { noticeOwner: owner, jobs: ['job-stopped'], parents: { 'job-stopped': owner } })
+      try {
+        assert.equal(await f.cli(['restart', '--json']), 0, f.err())
+        const state = JSON.parse(f.out()).data
+        const archive = join(f.dir, 'dsh-use/restart-requests', `${state.requestId}.json`)
+        if (variant === '旧格式') delete state.stoppedJobNotices
+        if (variant === '会话不符') state.stoppedJobNotices[0].sessionId = 'session-other-owner'
+        if (variant === '请求不符') state.requestId = 'unrelated-request'
+        writeFileSync(archive, JSON.stringify(state))
+        await assertReceiptQueueBlocks(f)
+      } finally { await f.close() }
+    })
+  }
 })
 
 test('--before：用户排队消息仍会阻止更新，不会被当成后台通知', async () => {

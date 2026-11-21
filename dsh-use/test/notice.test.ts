@@ -36,7 +36,10 @@ test('运行中通知用 steer；仅记录不调度必须如实返回未确认',
 
 test('quiet 通知只排进上下文，不唤醒闲着的会话', async () => {
   const f = fixture()
-  assert.deepEqual(await deliverNotice(f.controller, 'fixture-idle', '任务已重新拉起', '重启', true), { accepted: true, scheduled: false, delivery: 'inject', agentStatus: 'idle' })
+  const receipt = await deliverNotice(f.controller, 'fixture-idle', '任务已重新拉起', '重启', true)
+  const { id } = f.messages[0]!.message as { id: string }
+  assert.ok(id)
+  assert.deepEqual(receipt, { accepted: true, messageId: id, scheduled: false, delivery: 'inject', agentStatus: 'idle' })
   assert.deepEqual(f.messages.map((m) => m.delivery), ['inject'])
 })
 

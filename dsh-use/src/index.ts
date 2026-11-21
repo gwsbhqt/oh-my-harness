@@ -36,7 +36,7 @@ import { resolveModelTiers, type ConfiguredTiers, type SharedTiersLike, type Mod
 import { PendingQuestions, type AnswerBatch } from './questions.ts'
 import { startServer } from './server.ts'
 import { MachinePage, machineRoutes, realMachineDeps, type FetchRoute, type Layout } from './machines.ts'
-import { collectQuitBlockers, type LiveAgent } from './quit-blockers.ts'
+import { collectQuitBlockers, nextStepInsertionProjection, type LiveAgent, type NoticeInsertions } from './quit-blockers.ts'
 import { RemoteService, type CommandResult, type AutomaticSelectLike, type RestartRecoveryResult, type MonitorStartRequest, type RuntimeConfig, type SessionQueryLike } from './service.ts'
 
 export const name = 'dsh-use'
@@ -134,8 +134,14 @@ interface AgentStatusEvent {
   status?: string
 }
 
-export function apply(ctx: Context, config: ConfigCells): void {
+export async function apply(ctx: Context, config: ConfigCells): Promise<void> {
   const logger = ctx.logger(name)
+  const projections = ctx.get('sessionProjections') as { register(definition: typeof nextStepInsertionProjection): Promise<NoticeInsertions> } | undefined
+  let noticeInsertions: NoticeInsertions | undefined
+  if (typeof projections?.register === 'function') {
+    try { noticeInsertions = await projections.register(nextStepInsertionProjection) }
+    catch (error) { logger.warn(`无法核对后台停机说明是否被编辑，更新将保留队列保护：${String(error)}`) }
+  }
   const current = (): RuntimeConfig => {
     // Shared tiers take precedence; standalone lists are read only when that service is absent.
     const shared = ctx.get('modelTiers') as { document(): SharedTiersLike; health(): { provider: string; model: string; label: string; until: number }[] } | undefined
@@ -286,7 +292,7 @@ export function apply(ctx: Context, config: ConfigCells): void {
       const survivors = new Set<string>()
       emit(RESTART_SURVIVORS_EVENT, survivors)
       return {
-        ...collectQuitBlockers(live),
+        ...collectQuitBlockers(live, noticeInsertions),
         jobs: busy.map((j) => ({
           id: j.id, kind: j.kind, label: j.label,
           ...(j.owner === undefined ? {} : { owner: j.owner }),

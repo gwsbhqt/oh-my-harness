@@ -52,6 +52,20 @@ function unreadableSource() {
   return Object.create(null, Object.getOwnPropertyDescriptors(unreadableContent)) as typeof unreadableContent
 }
 
+test('更新只采集顶层消息编号和宿主入队序号，忽略来源中的自报字段', () => {
+  const source = { kind: 'dsh-use', form: 'notice', messageId: 'claimed-id', insertionSeq: 17 }
+  const real = { role: 'user', id: 'host-id', source }
+  const items = [real, { role: 'user', source }, { ...real, source: { ...source, kind: 'user' } }]
+  const owner = { ...agent('fixture-owner', items), session: { header: {} } }
+  const detail = collectQuitBlockers([owner], { stateOf: () => [5, 6, 7] }).queuedDetails[0]!
+  assert.deepEqual(detail.nextStepSources, [
+    { kind: 'dsh-use', form: 'notice', messageId: 'host-id', insertionSeq: 5 },
+    { kind: 'dsh-use', form: 'notice' }, { kind: 'user', form: 'notice' },
+  ])
+  const old = collectQuitBlockers([owner]).queuedDetails[0]!
+  assert.deepEqual(old.nextStepSources[0], { kind: 'dsh-use', form: 'notice' })
+})
+
 test('摘要只取 source.summary，归一空白并截断，不读正文及其他来源字段', () => {
   const message = unreadableSource()
   Object.defineProperty(message, 'source', { value: { kind: 'tool-jobs', form: 'notice', summary: '  一行\n' + '长'.repeat(300), get rpcId() { throw new Error('不许读其他来源字段') } } })
