@@ -265,10 +265,6 @@ def _stream(label: str, stream: Any, has_shared_paths: bool = False) -> list[str
     return lines
 
 
-async def _ready(value: Any) -> Any:
-    return value
-
-
 class _BashResult(_ToolResult):
     __slots__ = ("_pending", "__weakref__")
 
@@ -299,13 +295,13 @@ class _BashResult(_ToolResult):
         return handle
 
     def __await__(self):
-        if self.get("kind") not in ("background", "promoted"):
-            return _ready(self).__await__()
         return self.wait().__await__()
 
     async def wait(self, timeout_ms: float | None = None) -> Any:
-        """The finished job's result (stdout, stderr, exitCode); raises JobStillRunning past the cell's wait."""
-        return await self._handle().wait(timeout_ms)
+        """Return a foreground result immediately or collect this job within the cell's wait."""
+        if self.get("kind") in ("background", "promoted"):
+            return await self._handle().wait(timeout_ms)
+        return self
 
     async def peek(self) -> str:
         """Collected output text so far, without certifying its completeness."""

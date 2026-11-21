@@ -856,6 +856,39 @@ class CallForms(unittest.IsolatedAsyncioTestCase):
 class BashJobs(unittest.IsolatedAsyncioTestCase):
     """bash.start returns at once; awaiting the handle gathers all output."""
 
+    async def test_collect_mixed_bash_receipts_concurrently(self) -> None:
+        calls = []
+
+        async def host(payload):
+            tool, args = payload["tool"], payload["args"]
+            calls.append(tool)
+            if tool == "job_output":
+                self.assertEqual(args["job_id"], "batch-receipt")
+                return {"status": "ok", "result": {
+                    "text": "slow result\n", "job": {"id": "batch-receipt", "status": "completed", "detail": "exit code: 3"},
+                }}
+            if args.get("run_in_background"):
+                return {"status": "ok", "result": {"kind": "background", "jobId": "batch-receipt"}}
+            return {"status": "ok", "result": {
+                "kind": "foreground", "exitCode": 0, "stdout": {"text": "fast result\n", "truncated": False},
+                "stderr": {"text": "", "truncated": False},
+            }}
+
+        use_cell("batch-receipts", host=host)
+        bash = dsh_kernel._proxy("bash")
+        fast, slow, other_fast = await asyncio.gather(
+            bash("quick", "first"), bash("slow", "second", run_in_background=True), bash("quick", "third"),
+        )
+        first, second, third = await asyncio.gather(*(receipt.wait() for receipt in (fast, slow, other_fast)))
+        self.assertIs(first, fast)
+        self.assertIs(third, other_fast)
+        self.assertIsNot(first, third)
+        self.assertEqual(first, third)
+        self.assertEqual((first.stdout.text, second.stdout.text, second.exitCode), ("fast result\n", "slow result\n", 3))
+        self.assertIs(await slow, second)
+        self.assertEqual(calls.count("bash"), 3)
+        self.assertEqual(calls.count("job_output"), 1)
+
     async def test_dill_restored_handle_collects_once_into_itself(self) -> None:
         try:
             import dill
