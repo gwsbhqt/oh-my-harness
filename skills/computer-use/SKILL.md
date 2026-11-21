@@ -1,6 +1,6 @@
 ---
 name: computer-use
-description: "操作 macOS 原生应用、浏览器外壳和网页外浮层时使用；网页内容交给 browser-use。"
+description: "操作 macOS 原生应用、浏览器外壳和网页外浮层。Cra 网页使用官方 MCP，Chrome 网页使用 browser-use。"
 ---
 
 # computer-use（macOS 桌面控制）
@@ -49,7 +49,7 @@ ID 优先，其次唯一标签，最后编号；ID 来自开发者，不是编�
 
 应用绑定是同步工厂，固定创建时的机器和任务；取态、动作与释放是异步方法。命令每步显式携带同一机器与任务。绑定与任务规则见 [共用规则](references/common.md#机器应用与任务)，定位与快照参数同时参阅 [命令参数参考](references/cli.md#应用归属和元素) 和 [内核参数参考](references/interfaces.md#python-内核里调用)。
 
-Cra、Chrome、Arc 等共享浏览器复用同一实例、用户 profile 和登录状态，真人与各任务各用独立窗口。先发现窗口，再明确选择本任务创建的那一个；不要按标题认领真人窗口。ref 的 id 是 CGWindowID，不能用浏览器调试协议或 AppleScript 的窗口编号替代。首次完整 snap 也会固定返回的稳定引用；之后每个动作都带它。窗口消失、进程重启、身份不唯一即拒绝，不按同名同位置找替代窗口。
+Cra、Chrome 等共享浏览器复用同一实例、用户 profile 和登录状态，真人与各任务各用独立窗口。先发现窗口，再明确选择本任务创建的那一个；不要按标题认领真人窗口。ref 的 id 是 CGWindowID，不能用浏览器调试协议或 AppleScript 的窗口编号替代。首次完整 snap 也会固定返回的稳定引用；之后每个动作都带它。窗口消失、进程重启、身份不唯一即拒绝，不按同名同位置找替代窗口。
 
 ```bash
 computer-use --local windows Cra --scope task-a --json
@@ -100,9 +100,9 @@ computer-use --local owner 计算器 release --scope task-b --lease LEASE --json
 
 归属恢复前的核对、授权与旧任务停止要求统一见 [共用规则](references/common.md#结果交接与清理)。完整归属参数同时参阅 [命令参数参考](references/cli.md#应用归属和元素) 和 [内核参数参考](references/interfaces.md#应用任务归属)。
 
-## 配合 browser-use 登录
+## 网页登录与浏览器授权
 
-网页登录先由 browser-use 固定页面，确认停在登录页才调用登录；computer-use 只处理网页外的 1Password 浮层。自动流程失败后需重新观察，手动浮层处理与账号选择见 [共用规则](references/common.md#密码浮层与身份确认) 及 [浏览器共用流程](../browser-use/references/common.md#结果未知)。
+Cra 网页用官方 MCP 固定任务标签页并核对登录结果。Chrome 网页由 browser-use 固定页面，确认停在登录页才调用登录。computer-use 负责网页外的 1Password 浮层。自动流程失败后需重新观察，手动浮层处理与账号选择见 [共用规则](references/common.md#密码浮层与身份确认) 及 [Chrome 浏览器操作规则](../browser-use/references/common.md#结果未知)。
 
 ```bash
 # 仅在网页已授权、账号框已点击且浮层已观察到后调用。
@@ -112,7 +112,7 @@ computer-use --local autofill Chrome --window-ref "$WINDOW_REF" --scope task-a -
 
 浮层处理只点击观察到的填充按钮，不完整或凭证过期时拒绝；看不到浮层先新截图，不猜坐标。跳转后用原页面核对，结束按各自归属释放。登录参数同时参阅 [命令参数参考](references/cli.md) 和 [内核参数参考](references/interfaces.md#python-内核里调用)。
 
-attach 连接日常 Chrome 或 Arc 时，computer-use 只观察授权框，不长期占用整个浏览器。确认带远程调试字样、唯一「允许」按钮和稳定窗口引用后，在短操作保护中核对该窗口仍是前台再点击；不在前台就拒绝，需要用户把确切授权窗置前。不会自动激活、切回窗口或重设最小化状态。框消失只表示原生确认结束，连接成功由 browser-use 独立核对。只打开 inspect 设置页不算授权框，其他系统弹窗不处理。
+browser-use 连接日常 Chrome 时会监听 Chrome 的远程调试授权框。工具核对真实应用身份、远程调试字样、唯一的「允许」按钮和稳定窗口引用，并在短操作保护中确认原窗口仍在前台后点击。若窗口在后台，请用户将它置前。框消失后由 browser-use 核对连接。Cra 的首次 MCP 权限请用户按官方 MCP 提示处理。
 
 ```bash
 # browser-use 接管日常 Chrome 时会自动调用；只在单独排查授权框时手动调用。

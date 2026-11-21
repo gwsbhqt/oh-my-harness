@@ -4,9 +4,9 @@
 
 [← 返回首页](../../README.md#由哪几块组成) · [教程](../../docs/browser-use.md)
 
-**一句话：** 操作 Chrome 或 Arc 里指定的网页：看、点、填、截图。每个任务用自己的窗口，做完重读页面核对。
+**一句话：** 日常 Cra 网页走官方 MCP。Chrome 网页支持查看、点击、填写、截图和远端操作。
 
-通过浏览器调试协议 Chrome DevTools Protocol（CDP），操作 macOS 上明确选中的 Chrome 或 Arc 页面。提供命令行和异步 Python 技能，可以查看页面、导航、截图、操作元素，以及按额度采集网络和调试信息。
+通过浏览器调试协议 Chrome DevTools Protocol（CDP），操作 macOS 上明确选中的 Chrome 页面。提供命令行和异步 Python 技能，可以查看页面、导航、截图、操作元素，以及按额度采集网络和调试信息。
 
 
 ## 实际效果
@@ -19,7 +19,7 @@
 
 ## 使用条件和安装
 
-控制端和浏览器目前支持 macOS。需要 Python 3.12 或更新版本；浏览器运行环境使用 `websockets>=15,<17`。本机需要 Chrome、Chrome for Testing，或本地 CDP 入口可连接的 Arc 版本。Arc 只支持连接已有浏览器；打开检查设置不代表入口已经能连上。
+控制端和浏览器目前支持 macOS。需要 Python 3.12 或更新版本；浏览器运行环境使用 `websockets>=15,<17`。Chrome 功能需要 Chrome、Chromium 或 Chrome for Testing。Cra 网页通过宿主已经配置的官方 MCP 操作，见技能入口。
 
 从源码使用时，把 `browser-use`、`computer-use`、`remote-host` 和 `_shared` 保持为同级目录。通过助手配置的技能搜索路径暴露本目录。支持 Python 技能内核的助手读 [PYSKILL.md](PYSKILL.md)，调用 `skills.browser_use`；其他助手读 [SKILL.md](SKILL.md)，使用命令行。
 

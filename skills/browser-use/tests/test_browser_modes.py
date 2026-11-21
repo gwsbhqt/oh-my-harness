@@ -170,9 +170,9 @@ class BrowserModeTests(unittest.TestCase):
         self.assertNotIn("--disable-extensions", self.flags[0])
         self.assertEqual(self.core.browsers[("Chrome", "modes")]["profileName"], "work")
 
-    def test_first_arc_attach_keeps_owned_pages_for_release_after_disconnect(self):
+    def test_first_attach_keeps_owned_pages_for_release_after_disconnect(self):
         self.core.ledger = None
-        real_ledger = engine.ResourceLedger(Path(self.temp.name).resolve() / "arc-resources.json")
+        real_ledger = engine.ResourceLedger(Path(self.temp.name).resolve() / "attach-resources.json")
         cdp = ModeCDP("fixture")
         targets = [{"targetId": "owned-fixture", "type": "page"},
                    {"targetId": "user-fixture", "type": "page"}]
@@ -191,20 +191,20 @@ class BrowserModeTests(unittest.TestCase):
         with patch.object(engine, "ResourceLedger", return_value=real_ledger), \
                 patch.object(self.core, "_connect_attach", return_value=(cdp, "http://127.0.0.1:9222",
                     "ws://127.0.0.1:9222/devtools/browser/11111111-1111-1111-1111-111111111111")):
-            request = {"browser": "Arc", "session": "arc-first", "params": {}}
+            request = {"browser": "Chrome", "session": "attach-first", "params": {"mode": "attach", "fallback": "never"}}
             up = self.core.dispatch(request | {"action": "up"})
             self.assertTrue(up["ok"], up)
             self.assertIs(self.core.ledger, real_ledger)
-            scope = self.core.browsers[("Arc", "arc-first")]["scope"]
-            real_ledger.record(scope, "arc-first", "owned-fixture", True, "Arc")
+            scope = self.core.browsers[("Chrome", "attach-first")]["scope"]
+            real_ledger.record(scope, "attach-first", "owned-fixture", True, "Chrome")
             disconnected = self.core.dispatch(request | {"action": "disconnect"})
             self.assertTrue(disconnected["ok"], disconnected)
-            self.assertEqual(len(real_ledger.list(scope, "arc-first")), 1)
+            self.assertEqual(len(real_ledger.list(scope, "attach-first")), 1)
             released = self.core.dispatch(request | {"action": "release"})
             self.assertTrue(released["ok"], released)
             self.assertEqual(closed, ["owned-fixture"])
             self.assertEqual(targets, [{"targetId": "user-fixture", "type": "page"}])
-            self.assertEqual(real_ledger.list(scope, "arc-first"), [])
+            self.assertEqual(real_ledger.list(scope, "attach-first"), [])
 
     def test_attach_never_launches_or_closes_browser_process(self):
         with patch.object(engine.subprocess, "Popen", side_effect=AssertionError("attach 不应启动 Chrome")),                 patch.object(self.core, "_connect_attach", return_value=(ModeCDP("fixture"), "http://127.0.0.1:9222", "ws://127.0.0.1:9222/devtools/browser/11111111-1111-1111-1111-111111111111")),                 patch.object(engine, "CDP", side_effect=ModeCDP):
@@ -322,110 +322,36 @@ class BrowserModeTests(unittest.TestCase):
         self.assertFalse(self.spawned)
 
 
-class ArcModeTests(unittest.TestCase):
-    setUp = BrowserModeTests.setUp
-    spawn = BrowserModeTests.spawn
-
-    def up(self, **params):
-        return self.core.dispatch({"action": "up", "session": "arc", "browser": "Arc", "params": params})
-
-    def attached(self, kind, session):
-        return ModeCDP(kind.name), "http://127.0.0.1:9333", "ws://127.0.0.1:9333/devtools/browser/22222222-2222-2222-2222-222222222222"
-
-    def test_arc_defaults_to_attach_without_launching(self):
-        with patch.object(engine.subprocess, "Popen", side_effect=AssertionError("Arc 不应自启浏览器")), \
-                patch.object(self.core, "_connect_attach", side_effect=self.attached) as connect:
-            reply = self.up()
-        self.assertTrue(reply["ok"], reply)
-        self.assertEqual(reply["result"]["mode"], "attach")
-        self.assertEqual(reply["result"]["browser"], "Arc")
-        self.assertEqual(connect.call_args.args[0], engine.BROWSERS["Arc"])
-
-    def test_arc_rejects_isolated_and_clone(self):
-        for mode in ("isolated", "clone"):
-            reply = self.up(mode=mode, executable="/bin/bash")
-            self.assertEqual(reply["code"], 2, reply)
-            self.assertIn("browser='Chrome'", reply["error"])
-        reply = self.up(mode="attach", fallback="clone")
-        self.assertEqual(reply["code"], 2, reply)
-        self.assertFalse(self.spawned)
-
-    def test_arc_attach_failure_neither_clones_nor_restarts(self):
-        root = Path(self.temp.name) / "arc-configured"
-        root.mkdir()
-        (root / "DevToolsActivePort").write_text("9333\n/devtools/browser/fixture\n")
-        with patch.object(self.core, "_data_root", return_value=root), \
-                patch.object(self.core, "_restart_browser") as restart, \
-                patch.object(engine.subprocess, "Popen", side_effect=AssertionError("Arc 不应自启浏览器")), \
-                patch.object(self.core, "_connect_attach", side_effect=OSError("authorization timeout")):
-            reply = self.up()
-        self.assertFalse(reply["ok"], reply)
-        self.assertEqual(reply["code"], 5)
-        self.assertIn("Arc", reply["error"])
-        restart.assert_not_called()
-
-    def test_arc_without_remote_debugging_does_not_guess_a_port(self):
-        with patch.object(self.core, "_data_root", return_value=Path(self.temp.name) / "arc-new"), \
-                patch.object(engine, "discover", side_effect=AssertionError("不该去猜端口")):
-            with self.assertRaises(engine.BrowserUseError) as raised:
-                self.core._attach_endpoint(engine.BROWSERS["Arc"])
-        self.assertIn("重新打开更新后的本地 Arc", str(raised.exception))
-        chrome = self.core._attach_endpoint.__func__
-        with patch.object(self.core, "_data_root", return_value=Path(self.temp.name) / "chrome-new"):
-            self.assertEqual(chrome(self.core, engine.BROWSERS["Chrome"]), "http://127.0.0.1:9222")
-
-    def test_chrome_and_arc_keep_separate_attach_connections(self):
-        connections = {}
-        def connect(kind, session):
-            connections[kind.name] = ModeCDP(kind.name)
-            return connections[kind.name], "http://127.0.0.1:9333", f"ws://127.0.0.1:9333/devtools/browser/{'1' if kind.name == 'Chrome' else '2'}" + "1111111-1111-1111-1111-111111111111"
-        with patch.object(self.core, "_connect_attach", side_effect=connect):
-            for browser in ("Chrome", "Arc"):
-                reply = self.core.dispatch({"action": "up", "session": "both", "browser": browser, "params": {"mode": "attach", "fallback": "never"}})
-                self.assertTrue(reply["ok"], reply)
-            self.assertEqual(set(self.core._attach_shared), {"Chrome", "Arc"})
-            self.assertEqual(self.core._attach_scopes(), {"11111111-1111-1111-1111-111111111111", "21111111-1111-1111-1111-111111111111"})
-            connections["Arc"].closed = True
-            self.assertTrue(self.core.attach_lost())
-            self.assertEqual(self.core._attach_lost(), {"Arc"})
-            self.assertTrue(self.core.keep_shared_alive())
-            self.assertTrue(self.core.has_live_browser())
-            connections["Chrome"].closed = True
-            self.assertFalse(self.core.has_live_browser())
-
-    def test_arc_rejection_reports_observed_failure(self):
-        from browser_use.errors import BrowserUseError
-        with patch.object(self.core, "_connect_attach", side_effect=BrowserUseError("连不上浏览器：server rejected WebSocket connection: HTTP 403", 5)):
-            reply = self.up()
+    def test_attach_rejection_reports_observed_failure(self):
+        with patch.object(self.core, "_connect_attach", side_effect=engine.BrowserUseError("WebSocket: HTTP 403", 5)), \
+                patch.object(self.core, "_restart_browser") as restart:
+            reply = self.up(mode="attach", fallback="never")
         self.assertEqual(reply["code"], 5, reply)
         self.assertIn("HTTP 403", reply["error"])
-        self.assertNotIn("不会弹", reply["error"])
+        restart.assert_not_called()
 
     def test_attach_checks_real_process_instead_of_trusting_port(self):
         with patch.object(engine.sys, "platform", "darwin"):
-            for name, command in (("Arc", "/tmp/example-home/Applications/Arc.app/Contents/MacOS/ArcBinary --flag"),
-                                  ("Chrome", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --flag")):
-                with patch.object(engine.subprocess, "run", return_value=Mock(stdout=command)):
-                    self.core._verify_attach_browser(engine.BROWSERS[name], ModeCDP("fixture"))
-                    other = "Chrome" if name == "Arc" else "Arc"
-                    with self.assertRaises(engine.BrowserUseError) as raised:
-                        self.core._verify_attach_browser(engine.BROWSERS[other], ModeCDP("fixture"))
-                    self.assertEqual(raised.exception.code, 6)
+            kind = engine.BROWSERS["Chrome"]
+            with patch.object(engine.subprocess, "run", return_value=Mock(stdout="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --flag")):
+                self.core._verify_attach_browser(kind, ModeCDP("fixture"))
+            with patch.object(engine.subprocess, "run", return_value=Mock(stdout="/tmp/fixture-other-browser --flag")):
+                with self.assertRaises(engine.BrowserUseError) as raised:
+                    self.core._verify_attach_browser(kind, ModeCDP("fixture"))
+                self.assertEqual(raised.exception.code, 6)
 
-    def test_arc_rejects_launch_options_even_when_fallback_is_omitted(self):
+    def test_attach_rejects_launch_options_without_fallback(self):
         for params in ({"executable": "/bin/bash"}, {"headed": True}):
-            reply = self.up(**params)
+            reply = self.up(mode="attach", fallback="never", **params)
             self.assertEqual(reply["code"], 2, reply)
 
     def test_unknown_browser_is_rejected(self):
-        reply = self.core.dispatch({"action": "up", "session": "x", "browser": "Safari", "params": {}})
-        self.assertEqual(reply["code"], 2)
         from browser_use.client import validate_context
         from browser_use.errors import BrowserUseError
-        self.assertEqual(validate_context("x", "Arc", "local")[1], "Arc")
+        reply = self.core.dispatch({"action": "up", "session": "x", "browser": "Safari", "params": {}})
+        self.assertEqual(reply["code"], 2)
         with self.assertRaises(BrowserUseError):
             validate_context("x", "Safari", "local")
-
 
 class ChromeExecutableTests(unittest.TestCase):
     def test_prefers_installed_chrome_then_newest_testing_build(self):

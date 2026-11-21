@@ -2,11 +2,13 @@
 
 # 使用 browser-use
 
-任务发生在网页里时，使用 browser-use。例如查看表单、检查页面跳转过程、截图，或核对授权操作后的变化。它通过 Chrome DevTools Protocol（CDP，即浏览器调试协议）控制明确选中的 Chrome 或 Arc 页面。浏览器菜单、操作系统对话框和原生弹窗交给 computer-use。
+需要沿用本机 Cra 的日常登录时，使用宿主已经配置的 [Cra 官方 MCP](https://github.com/VictorKildahl/cra/blob/v0.1.52/docs/mcp.md)。第一次连接由用户在 Cra 里确认。后台开本任务的标签，固定返回的 `tabId`，重读页面确认结果，收尾只关本任务创建的标签。Python 与非 Python 的 Cra 入口见 [技能说明](../skills/browser-use/README.md#入口和配置)。
+
+下文演示 Chrome 的网页操作。browser-use 通过 Chrome DevTools Protocol（CDP，即浏览器调试协议）控制指定页面。浏览器菜单、操作系统对话框和原生弹窗交给 computer-use。
 
 ## 从一个明确的页面开始
 
-控制端和浏览器支持的平台都是 macOS。工具需要 Python 3.12 或更新版本，以及可用的浏览器调试入口。Arc 只支持连接已有浏览器的 attach 模式。启用检查设置，不代表调试入口已经接受连接。
+控制端和浏览器支持的平台都是 macOS。Chrome 功能需要 Python 3.12 或更新版本。连接已有 Chrome 需要可用的调试入口和授权。
 
 先探测状态并列出页面，再选择目标。在 Python 技能内核中，一次虚构的检查可以这样开始：
 

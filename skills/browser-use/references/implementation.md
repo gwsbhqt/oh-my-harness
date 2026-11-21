@@ -10,9 +10,9 @@
 
 ## 连接、归属与生命周期
 
-isolated 和 clone 由 browser-use 自己启动，每个任务使用独立实例；attach 按浏览器实例共享一条调试连接（Chrome、Arc 各一条），跨会话复用且只在服务整体退出时关闭。临时资料使用私有浏览器 context，持久资料使用默认 context 以便写回登录态。CDP 响应接收和事件分发分离，回调不能堵接收线程。命令通过私有 Unix socket 共用执行核心。
+isolated 和 clone 由 browser-use 自己启动，每个任务使用独立实例；attach 为日常 Chrome 实例共享一条调试连接，跨会话复用且只在服务整体退出时关闭。临时资料使用私有浏览器 context，持久资料使用默认 context 以便写回登录态。CDP 响应接收和事件分发分离，回调不能堵接收线程。命令通过私有 Unix socket 共用执行核心。
 
-ResourceLedger 只保存浏览器 WebSocket UUID、任务归属、目标标识和 owned，不存页面或认证内容。私有目录 700，文件和锁 600，损坏或权限异常不重置。UUID 变化不认领旧页。
+ResourceLedger 只保存浏览器 WebSocket UUID、任务归属、目标标识和 owned，不存页面或认证内容。私有目录 700，文件和锁 600，损坏或权限异常不重置。UUID 变化不认领旧页。资源账和上传暂存账保留其他浏览器的记录，Chrome 不认领这些页面、不删除这些记录或暂存文件。
 
 release 只关闭本任务自建页，借用页只断开绑定；disconnect 保留页面和归属，清理连接、初始化脚本、网络拦截、页面附加头和泳道等调试副作用。目标关闭需观察实际消失后再删归属账。
 

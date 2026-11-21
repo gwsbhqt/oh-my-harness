@@ -1,7 +1,4 @@
-"""browser-use 能操作的浏览器。每种浏览器的应用名、日常资料目录、主进程和可用运行方式只在这里登记，引擎按名字查表。
-
-加一种 Chromium 系浏览器只需在 BROWSERS 里加一项；它的日常实例要能像 Chrome 一样打开远程调试（chrome://inspect#remote-debugging）。
-"""
+"""Chrome 的应用身份、资料目录和调试方式。"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -32,10 +29,8 @@ class Browser:
     """attach 连不上、但调试端口文件还在时，默认是否重启日常实例：if_needed 或 never。"""
     debug_page: str
     """日常实例里打开远程调试开关的页面。"""
-    attach_help: str | None = None
-    """连接被浏览器拒绝时的操作提示；省略时提示检查设置页与授权。"""
-    fallback_port: str | None = None
-    """日常实例没写 DevToolsActivePort 时试连的端口；None 表示不猜，直接报没开远程调试。"""
+    fallback_port: str
+    """日常实例没写 DevToolsActivePort 时试连的端口。"""
     data_roots: dict = field(default_factory=dict)
     """平台（darwin、win32、linux）到日常资料目录的写法；~ 和 %LOCALAPPDATA% 在取用时展开。"""
 
@@ -53,12 +48,6 @@ class Browser:
             return Path(os.environ["LOCALAPPDATA"]) / raw.removeprefix("%LOCALAPPDATA%/")
         return Path(raw).expanduser()
 
-    def check_mode(self, mode):
-        if mode not in self.modes:
-            if self.modes == ("attach",):
-                raise BrowserUseError(f"{self.name} 只能 attach 接管日常实例；独立实例和复制资料请用 browser='Chrome'", 2)
-            raise BrowserUseError(f"{self.name} 的 mode 只能是 {'、'.join(self.modes)}", 2)
-
 
 BROWSERS = {
     "Chrome": Browser(
@@ -69,14 +58,6 @@ BROWSERS = {
         data_roots={"darwin": "~/Library/Application Support/Google/Chrome",
                     "win32": "%LOCALAPPDATA%/Google/Chrome/User Data",
                     "linux": "~/.config/google-chrome"}),
-    # Arc 使用自己的原生外壳和资料格式；只接管现有实例，不把 Chrome 的启动和资料复制规则套在它上面。
-    "Arc": Browser(
-        name="Arc", app="Arc", bundle_id="company.thebrowser.Browser",
-        process=r"Arc\.app/Contents/MacOS/Arc(Binary)?( |$)",
-        modes=("attach",), fallback="never", restart="never",
-        debug_page="arc://inspect/#remote-debugging",
-        attach_help="请正常退出并重新打开更新后的本地 Arc；仅在 inspect 设置页开启调试可能仍被拒绝",
-        data_roots={"darwin": "~/Library/Application Support/Arc/User Data"}),
 }
 
 NAMES = tuple(BROWSERS)

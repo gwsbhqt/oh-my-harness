@@ -19,7 +19,7 @@ Plugins load into DSH. Skills expose operations an agent can call. Each componen
 
 | Skill | Target and capability | Read next |
 | --- | --- | --- |
-| [browser-use](../skills/browser-use/README.en.md) | A specific Chrome or Arc page: observe, click, type, capture, and read back. | [Guide](browser-use.en.md) |
+| [browser-use](../skills/browser-use/README.en.md) | Official MCP for everyday Cra pages. Chrome page inspection, input, screenshots, and remote use. | [Guide](browser-use.en.md) |
 | [computer-use](../skills/computer-use/README.en.md) | Native macOS apps and windows: inspect, target input, capture, and verify. | [Guide](computer-use.en.md) |
 | [remote-host](../skills/remote-host/README.en.md) | Execute, transfer, and verify over SSH on an explicitly selected host. | [Guide](remote-host.en.md) |
 

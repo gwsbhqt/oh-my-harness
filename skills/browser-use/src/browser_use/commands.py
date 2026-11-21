@@ -24,15 +24,15 @@ class Parser(argparse.ArgumentParser):
 
 
 def build_parser(*, explicit_tab=False):
-    parser = Parser(prog="browser-use", description="后台控制明确绑定的 Chrome 或 Arc 网页，不使用活动标签页。文本以 -- 分隔原样传入。")
+    parser = Parser(prog="browser-use", description="后台控制明确绑定的 Chrome 网页，不使用活动标签页。文本以 -- 分隔原样传入。")
     common = argparse.ArgumentParser(add_help=False)
     for p in (parser, common):
         suppress = {} if p is parser else {"default": argparse.SUPPRESS}
         p.add_argument("--session", help="明确会话名称（字母数字、下划线、连字符）", **suppress)
-        p.add_argument("--browser", choices=BROWSER_NAMES, help="浏览器：Chrome 或 Arc；默认 Chrome", **({"default": None} if p is parser else suppress))
-        p.add_argument("--mode", choices=("attach", "isolated", "clone"), help="attach 接管日常浏览器；isolated 独立实例；clone 复制日常 Chrome 资料。默认 Chrome 为 isolated，Arc 只能 attach", **suppress)
-        p.add_argument("--restart", choices=("never", "if_needed"), help="attach 连接失效时是否允许一次正常重启；Chrome 默认 if_needed，Arc 默认 never", **suppress)
-        p.add_argument("--fallback", choices=("clone", "never"), help="attach 连接失败时是否自动改用 clone；Chrome 默认 clone，Arc 只能 never", **suppress)
+        p.add_argument("--browser", choices=BROWSER_NAMES, help="浏览器：Chrome", **({"default": None} if p is parser else suppress))
+        p.add_argument("--mode", choices=("attach", "isolated", "clone"), help="attach 接管日常浏览器；isolated 独立实例；clone 复制日常 Chrome 资料。默认 isolated", **suppress)
+        p.add_argument("--restart", choices=("never", "if_needed"), help="attach 连接失效时是否允许一次正常重启；默认 if_needed", **suppress)
+        p.add_argument("--fallback", choices=("clone", "never"), help="attach 连接失败时是否自动改用 clone；默认 clone", **suppress)
         p.add_argument("--profile", help="isolated 的持久资料名，或 clone 的来源资料名", **suppress)
         p.add_argument("--host", "-H", help="本次机器；未指定则用 browser-use 自己的 pin，没有pin默认本机", **({"default": None} if p is parser else suppress))
         p.add_argument("--local", action="store_true", help="本次明确本机，不使用默认远端", **suppress)

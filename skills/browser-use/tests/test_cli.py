@@ -82,13 +82,13 @@ class CliTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ExtendedCliTests(unittest.IsolatedAsyncioTestCase):
-    async def test_release_and_disconnect_cover_every_browser(self):
+    async def test_release_and_disconnect_use_chrome_with_or_without_browser_option(self):
         for action in ("release", "disconnect"):
             client = FakeClient()
             result = await execute(["--session", "mine", action], client=client)
-            self.assertEqual([c[2]["browser"] for c in client.calls], ["Chrome", "Arc"])
+            self.assertEqual([c[2]["browser"] for c in client.calls], ["Chrome"])
             self.assertTrue(all(c[0] == action and c[2]["target"] is None for c in client.calls))
-            self.assertEqual(set(result["browsers"]), {"Chrome", "Arc"})
+            self.assertEqual(set(result["browsers"]), {"Chrome"})
             for browser in ("Chrome",):
                 client.calls.clear()
                 result = await execute(["--session", "mine", "--browser", browser, action], client=client)

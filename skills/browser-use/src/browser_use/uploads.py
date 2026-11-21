@@ -8,7 +8,7 @@ import re
 import stat
 from .browsers import NAMES as BROWSER_NAMES
 from .errors import BrowserUseError
-from .resources import ResourceLedger, _pairs
+from .resources import ResourceLedger, _pairs, _stored_browser_name
 
 class UploadLedger(ResourceLedger):
     def _read(self, directory):
@@ -22,7 +22,7 @@ class UploadLedger(ResourceLedger):
             if not isinstance(values,list):raise ValueError('list required')
             for item in values:
                 if not isinstance(item,dict) or set(item)!={'owner','browser','targetId','stage','files'}:raise ValueError('invalid upload record')
-                if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}',item['owner']) or item['browser'] not in BROWSER_NAMES or not isinstance(item['targetId'],str):raise ValueError('invalid owner')
+                if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}',item['owner']) or not _stored_browser_name(item['browser']) or not isinstance(item['targetId'],str):raise ValueError('invalid owner')
                 self._descriptor(item['stage'])
                 if not isinstance(item['files'],dict) or set(item['files'])-set(item['stage']['files']) or any(not isinstance(v,list) or len(v)!=4 or any(type(n) is not int or n<0 for n in v) for v in item['files'].values()):raise ValueError('invalid files')
             return values,self._identity(info)
@@ -102,9 +102,13 @@ class UploadLedger(ResourceLedger):
         with self._transaction() as (directory,records,previous):
             keep=[]
             for item in records:
+                if item['browser'] not in BROWSER_NAMES:
+                    keep.append(item)
+                    continue
                 if (owner is not None and item['owner']!=owner or browser is not None and item['browser']!=browser or target is not None and item['targetId']!=target):keep.append(item);continue
                 try:self._delete(item);cleaned.append(item['stage']['directory'])
                 except BrowserUseError as exc:keep.append(item);errors.append(exc.as_dict())
-            self._write(directory,keep,previous)
+            if cleaned:
+                self._write(directory,keep,previous)
         if errors:raise BrowserUseError('部分上传暂存未能清理',5,data={'cleaned':cleaned,'errors':errors})
         return {'cleaned':cleaned}

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import functools
 from pathlib import Path
+import re
 import sys
 import warnings
 
@@ -22,6 +23,22 @@ from .contexts import session_control
 from .lane import lane_params
 
 __version__ = "2.1.0"
+
+
+async def cra(tool: str, /, **arguments):
+    """调用当前 DSH Python 格已注册的 Cra 官方 MCP 工具，原样返回回执。"""
+    if not isinstance(tool, str) or not re.fullmatch(r"[a-z][a-z0-9_]*", tool):
+        raise BrowserUseError("请传入 Cra 官方工具名，例如 tab_open", 2)
+    try:
+        from dsh_kernel import tools
+    except ModuleNotFoundError as exc:
+        if exc.name != "dsh_kernel":
+            raise
+        raise BrowserUseError("Cra 入口需要 DSH Python 技能内核及当前会话中的 Cra MCP 工具", 5) from None
+    name = f"mcp__cra__{tool}"
+    if name not in tools:
+        raise BrowserUseError(f"当前 DSH 会话未提供 {name}；请检查 Cra MCP 的连接、授权和会话工具配置", 5)
+    return await tools[name](arguments)
 
 
 class LaneWarning(UserWarning):
@@ -156,7 +173,7 @@ async def status(*, browser="Chrome", host=None, session=None, mode=None, profil
 
 
 def _mode_params(mode, profile, restart, fallback):
-    """只带调用方明确给的运行方式参数；省略的由服务按浏览器取默认（Chrome：isolated、连不上 clone；Arc：attach、连不上报错）。"""
+    """只带调用方明确给的参数；省略时由 Chrome 服务选择运行方式和回退行为。"""
     return {k: v for k, v in {"mode": mode, "profile": profile, "restart": restart, "fallback": fallback}.items() if v is not None}
 
 
@@ -248,7 +265,7 @@ def _looks_like_login(url):
 async def open_page(url=None, *, browser="Chrome", host=None, session=None, mode=None, profile=None, restart=None, fallback=None, lane=None, init_script=None, capture=True, executable=None, headed=False, launch=None, new_window=False, source_target=None):
     """新建页面。mode=attach 接管日常浏览器；isolated 启动独立实例；clone 复制日常 Chrome 资料后启动。
 
-    browser="Arc" 只能 attach，省略 mode 即是；Chrome 省略 mode 是 isolated。"""
+    Chrome 省略 mode 是 isolated。"""
     session, browser, host = validate_context(session, browser, host)
     if type(new_window) is not bool:
         raise BrowserUseError("new_window 必须是 bool", 2)
@@ -295,7 +312,7 @@ async def _release_browsers(callback, *, browser=None):
 
 
 async def release(*, session=None, browser=None, host=None):
-    """释放本会话用到的浏览器（省略 browser 时 Chrome、Arc 都释放）；只关自建页面。"""
+    """释放本会话在 Chrome 的页面归属；只关自建页面。"""
     session, _, host = validate_context(session, browser or "Chrome", host)
     async def release(name):
         return await _rpc("release", browser=name, host=host, session=session)
@@ -528,7 +545,7 @@ async def capabilities(*, host=None):
                                        "核对实际发出去的头，被插件等改掉时在下一次页面动作里警告；release 撤掉，浏览器里不留东西；"
                                        "worker 和 service worker 自己发的请求不带"}
     features["batch"] = {"supported": True, "mode": "cli", "reason": "命令行从 stdin 或文件读多条命令，默认出错即停；Python 直接编排"}
-    features["browser_modes"] = {"supported": True, "mode": "attach_isolated_clone", "reason": "attach 借用日常 Chrome 或 Arc；isolated 使用临时或持久资料；clone 复制日常 Chrome 资料到本任务私有目录；Arc 只能 attach"}
+    features["browser_modes"] = {"supported": True, "mode": "attach_isolated_clone", "reason": "attach 借用日常 Chrome；isolated 使用临时或持久资料；clone 复制日常 Chrome 资料到本任务私有目录"}
     features["shared_window"] = {"supported": True, "mode": "attach", "reason": "open_window 为任务新开窗口，与指定现有页面共享资料和登录，不复制、不重启、不回退独立实例；多个资料同时打开时须提供 source_target；原生菜单和键盘仍受桌面焦点限制"}
     features["chrome_launch_options"] = {"supported": True, "mode": "owned_chrome", "reason": "代理、证书、语言、UA、窗口尺寸用于 isolated/clone；attach 不改日常 Chrome 配置"}
     features["state"] = {"supported": True, "mode": "page_session", "reason": "Cookie 值默认打码；网页存储只限页面里出现的来源；登录状态文件只载入自启 Chrome；共享浏览器写入需授权，释放时恢复"}

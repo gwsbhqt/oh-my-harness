@@ -370,9 +370,11 @@ func nativeWindowID(_ window: AXUIElement) -> CGWindowID? {
     return nil
 }
 
+let craBundle = "dk.kildahl.cra"
+
 func isBrowserBundle(_ key: String) -> Bool {
     return ["com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.dev", "com.google.Chrome.canary",
-            "dk.kildahl.cra", "company.thebrowser.Browser", "org.chromium.Chromium",
+            craBundle, "org.chromium.Chromium",
             "com.microsoft.edgemac", "com.brave.Browser", "com.apple.Safari"].contains(key)
 }
 
@@ -1709,7 +1711,6 @@ func enableWebContent(_ pid: pid_t, timeout: Double) -> (ok: Bool, seconds: Doub
 
 /// 已知会把网页内容藏起来的应用：Chromium 系浏览器和 Electron 应用。不在名单里的应用 snap 时不会被改设置。
 let webHosts: Set<String> = ["com.google.Chrome", "com.google.Chrome.canary", "com.google.chrome.for.testing",
-                             "dk.kildahl.cra", "company.thebrowser.Browser",
                              "com.microsoft.edgemac", "com.brave.Browser", "org.chromium.Chromium",
                              "com.vivaldi.Vivaldi", "com.operasoftware.Opera", "com.electron.lark",
                              "com.tinyspeck.slackmacgap", "com.microsoft.VSCode", "com.hnc.Discord",
@@ -2439,7 +2440,7 @@ case "snap":
     // --no-webmode 或 COMPUTER_USE_NO_WEBMODE=1 关掉。
     var webmodeNote: String? = nil
     if !hasFlag("--no-webmode"), ProcessInfo.processInfo.environment["COMPUTER_USE_NO_WEBMODE"] != "1",
-       webHosts.contains(key) || isElectron(app), !hasWebContent(pid) {
+       key != craBundle, webHosts.contains(key) || isElectron(app), !hasWebContent(pid) {
         let r = enableWebContent(pid, timeout: 3)
         webmodeNote = r.ok ? "已自动打开网页辅助功能（等了 \(r.seconds)s）" : "已请求打开网页辅助功能，但 3 秒内没看到网页内容"
         warn(webmodeNote!)
@@ -3135,6 +3136,7 @@ case "webmode":
     let turnOff = hasFlag("--off")
     let timeout = Double(flagValue("--timeout") ?? "") ?? 4
     let app = mustApp(q)
+    guard app.bundleIdentifier != craBundle else { die("Cra 网页操作请使用官方 MCP", 6, outcome: "not_sent") }
     if turnOff {
         let root = axApp(app.processIdentifier)
         let manual = AXUIElementSetAttributeValue(root, "AXManualAccessibility" as CFString, kCFBooleanFalse).rawValue

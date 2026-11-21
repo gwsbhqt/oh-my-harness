@@ -24,7 +24,7 @@ def wrapper(argv):
         result = subprocess.run([str(build_binary()), *argv], capture_output=True, text=True)
         sys.stdout.write(result.stdout)
         sys.stderr.write(result.stderr)
-        print('\n扩展命令（同样支持 --json）：version / capabilities / disconnect / release / target-close APP --authorized [--timeout 秒] / element APP ACTION --selector JSON [--handle JSON] [--value TEXT] [--direction down] / autofill APP [--account TEXT]（点 1Password 填充浮层里的账号） / approve-debug APP（允许 Chrome 远程调试）')
+        print('\n扩展命令（同样支持 --json）：version / capabilities / disconnect / release / target-close APP --authorized [--timeout 秒] / element APP ACTION --selector JSON [--handle JSON] [--value TEXT] [--direction down] / autofill APP [--account TEXT]（点 1Password 填充浮层里的账号） / approve-debug "Google Chrome"（确认 Chrome 远程调试授权）')
         return result.returncode
     class Parser(argparse.ArgumentParser):
         def error(self, message):

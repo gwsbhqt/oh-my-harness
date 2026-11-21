@@ -16,7 +16,7 @@ browser-use status --json
 
 ## 共用参数与机器
 
-共用参数：`--session NAME`、`--scope ID`、`--browser Chrome|Arc`、`--mode attach|isolated|clone`、`--profile NAME`、`--restart never|if_needed`、`--fallback clone|never`、`-H HOST|--host HOST|--local`、`--json`、`--socket PATH`、`--tab TARGET`、`--rpc-timeout SECONDS`。可放子命令前后，必须在原样文本分隔符 `--` 前。远端与 `--local` 冲突拒绝；`--socket` 只适用于本机，不混远端。`--tab` 代替目标位置参数时不能重复给目标。
+共用参数：`--session NAME`、`--scope ID`、`--browser Chrome`、`--mode attach|isolated|clone`、`--profile NAME`、`--restart never|if_needed`、`--fallback clone|never`、`-H HOST|--host HOST|--local`、`--json`、`--socket PATH`、`--tab TARGET`、`--rpc-timeout SECONDS`。可放子命令前后，必须在原样文本分隔符 `--` 前。远端与 `--local` 冲突拒绝；`--socket` 只适用于本机，不混远端。`--tab` 代替目标位置参数时不能重复给目标。
 
 `--snap` 在成功动作后再取态，结果放 `snap`；不截图，且只适用于确切页面动作，tab/lane/policy 不接受。普通任务必须有 scope 或显式 session，不能靠页面编号猜归属。
 

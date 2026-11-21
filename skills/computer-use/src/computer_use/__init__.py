@@ -547,7 +547,7 @@ async def snap(app: str, *, shot: bool = False, diff: bool = False, all: bool = 
                webmode: bool = True) -> Snap | Diff:
     """取态。默认只要元素清单不截图；diff=True 返回与上次取态的差异（Diff）。
 
-    浏览器和 Electron 应用第一次读时会自动打开网页辅助功能（约 2 秒），webmode=False 关掉。
+    支持网页辅助模式的浏览器和 Electron 应用第一次读时会自动打开该模式（约 2 秒），webmode=False 关掉。Cra 网页使用官方 MCP。
     应用没在运行时会在后台启动它。
     """
     args: list[Any] = ["snap", _text(app), "--max", _integer(max, "max"), "--depth", _integer(depth, "depth"),
@@ -765,36 +765,41 @@ def _debugging_prompt(elements):
 
 
 async def approve_chrome_debugging(app_name="Google Chrome", *, watch=30, on_ready=None):
-    """只观察授权框，确认同一原生窗口且仍在前台后短保护点击；不激活或恢复桌面。
+    """确认 Google Chrome 的远程调试授权框仍在同一前台窗口后点击。
 
     弹框消失只表示原生确认完成，连接结果由 browser-use 独立核对。
     """
+    chrome_bundle = "com.google.Chrome"
+    if _text(app_name).casefold() not in {"chrome", "google chrome", chrome_bundle.casefold()}:
+        raise ComputerUseError("远程调试自动确认只适用于 Google Chrome", 2, "approve_debugging", outcome="not_sent")
     deadline = asyncio.get_running_loop().time() + _number(watch, "watch")
     if on_ready is not None:
         on_ready()
     while True:
-        data = await cli("snap", _text(app_name), "--max", 800, "--no-webmode")
+        data = await cli("snap", chrome_bundle, "--max", 800, "--no-webmode")
         elements = data.get("elements", [])
         if _debugging_prompt(elements):
             if data.get("truncated") or data.get("timedOut") or not data.get("snapshot"):
                 raise ComputerUseError("远程调试授权窗口取态不完整", 4, "approve_debugging", outcome="not_sent")
             ref = _normalize_window(data.get("window"))
+            if ref.get("bundleId") != chrome_bundle:
+                raise ComputerUseError("远程调试授权窗口不属于 Google Chrome", 4, "approve_debugging", outcome="not_sent")
             choices = _allow_buttons(elements)
             if len(choices) != 1:
                 raise ComputerUseError("远程调试授权按钮不唯一", 4, "approve_debugging", outcome="not_sent")
             token = _window_ref.set(ref)
             try:
-                checked = await cli("snap", _text(app_name), "--max", 800, "--no-webmode")
+                checked = await cli("snap", chrome_bundle, "--max", 800, "--no-webmode")
                 buttons = _allow_buttons(checked.get("elements", []))
                 if checked.get("truncated") or checked.get("timedOut") or not checked.get("snapshot") or not _debugging_prompt(checked.get("elements", [])) or len(buttons) != 1:
                     raise ComputerUseError("授权框已变化，未点击", 4, "approve_debugging", outcome="not_sent")
-                await cli("click", _text(app_name), buttons[0]["idx"], "--snapshot", checked["snapshot"], "--require-focus", "--no-settle")
+                await cli("click", chrome_bundle, buttons[0]["idx"], "--snapshot", checked["snapshot"], "--require-focus", "--no-settle")
             finally:
                 _window_ref.reset(token)
             verify_deadline = asyncio.get_running_loop().time() + 3
             while True:
-                current = await windows(app_name)
-                if not any(all(w.get(k) == ref[k] for k in ("id", "pid", "startedAt")) for w in current["windows"]):
+                current = await windows(chrome_bundle)
+                if not any(all(w.get(k) == ref[k] for k in ("id", "pid", "startedAt", "bundleId")) for w in current["windows"]):
                     return {"approved": True, "clicked": buttons[0]["label"], "count": 1, "app": app_name, "connectionVerified": False}
                 if asyncio.get_running_loop().time() >= verify_deadline:
                     raise ComputerUseError("已点击允许但原窗口仍在；结果未知", 4, "approve_debugging", outcome="unknown")

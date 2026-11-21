@@ -4,9 +4,9 @@
 
 [← oh-my-harness](../../README.en.md#components) · [Tutorial](../../docs/browser-use.en.md)
 
-**In short:** Operates chosen pages in Chrome or Arc: read, click, type, screenshot. Each task gets its own window and re-reads the page after acting.
+**In short:** Uses the official Cra MCP for everyday Cra pages. Chrome support includes reading, clicking, typing, screenshots, and remote use.
 
-Control explicitly selected Chrome or Arc pages on macOS through the Chrome DevTools Protocol (CDP). The tool provides a command line interface and an asynchronous Python skill, including page inspection, navigation, screenshots, element actions and bounded network/debugging capture.
+Control explicitly selected Chrome pages on macOS through the Chrome DevTools Protocol (CDP). The tool provides a command line interface and an asynchronous Python skill, including page inspection, navigation, screenshots, element actions and bounded network/debugging capture.
 
 
 ## See it work
@@ -19,7 +19,7 @@ These are real recordings using fictional data and local example pages. No accou
 
 ## Requirements and installation
 
-The supported controller and browser platform is macOS. Python 3.12 or newer is required; the browser runtime uses `websockets>=15,<17`. Chrome, Chrome for Testing, or an Arc distribution with a working local CDP endpoint must be available. Arc supports attach mode only; opening an inspect setting does not establish that its endpoint accepts connections.
+The supported controller and browser platform is macOS. Python 3.12 or newer is required; the browser runtime uses `websockets>=15,<17`. Chrome features require Chrome, Chromium, or Chrome for Testing. For Cra pages, the skill uses the official MCP tools already configured in the host. See the skill entry points below.
 
 From a source checkout, keep `browser-use`, `computer-use`, `remote-host` and `_shared` as sibling directories. Expose this directory through the agent's configured skill search path. Agents with a Python skill kernel read [PYSKILL.md](PYSKILL.md) and call `skills.browser_use`; other agents read [SKILL.md](SKILL.md) and use the command line.
 

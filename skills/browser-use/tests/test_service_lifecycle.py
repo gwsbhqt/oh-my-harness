@@ -111,10 +111,10 @@ class IdleExitTests(FixtureCase):
         self.assertFalse(process.is_alive(), "Chrome 失效后立即退出，不等空闲时限")
         self.assertEqual(process.exitcode, 0)
 
-    def test_lost_browser_does_not_stop_another_live_browser(self):
+    def test_lost_attach_does_not_stop_another_live_chrome_instance(self):
         socket_path, process, receiver = self.start(owners=("chrome-task",), attach_lost=True, live_browser=True)
         process.join(timeout=.6)
-        self.assertTrue(process.is_alive(), "Arc 断开时不能结束仍在使用 Chrome 的服务")
+        self.assertTrue(process.is_alive(), "日常连接断开时，仍有独立 Chrome 实例的服务须继续运行")
         self.assertTrue(ask(socket_path, {"action": "tab_list", "session": "chrome-task"})["ok"])
 
     def test_long_limit_still_applies_when_held(self):

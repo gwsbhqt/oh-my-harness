@@ -32,7 +32,24 @@ class DebugApprovalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(contexts[2][1], REF)
         self.assertIn("--require-focus", contexts[2][0])
         self.assertEqual(contexts[3][1], None)
+        self.assertTrue(all(args[1] == REF["bundleId"] for args, _ in contexts))
         self.assertFalse(any(c[0][0] == "owner" for c in contexts))
+
+    async def test_cra_first_permission_cannot_enter_chrome_approval(self):
+        from unittest.mock import AsyncMock
+        cra_bundle = "dk.kildahl.cra"
+        for selector in ("Cra", cra_bundle):
+            with self.subTest(selector=selector), patch("computer_use.cli", new=AsyncMock()) as native:
+                with self.assertRaises(computer_use.ComputerUseError) as caught:
+                    await computer_use.approve_chrome_debugging(selector, watch=0)
+                self.assertEqual(caught.exception.outcome, "not_sent")
+                native.assert_not_awaited()
+
+        with patch("computer_use.cli", new=AsyncMock(return_value=prompt(window={**REF, "bundleId": cra_bundle}))) as native:
+            with self.assertRaises(computer_use.ComputerUseError) as caught:
+                await computer_use.approve_chrome_debugging(watch=0)
+            self.assertEqual(caught.exception.outcome, "not_sent")
+            native.assert_awaited_once_with("snap", REF["bundleId"], "--max", 800, "--no-webmode")
 
     async def test_settings_and_incomplete_non_prompt_are_observation_only(self):
         from unittest.mock import AsyncMock

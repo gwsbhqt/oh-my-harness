@@ -106,7 +106,7 @@ class Base(unittest.TestCase):
         return raised.exception, self.cdp.calls[before:]
 
 
-class SharedArcTests(Base):
+class SharedChromeTests(Base):
     def test_strict_params_before_any_cdp(self):
         cases = [('cookies_get', {'unknown': 1}), ('cookies_get', {'raw': 'yes'}), ('cookies_get', {'urls': 'https://a'}),
                  ('cookies_get', {'urls': ['ftp://a/']}), ('cookies_set', {'name': 'a', 'value': 'b', 'url': 'https://a/', 'domain': 'a', 'authorized': True}),
@@ -138,7 +138,7 @@ class SharedArcTests(Base):
         self.assertIn('secret-token-123', json.dumps(raw))
         self.assertEqual(self.cdp.calls[-1], ('Network.getCookies', {'urls': ['https://app.test/']}, 'page'))
 
-    def test_writes_require_authorization_on_shared_arc(self):
+    def test_writes_require_authorization_on_shared_chrome(self):
         for action, params in [('cookies_set', {'name': 'a', 'value': 'b', 'url': 'https://app.test/'}), ('cookies_delete', {'name': 'a', 'url': 'https://app.test/'}),
                                ('cookies_clear', {}), ('storage_set', {'key': 'k', 'value': 'v'}), ('storage_remove', {'key': 'k'}),
                                ('storage_clear', {}), ('state_save', {'path': self.tmp.name + '/s.json'}), ('cookies_set', {'name': 'a', 'value': 'b', 'url': 'https://app.test/', 'authorized': False})]:
@@ -318,7 +318,7 @@ class PrivateChromeTests(Base):
 
 
 class LoadGuardTests(Base):
-    def test_load_rejected_on_shared_arc_even_when_authorized(self):
+    def test_load_rejected_on_shared_chrome_even_when_authorized(self):
         _, calls = self.rejected('state_load', 6, path='/nonexistent.json')
         self.assertEqual(calls, [])
         self.rejected('state_load', 2, path='/nonexistent.json', authorized=True)

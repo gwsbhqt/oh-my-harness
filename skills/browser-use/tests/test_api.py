@@ -5,9 +5,10 @@ import os
 from pathlib import Path
 import socket
 import tempfile
+from types import ModuleType
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import browser_use
 from browser_use.client import Client, validate_context
@@ -16,13 +17,48 @@ from browser_use.server import source_fingerprint
 
 
 
+class CraApiTests(unittest.IsolatedAsyncioTestCase):
+    def kernel(self, **tools):
+        kernel = ModuleType("dsh_kernel")
+        kernel.tools = tools
+        return patch.dict("sys.modules", {"dsh_kernel": kernel})
+
+    async def test_cra_forwards_arguments_and_preserves_receipt(self):
+        receipt = {"content": [{"type": "text", "text": '{"tabId":"fixture"}'}]}
+        official = AsyncMock(return_value=receipt)
+        with self.kernel(mcp__cra__tab_open=official):
+            result = await browser_use.cra("tab_open", url="https://example.invalid/", select=False)
+        official.assert_awaited_once_with({"url": "https://example.invalid/", "select": False})
+        self.assertIs(result, receipt)
+
+    async def test_cra_preserves_host_error_and_does_not_retry(self):
+        denied = RuntimeError("Waiting for approval in Cra")
+        official = AsyncMock(side_effect=denied)
+        with self.kernel(mcp__cra__page_snapshot=official):
+            with self.assertRaises(RuntimeError) as raised:
+                await browser_use.cra("page_snapshot", tabId="fixture")
+        self.assertIs(raised.exception, denied)
+        official.assert_awaited_once_with({"tabId": "fixture"})
+
+    async def test_cra_requires_registered_official_tool(self):
+        with self.kernel():
+            with self.assertRaises(browser_use.BrowserUseError) as raised:
+                await browser_use.cra("tabs_list")
+        self.assertEqual(raised.exception.code, 5)
+        self.assertIn("mcp__cra__tabs_list", str(raised.exception))
+        with patch.dict("sys.modules", {"dsh_kernel": None}):
+            with self.assertRaises(browser_use.BrowserUseError) as missing:
+                await browser_use.cra("tabs_list")
+        self.assertEqual(missing.exception.code, 5)
+
+
 class ExtendedApiTests(unittest.IsolatedAsyncioTestCase):
     def login_fixture(self):
-        page = browser_use.page("p", session="s", browser="Arc", host="local")
+        page = browser_use.page("p", session="s", browser="Chrome", host="local")
         page.page_info = unittest.mock.AsyncMock(side_effect=[{"url": "https://fixture/login"},
                                                              {"url": "https://fixture/home", "title": "home"}])
         page.click = unittest.mock.AsyncMock()
-        window = {"id": 12, "pid": 34, "startedAt": 56.0, "bundleId": "company.thebrowser.Browser"}
+        window = {"id": 12, "pid": 34, "startedAt": 56.0, "bundleId": "com.google.Chrome"}
         cu = unittest.mock.Mock()
         cu.windows = unittest.mock.AsyncMock(return_value={"windows": [window | {"isFrontmost": True, "isFocused": True}]})
         cu.autofill = unittest.mock.AsyncMock(return_value={"clicked": "fixture-account"})
@@ -43,7 +79,7 @@ class ExtendedApiTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(browser_use.deps, "computer_use", return_value=cu):
             result = await browser_use.login(page, native_window=window)
         self.assertTrue(result["loggedIn"])
-        cu.autofill.assert_awaited_once_with("Arc", account=None, host="local", window=window)
+        cu.autofill.assert_awaited_once_with("Chrome", account=None, host="local", window=window)
 
     async def test_login_rejects_background_before_touching_page(self):
         page, window, cu = self.login_fixture()
@@ -76,7 +112,7 @@ class ExtendedApiTests(unittest.IsolatedAsyncioTestCase):
             calls.append((action, params, context))
             return {"targetId": "task-page", "owned": True, "mode": "attach"}
         with patch.object(browser_use, "_rpc", rpc):
-            page = await browser_use.open_window(browser="Arc", host="local", session="task",
+            page = await browser_use.open_window(browser="Chrome", host="local", session="task",
                                                  source_target="human-page")
             await page.window()
         self.assertEqual(calls[0][0], "tab_new")
@@ -86,7 +122,7 @@ class ExtendedApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[1][0], "tab_window")
         self.assertEqual(calls[1][2]["target"], "task-page")
         self.assertEqual(calls[1][2]["session"], "task")
-        self.assertEqual(calls[1][2]["browser"], "Arc")
+        self.assertEqual(calls[1][2]["browser"], "Chrome")
 
 
     async def test_recover_bypasses_bind_and_invalidates_snapshot(self):
@@ -392,19 +428,19 @@ class ReleaseTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PageTests(unittest.IsolatedAsyncioTestCase):
-    async def test_module_calls_keep_arc_page_browser(self):
+    async def test_module_calls_keep_chrome_page_browser(self):
         calls = []
         async def rpc(action, params=None, **context):
             calls.append(context["browser"])
             return {"elements": []}
         with patch.object(browser_use, "_rpc", rpc):
-            page = browser_use.page("arc-page", browser="Arc", session="arc", host="local")
+            page = browser_use.page("chrome-page", browser="Chrome", session="chrome-task", host="local")
             await browser_use.snap(page)
             await browser_use.page_info(page)
             with self.assertRaises(browser_use.BrowserUseError):
-                await browser_use.snap(page, browser="Chrome")
+                await browser_use.snap(page, browser="Safari")
         self.assertTrue(calls)
-        self.assertEqual(set(calls), {"Arc"})
+        self.assertEqual(set(calls), {"Chrome"})
 
     async def test_snapshot_serialization_and_fixed_target(self):
         calls, concurrent = [], 0
@@ -451,8 +487,8 @@ class PageTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(page.owned)
             self.assertTrue(page._bound)
             result = await browser_use.release()
-            self.assertEqual([c[2]["browser"] for c in calls[1:]], ["Chrome", "Arc"])
-            self.assertEqual(set(result["browsers"]), {"Chrome", "Arc"})
+            self.assertEqual([c[2]["browser"] for c in calls[1:]], ["Chrome"])
+            self.assertEqual(set(result["browsers"]), {"Chrome"})
             self.assertEqual(calls[-1][0], "release")
             self.assertEqual(calls[0][2]["session"], calls[-1][2].get("session") or browser_use.DEFAULT_SESSION)
 

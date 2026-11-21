@@ -2,11 +2,13 @@
 
 # Using browser-use
 
-Use browser-use when a task lives inside a web page: inspect a form, follow a navigation flow, collect a screenshot, or check what changed after an authorized action. It controls explicitly selected Chrome or Arc pages through the Chrome DevTools Protocol (CDP). Browser menus, operating-system dialogs, and native popups belong to computer-use.
+Use the [official Cra MCP](https://github.com/VictorKildahl/cra/blob/v0.1.52/docs/mcp.md) already configured in the host when a task needs an existing local Cra login. The user approves the first connection in Cra. Open a task tab in the background, keep the returned `tabId`, read the page again to verify the result, and close only the tab you created. See the [skill entry points](../skills/browser-use/README.en.md#entry-points-and-configuration) for Cra usage.
+
+The rest of this guide shows Chrome. browser-use controls explicitly selected Chrome pages through the Chrome DevTools Protocol (CDP). Use computer-use for browser menus, operating-system dialogs, and native popups.
 
 ## Start with a specific page
 
-The supported controller and browser platform is macOS. The tool requires Python 3.12 or newer and a working browser debugging endpoint. Arc supports attach mode only. An enabled inspection setting is not proof that its endpoint accepts connections.
+The supported controller and browser platform is macOS. Chrome features require Python 3.12 or newer. Attaching to an existing Chrome instance requires a working debugging endpoint and permission.
 
 Begin with a status probe and enumerate pages before choosing one. In a Python skill kernel, a fictional review could start like this:
 

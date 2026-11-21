@@ -22,6 +22,7 @@ from .errors import BrowserUseError
 
 _FIELDS = {"scope", "owner", "targetId", "owned", "browser"}
 _UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+_BROWSER_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,31}")
 _OWNER = re.compile(r"[a-zA-Z0-9_-]{1,64}")
 _TARGET = re.compile(r"[a-zA-Z0-9_-]{1,256}")
 _MAX_BYTES = 8 * 1024 * 1024
@@ -51,14 +52,18 @@ def scope_from_websocket(url):
         raise BrowserUseError("需要包含 /devtools/browser/<UUID> 的实际 browser WebSocket URL", 2) from exc
 
 
+def _stored_browser_name(browser):
+    return isinstance(browser, str) and _BROWSER_NAME.fullmatch(browser) is not None
+
+
 def _record(scope, owner, target_id, owned, browser):
     scope = _scope(scope)
     if not isinstance(owner, str) or not _OWNER.fullmatch(owner):
         raise BrowserUseError("资源 owner 需要 1~64 个字母、数字、下划线或短横线", 2)
     if not isinstance(target_id, str) or not _TARGET.fullmatch(target_id):
         raise BrowserUseError("资源 target_id 必须是准确页面 ID", 2)
-    if type(owned) is not bool or browser not in BROWSER_NAMES:
-        raise BrowserUseError(f"资源 owned 必须是 bool，browser 必须是 {'、'.join(BROWSER_NAMES)}", 2)
+    if type(owned) is not bool or not _stored_browser_name(browser):
+        raise BrowserUseError("资源 owned 必须是 bool，browser 必须是有效的浏览器名", 2)
     return {"scope": scope, "owner": owner, "targetId": target_id,
             "owned": owned, "browser": browser}
 
@@ -196,8 +201,8 @@ class ResourceLedger:
                                   item["owned"], item["browser"])
                 if item != checked:
                     raise ValueError("noncanonical metadata")
-                key = (item["scope"], item["owner"], item["targetId"])
-                target = (item["scope"], item["targetId"])
+                key = (item["browser"], item["scope"], item["owner"], item["targetId"])
+                target = (item["browser"], item["scope"], item["targetId"])
                 if key in keys or target in targets:
                     raise ValueError("duplicate target ownership")
                 keys.add(key)
@@ -264,12 +269,14 @@ class ResourceLedger:
 
     def record(self, scope, owner, target_id, owned, browser):
         """Upsert one exact ownership record and return an independent copy."""
+        if browser not in BROWSER_NAMES:
+            raise BrowserUseError(f"资源 browser 必须是 {'、'.join(BROWSER_NAMES)}", 2)
         item = _record(scope, owner, target_id, owned, browser)
         with self._transaction() as (directory, records, previous):
             for index, existing in enumerate(records):
-                if (existing["scope"], existing["targetId"]) != (item["scope"], target_id):
+                if (existing["browser"], existing["scope"], existing["targetId"]) != (browser, item["scope"], target_id):
                     continue
-                if existing["owner"] != owner or existing["browser"] != browser:
+                if existing["owner"] != owner:
                     raise BrowserUseError("页面已有其他归属记录，拒绝覆盖", 6)
                 records[index] = item
                 break
@@ -283,7 +290,7 @@ class ResourceLedger:
         key = _record(scope, owner, target_id, False, "Chrome")
         with self._transaction() as (directory, records, previous):
             remaining = [item for item in records if not all(item[name] == key[name]
-                         for name in ("scope", "owner", "targetId"))]
+                         for name in ("browser", "scope", "owner", "targetId"))]
             if len(remaining) == len(records):
                 return False
             self._write(directory, remaining, previous)
@@ -296,10 +303,15 @@ class ResourceLedger:
         record written before the lock and none written while it decides.
         """
         with self._transaction() as (directory, records, previous):
-            chosen = select([dict(item) for item in records])
+            chosen = select([dict(item) for item in records if item["browser"] in BROWSER_NAMES])
             keys = {(item["scope"], item["owner"], item["targetId"]) for item in chosen}
-            remaining = [item for item in records if (item["scope"], item["owner"], item["targetId"]) not in keys]
-            removed = [dict(item) for item in records if (item["scope"], item["owner"], item["targetId"]) in keys]
+            remaining, removed = [], []
+            for item in records:
+                key = (item["scope"], item["owner"], item["targetId"])
+                if item["browser"] in BROWSER_NAMES and key in keys:
+                    removed.append(dict(item))
+                else:
+                    remaining.append(item)
             if removed:
                 self._write(directory, remaining, previous)
             return removed
@@ -310,5 +322,5 @@ class ResourceLedger:
         if owner is not None and (not isinstance(owner, str) or not _OWNER.fullmatch(owner)):
             raise BrowserUseError("资源 owner 无效", 2)
         with self._transaction() as (_, records, _previous):
-            return [dict(item) for item in records if item["scope"] == scope
+            return [dict(item) for item in records if item["browser"] in BROWSER_NAMES and item["scope"] == scope
                     and (owner is None or item["owner"] == owner)]

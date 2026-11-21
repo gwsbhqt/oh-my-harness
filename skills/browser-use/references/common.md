@@ -4,15 +4,15 @@
 
 ## 机器与页面归属
 
-后台输入使用 CDP 的可信输入，不切用户实际标签页，不移动真实鼠标，不使用合成点击兜底。网页内容用 browser-use；原生应用、浏览器外壳和地址栏、1Password 浮层、系统弹窗用 computer-use。
+以下规则针对 Chrome。后台输入使用 CDP 的可信输入，不切用户实际标签页，不移动真实鼠标，不使用合成点击兜底。网页内容用 browser-use；原生应用、浏览器外壳和地址栏、1Password 浮层、系统弹窗用 computer-use。
 
 没有显式 `host` 和自己的机器 pin 时默认本机；未知 alias、损坏 pin、缺工具或连接失败均报错。`host="local"` 明确本机，改 browser-use 的 pin 不改变 computer-use 或 remote-host 的默认值。
 
-Chrome 有 attach、isolated、clone 三种方式；Arc 只有 attach，自建版本通过正式启动参数开启本机调试（设置页批准模式的兼容限制见主说明）。attach 连接已获授权的日常 Chrome；isolated 使用独立临时或持久资料；clone 把日常资料复制到本任务私有目录。调试端口只限目标机 loopback，不向调用机开放。attach 按浏览器实例共享一条调试连接（Chrome、Arc 各一条），跨会话复用，页面归属仍独立；只在调试曾开启但连接失效时允许正常重启一次，restart=never 可禁止。清理阶段不退出日常 Chrome，clone 不回写原资料。browser-use 服务按需启动，接管连接健康时保活；有连接失效但仍有其他可用浏览器时不退出，没有可用浏览器时退出，下次 attach 再启动。
+Chrome 有 attach、isolated、clone 三种方式。attach 连接已获授权的日常 Chrome；isolated 使用独立临时或持久资料；clone 把日常资料复制到本任务私有目录。调试端口只限目标机 loopback，不向调用机开放。attach 为日常 Chrome 实例共享一条调试连接，跨会话复用，页面归属仍独立；只在调试曾开启但连接失效时允许正常重启一次，restart=never 可禁止。清理阶段不退出日常 Chrome，clone 不回写原资料。browser-use 服务按需启动，接管连接健康时保活；有连接失效但仍有其他可用浏览器时不退出，没有可用浏览器时退出，下次 attach 再启动。
 
 DSH 默认沿用会话标识。任务 scope 依次取显式控制接口的 `scope`、`BROWSER_USE_CONTEXT_ID`、`DSH_SESSION_ID`；Python 无任务环境时用进程独立默认。显式 `session` 优先于任务默认，同任务自动 session 稳定。
 
-`open_window()` 在日常实例创建独立任务窗，共享资料和登录，不复制资料、不重启、不回退独立实例；多份资料同时打开时用 source_target 指定来源。新建普通窗口仍可能被浏览器置前，Arc 实测未遵守后台和最小化创建选项；窗口建立后的网页操作不切实际前台。`open_page()` 创建新页；`find_tab()` 在当前 attach 或自启 Chrome 中按网址或标题找唯一已加载标签。`page(target_id)` 创建惰性绑定，首次动作核对目标。target_id 必须是工具实际返回的 targetId，不能用序号、网址子串或活动页。Page 固定机器、session 和目标，后续改 pin 不重路由已有对象。
+`open_window()` 在日常实例创建独立任务窗，共享资料和登录，不复制资料、不重启、不回退独立实例；多份资料同时打开时用 source_target 指定来源。Chrome 可能将新建窗口置前。窗口建立后的网页操作在固定页面后台执行。`open_page()` 创建新页；`find_tab()` 在当前 attach 或自启 Chrome 中按网址或标题找唯一已加载标签。`page(target_id)` 创建惰性绑定，首次动作核对目标。target_id 必须是工具实际返回的 targetId，不能用序号、网址子串或活动页。Page 固定机器、session 和目标，后续改 pin 不重路由已有对象。
 
 ## 断线后的显式恢复
 
@@ -39,7 +39,7 @@ Python 客户端的单次请求默认 `timeout=60`；代码更新后等待旧服
 
 ## 释放、文件与服务
 
-`await skills.browser_use.release(host=page.host, session=page.session)` 只处理本任务的浏览器（省略 browser 时 Chrome、Arc 都处理），只关闭自建页，借用页解除绑定。任务用完必须显式 release。自有 Chrome 已被用户或 cu 正常退出时，release 清理原页面记录和临时资料，不要求重新连接或重开浏览器；仅仅调试连接断开、进程仍在时，继续保留记录并要求显式核对。
+`await skills.browser_use.release(host=page.host, session=page.session)` 只处理本任务的 Chrome 页面归属，只关闭自建页，借用页解除绑定。任务用完必须显式 release。自有 Chrome 已被用户或 cu 正常退出时，release 清理原页面记录和临时资料，不要求重新连接或重开浏览器；仅仅调试连接断开、进程仍在时，继续保留记录并要求显式核对。
 
 `await skills.browser_use.disconnect(host=page.host, session=page.session)` 断开调试连接，清初始化脚本、拦截和泳道等临时副作用，保留页面和归属，后续仍可 release。`await page.close()` 仅关目标；借用页关闭须用户明确授权并传 `authorized=True`。
 

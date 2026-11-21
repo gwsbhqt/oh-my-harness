@@ -19,7 +19,7 @@
 
 | 技能 | 目标与能力 | 接着读 |
 | --- | --- | --- |
-| [browser-use](../skills/browser-use/README.md) | 指定 Chrome 或 Arc 页面：观察、点击、输入、截图、读回结果。 | [教程](browser-use.md) |
+| [browser-use](../skills/browser-use/README.md) | 日常 Cra 网页走官方 MCP。Chrome 页面支持观察、点击、输入、截图及远端操作。 | [教程](browser-use.md) |
 | [computer-use](../skills/computer-use/README.md) | macOS 原生应用和窗口：读界面、定向输入、截图与核对。 | [教程](computer-use.md) |
 | [remote-host](../skills/remote-host/README.md) | 通过 SSH 在明确的目标主机执行、传输和核对结果。 | [教程](remote-host.md) |
 

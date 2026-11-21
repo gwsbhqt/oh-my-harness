@@ -132,6 +132,20 @@ class LedgerTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, 6)
         self.assertEqual(ledger.list(SCOPE)[0]["owner"], "owner")
 
+    def test_other_browser_records_are_preserved_and_never_recovered(self):
+        ledger = self.seed()
+        chrome = json.loads(self.path.read_text())[0]
+        other = chrome | {"browser": "FixtureBrowser"}
+        self.path.write_text(json.dumps([other]))
+        self.assertEqual(ledger.list(SCOPE), [])
+        self.assertFalse(ledger.remove(SCOPE, "owner", "tab_1"))
+        with self.assertRaises(errors.BrowserUseError):
+            ledger.record(SCOPE, "owner", "tab_1", True, "FixtureBrowser")
+        ledger.record(SCOPE, "owner", "tab_1", True, "Chrome")
+        self.assertEqual(ledger.list(SCOPE), [chrome])
+        self.assertEqual(ledger.prune(lambda records: records), [chrome])
+        self.assertEqual(json.loads(self.path.read_text()), [other])
+
     def test_private_modes_and_restrictive_umask(self):
         old = os.umask(0o777)
         try:
@@ -160,7 +174,7 @@ class LedgerTests(unittest.TestCase):
         for extra in ["url", "title", "cookie", "cookies"]:
             invalid.append(json.dumps([good | {extra: "secret"}]))
         for field, value in [("scope", "9222"), ("owner", "https://secret"), ("targetId", "https://secret"),
-                             ("owned", 1), ("browser", "Safari")]:
+                             ("owned", 1), ("browser", "https://secret")]:
             invalid.append(json.dumps([good | {field: value}]))
         for raw in invalid:
             with self.subTest(raw=raw):

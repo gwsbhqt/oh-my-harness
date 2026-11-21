@@ -1,4 +1,5 @@
 """暂存由任务持有；不连接用户浏览器。"""
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -27,6 +28,19 @@ class UploadTests(unittest.TestCase):
         restored=UploadLedger(self.store.path)
         with self.assertRaises(BrowserUseError):restored.register('b','Chrome','target',[self.desc],[str(self.file)])
         restored.release('a','Chrome');self.assertFalse(self.stage.exists())
+    def test_other_browser_stage_is_preserved_and_cannot_be_claimed(self):
+        self.store.register('a', 'Chrome', 'target', [self.desc], [str(self.file)])
+        record = json.loads(self.store.path.read_text())[0] | {'browser': 'FixtureBrowser'}
+        raw = json.dumps([record], indent=2)
+        self.store.path.write_text(raw)
+        restored = UploadLedger(self.store.path)
+        with self.assertRaises(BrowserUseError):
+            restored.register('a', 'Chrome', 'target', [self.desc], [str(self.file)])
+        self.assertEqual(restored.release('a', 'Chrome', 'target'), {'cleaned': []})
+        self.assertEqual(restored.release(), {'cleaned': []})
+        self.assertEqual(self.store.path.read_text(), raw)
+        self.assertEqual(self.file.read_text(), 'file still readable')
+
     def test_file_replacement_refuses_delete(self):
         self.store.register('a','Chrome','target',[self.desc],[str(self.file)])
         self.file.unlink();self.file.write_text('external');self.file.chmod(0o600)

@@ -289,9 +289,6 @@ class Engine:
             lines = []
         if lines and (not lines[0].isdigit() or not 0 < int(lines[0]) < 65536):
             raise BrowserUseError(f"{kind.name} 的 DevToolsActivePort 内容无效；未尝试连接其他浏览器", 5)
-        if not lines and kind.fallback_port is None:
-            help_text = kind.attach_help or f"在 {kind.name} 里打开 {kind.debug_page} 勾选允许后再试"
-            raise BrowserUseError(f"日常 {kind.name} 没有有效的远程调试端口；{help_text}", 5)
         return "http://127.0.0.1:" + (lines[0] if lines else kind.fallback_port)
 
     def _attach_ws_path(self, kind):
@@ -496,8 +493,7 @@ class Engine:
                 if isinstance(exc, BrowserUseError) and exc.code == 6:
                     raise
                 if "HTTP 403" in str(exc):
-                    help_text = kind.attach_help or f"请核对 {kind.debug_page} 和浏览器授权"
-                    raise BrowserUseError(f"{kind.name} 拒绝了远程调试连接（HTTP 403）；{help_text}。未执行页面动作", 5) from exc
+                    raise BrowserUseError(f"{kind.name} 拒绝了远程调试连接（HTTP 403）；请核对 {kind.debug_page} 和浏览器授权。未执行页面动作", 5) from exc
                 if restart == "if_needed" and (self._data_root(kind) / "DevToolsActivePort").is_file():
                     self._restart_browser(kind)
                     cdp, endpoint, websocket_url = self._connect_attach(kind, session)
@@ -523,7 +519,6 @@ class Engine:
             raise BrowserUseError("mode 只能是 attach、isolated 或 clone", 2)
         existing = self.browsers.get(key)
         mode = requested_mode or (existing or {}).get("mode") or kind.default_mode
-        kind.check_mode(mode)
         profile_name = self._requested_profile(params, mode)
         if existing is not None:
             if mode != existing.get("mode", "isolated") or profile_name is not None and profile_name != existing.get("profileName"):
@@ -549,8 +544,6 @@ class Engine:
             fallback = params.get("fallback", kind.fallback)
             if fallback not in {"clone", "never"}:
                 raise BrowserUseError("fallback 只能是 clone 或 never", 2)
-            if fallback == "clone":
-                kind.check_mode("clone")
             try:
                 record = self._attach_browser(kind, session, params)
             except (OSError, BrowserUseError) as exc:

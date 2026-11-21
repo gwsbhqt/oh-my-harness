@@ -156,7 +156,7 @@ if mode == "flags" {
     let afterAsleep = CommandLine.arguments[5] == "1"
     let fields = wakeReport(beforeLocked: beforeLocked, beforeAsleep: beforeAsleep,
                             afterLocked: afterLocked, afterAsleep: afterAsleep,
-                            frontmost: afterLocked == true ? "com.apple.loginwindow" : "company.thebrowser.Browser",
+                            frontmost: afterLocked == true ? "com.apple.loginwindow" : "dk.kildahl.cra",
                             input: CommandLine.arguments.count > 6 ? CommandLine.arguments[6] : nil,
                             hold: 3, assertions: ["userActivity": true, "displaySleep": true])
     var out: [String: Any] = ["ok": true]
@@ -260,7 +260,7 @@ class Native(unittest.TestCase):
         return subprocess.run([str(self.binary), *args], env=self.env, capture_output=True, text=True)
 
     def test_shared_browser_status_uses_windows_and_refuses_app_release(self):
-        for bundle in ("dk.kildahl.cra", "com.google.Chrome", "company.thebrowser.Browser"):
+        for bundle in ("dk.kildahl.cra", "com.google.Chrome"):
             with self.subTest(bundle=bundle):
                 status = self.invoke("browser-owner", bundle, "status")
                 self.assertEqual(status.returncode, 0, status.stdout + status.stderr)

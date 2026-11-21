@@ -1,5 +1,7 @@
 # browser-use 公开接口与命令参考
 
+`await skills.browser_use.cra(tool, **arguments)` 通过 DSH 调用当前会话已注册的 Cra 官方 MCP 工具，保留其参数、回执和权限。工具名使用 `tab_open` 等官方名称。Cra 的操作与授权见 [Python 主说明](../PYSKILL.md#日常-cra-网页)。以下接口面向 Chrome。
+
 ## Python 显式安装
 
 仅初次部署缺依赖时，使用 `await skills.browser_use.cli("--local", "install")` 显式安装到本技能独立缓存环境。正常调用不自动联网安装；远端需在目标机显式安装，不能把本机安装冒充远端安装。日常动作优先使用下面具名 Python 函数，cli 不是失败兜底。
@@ -19,9 +21,9 @@ service_info = await asyncio.to_thread(skills.browser_use.get_client().service, 
 
 这个查询会按需启动本机后台服务，但不连接浏览器、不执行页面动作。它只查本机，不跟随远程机器 pin。查询得知正在等其他任务释放时保留对方任务；耗时诊断及外层执行预算见 [结果未知](common.md#结果未知)。
 
-Python `page(target_id, *, browser="Chrome", host=None, session=None)` 返回惰性 Page；`open_page(url=None, *, browser="Chrome", host=None, session=None, mode=None, profile=None, restart=None, fallback=None, lane=None, init_script=None, capture=True, executable=None, headed=False)` 新建页面。省略 mode 时 Chrome 使用 isolated，Arc 使用 attach；restart 和 fallback 省略时按浏览器取默认值，见主说明的运行方式。host 为 `local` 或已配置 SSH alias，省略时读取 browser-use 独立机器 pin，无 pin 默认本机。Page 在创建时固定 host/browser/session/targetId；改变 pin 或任务默认不改变已有对象，方法不接受临时换 browser/host/session。
+Python `page(target_id, *, browser="Chrome", host=None, session=None)` 返回惰性 Page；`open_page(url=None, *, browser="Chrome", host=None, session=None, mode=None, profile=None, restart=None, fallback=None, lane=None, init_script=None, capture=True, executable=None, headed=False)` 新建页面。省略 mode 时使用 isolated；restart 和 fallback 的默认行为见主说明。host 为 `local` 或已配置 SSH alias，省略时读取 browser-use 独立机器 pin，无 pin 默认本机。Page 在创建时固定 host/browser/session/targetId；改变 pin 或任务默认不改变已有对象，方法不接受临时换 browser/host/session。
 
-`open_window(url=None, *, browser="Chrome", host=None, session=None, source_target=None, lane=None, init_script=None, capture=True)` 在日常实例另开任务窗，固定 attach、restart=never、fallback=never，不复制资料。`open_page` 另支持 `new_window=False, source_target=None`；source_target 只用于新窗口。attach 发现多份 browserContext 时必须指定来源，不猜当前资料。`await page.window()` 返回 `{browserWindowId, bounds, targetId, title, browserContextId}`，只读固定页面所在窗口；browserWindowId 是浏览器内部编号，不是 computer-use 的原生窗口编号。新窗口仍返回 Page，关闭或 release 只处理自建页面；不要为了收尾退出共享浏览器。首次建窗可能被浏览器置前；Arc 实测后台与最小化创建请求仍会置前，不保证这个阶段不打断用户。
+`open_window(url=None, *, browser="Chrome", host=None, session=None, source_target=None, lane=None, init_script=None, capture=True)` 在日常实例另开任务窗，固定 attach、restart=never、fallback=never，不复制资料。`open_page` 另支持 `new_window=False, source_target=None`；source_target 只用于新窗口。attach 发现多份 browserContext 时必须指定来源，不猜当前资料。`await page.window()` 返回 `{browserWindowId, bounds, targetId, title, browserContextId}`，只读固定页面所在窗口；browserWindowId 是浏览器内部编号，不是 computer-use 的原生窗口编号。新窗口仍返回 Page，关闭或 release 只处理自建页面；不要为了收尾退出共享浏览器。首次建窗可能被 Chrome 置前。
 
 CLI 对应 `tab new URL --new-window --mode attach --restart never --fallback never [--source-target SOURCE_TAB]` 和 `tab window TAB`。不同任务分别固定 session；同一任务复用已有 Page，不反复新开窗口。
 
@@ -34,7 +36,7 @@ CLI 对应 `tab new URL --new-window --mode attach --restart never --fallback ne
 | `await tabs(browser=..., host=..., session=...)` | 返回标签页列表，不自动选择活动页 |
 | `await find_tab(query, *, browser="Chrome", host=None, session=None)` | 在当前任务指定的浏览器中按网址或标题找唯一已加载标签并借用；没有匹配报 code 3，多个匹配报 code 2 |
 | `await login(page, *, account=None, field=None, timeout=20, native_window=WINDOW_REF)` | 先从 computer-use windows 确认本任务稳定窗口引用；该窗口须已在确切前台，否则未点击账号框即拒绝。 用 1Password 登录停在登录页的已绑定 Page：点账号框（`field` 为它的 CSS，省略按常见写法找），让 computer-use 点 1Password 浮层里的账号（多个账号时 `account` 是按钮文字里要包含的内容），等页面离开登录页，返回 `{loggedIn, account, url, title}`；只点按钮，不读、不填密码；只支持本机；超时没离开登录页报 code 4、outcome 为 unknown，先看页面，不要重试登录 |
-| `await release(session=..., browser=None, host=None)` | 释放本任务的浏览器，省略 browser 时 Chrome、Arc 都释放；只关自建页 |
+| `await release(session=..., browser=None, host=None)` | 释放本任务的 Chrome 页面归属，只关自建页 |
 | `await disconnect(session=..., browser=None, host=None)` | 断开任务连接并清脚本、网络、泳道等调试副作用；保留目标和归属 |
 | `await page.recover()` | 显式重建原页面调试绑定；无参数，沿用 Page 固定上下文；返回原页面摘要和 `recovered`，重建时另有 `observationsReset=true`、`snapshotRequired=true`；不重放业务动作，限制见 [断线恢复](common.md#断线后的显式恢复) |
 | `await page.close(authorized=False)` | 只关此目标；借用页须用户明确允许并传 True |
@@ -67,7 +69,7 @@ browser-use --local --scope task-a tab list --json
 
 `remote-host` 必须选择远端；browser-use/computer-use/dsh-use 各自没有显式机器与 pin 时默认 local。各工具 pin 独立，失败不回退本机。`-H` / `--host` 仅本次选机，`--local` 明确本机，两者远端冲突报错。探针 version/capabilities/status、选机命令不要求浏览器任务 session。
 
-CLI 共用选项：`--session NAME --scope ID --browser Chrome|Arc -H HOST|--host HOST|--local --json --socket PATH --tab TARGET --rpc-timeout SECONDS`。选项可以放子命令前后，但必须在文本分隔符 `--` 前。`--tab` 可代替目标位置参数；不要重复给两者。以下 `TAB/IDX/TOKEN/REQUEST/ROUTE/PATCH/SUB/SCRIPT/FRAME/CALLFRAME` 为调用结果中的真实值，不是序号推断。路径示例是调用者自己准备的文件。
+CLI 共用选项：`--session NAME --scope ID --browser Chrome -H HOST|--host HOST|--local --json --socket PATH --tab TARGET --rpc-timeout SECONDS`。选项可以放子命令前后，但必须在文本分隔符 `--` 前。`--tab` 可代替目标位置参数；不要重复给两者。以下 `TAB/IDX/TOKEN/REQUEST/ROUTE/PATCH/SUB/SCRIPT/FRAME/CALLFRAME` 为调用结果中的真实值，不是序号推断。路径示例是调用者自己准备的文件。
 
 CLI 共用选项还有 `--snap`：页面动作成功后再取一次态（不截图），结果放在 `snap` 字段；只用于针对确切页面的动作，tab/lane/policy 等命令带它在发送前报 code 2。
 
@@ -100,7 +102,7 @@ browser-use --session task-a disconnect --json
 browser-use --session task-a release --json
 ```
 
-`tab close --authorized` 仅在已获关闭借用页授权时用。release 和 disconnect 只处理本任务的浏览器，不写 `--browser` 时 Chrome、Arc 都处理。页面在这之前已被别处关掉（用户手动关了标签等）时照常成功，这些页面列在 `closedExternally` 里、记录已清理，不算失败；`tab close` 遇到这种页面返回 `closedExternally: true`。其他命令不写 `--browser` 默认 Chrome。`browser-use serve --socket /tmp/task-a-browser-use/service.sock` 是持有服务锁的常驻服务命令，socket 须在本用户专用私有目录中；启动脚本要求 serve 是第一个参数，不接受 --session，普通调用会按需连接，Python 不管理后台 serve。正常任务无需手动 serve。`--socket` 是调用端本机连接参数，不与远程 host 混用。
+`tab close --authorized` 仅在已获关闭借用页授权时用。release 和 disconnect 只处理本任务的 Chrome 页面归属。页面在这之前已被别处关掉（用户手动关了标签等）时照常成功，这些页面列在 `closedExternally` 里、记录已清理，不算失败；`tab close` 遇到这种页面返回 `closedExternally: true`。`browser-use serve --socket /tmp/task-a-browser-use/service.sock` 是持有服务锁的常驻服务命令，socket 须在本用户专用私有目录中；启动脚本要求 serve 是第一个参数，不接受 --session，普通调用会按需连接，Python 不管理后台 serve。正常任务无需手动 serve。`--socket` 是调用端本机连接参数，不与远程 host 混用。
 
 ## 页面方法与普通 CLI
 

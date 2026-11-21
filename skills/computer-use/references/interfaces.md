@@ -139,6 +139,6 @@ Python `App.owner()` 查询，`claim()` 明确重新取得，`release()` 释放�
 
 任务名是本账户内的协作隔离标识，不是阻止恶意程序的权限边界。全局剪贴板、系统授权请求、屏幕枚举和内部窗口截图不属于某个应用任务，不因此获得业务授权。
 
-### 浏览器远程调试授权
+### Chrome 远程调试授权
 
-browser-use 接管日常浏览器时按应用名调用 approve_chrome_debugging(app_name="Google Chrome", watch=30)；Arc 使用 app_name="Arc"。on_ready 在开始观察前调用，命令行在 stderr 输出 approve-debug ready。观察不长期 claim 浏览器；只处理带远程调试语义、唯一允许按钮和可靠窗口引用的确认框。点击前重新读取同一窗口并核对语义，短保护中要求确切前台窗口，不自动激活或恢复桌面、最小化状态。窗口不在前台时返回 not_sent，需要人工置前；发出后状态改变或框不消失返回 unknown，不重发。原确认框消失返回 approved=true、connectionVerified=false，连接成功必须由 browser-use 独立核对。没有弹框返回 approved=false；其他弹框不处理。
+browser-use 连接日常 Chrome 时调用 `approve_chrome_debugging(app_name="Google Chrome", watch=30)`。工具验证应用标识为 `com.google.Chrome`，只处理带远程调试字样、唯一允许按钮和可靠窗口引用的确认框。`on_ready` 在开始观察前调用，命令行在 stderr 输出 `approve-debug ready`。Cra 的首次 MCP 权限请用户按官方 MCP 提示处理。点击前重新读取同一窗口并核对语义，短保护中要求确切前台窗口，不自动激活或恢复桌面、最小化状态。窗口不在前台时返回 not_sent，需要人工置前；发出后状态改变或框不消失返回 unknown，不重发。原确认框消失返回 approved=true、connectionVerified=false，连接成功必须由 browser-use 独立核对。没有弹框返回 approved=false；其他弹框不处理。
