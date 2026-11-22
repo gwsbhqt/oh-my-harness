@@ -88,7 +88,7 @@ async def serve(browser, *, mcp):
                 version = params.get("protocolVersion")
                 initialized = True
                 reply["result"] = {"protocolVersion": version if version in PROTOCOLS else PROTOCOLS[0],
-                                   "capabilities": {"tools": {}}, "serverInfo": {"name": "browser-use", "version": "3.1.0"}}
+                                   "capabilities": {"tools": {}}, "serverInfo": {"name": "browser-use", "version": "3.2.0"}}
             elif method == "ping":
                 reply["result"] = {}
             elif not initialized:
@@ -117,6 +117,8 @@ async def run(args):
             emit(browser.tools())
         elif args.operation == "capabilities":
             emit(browser.capabilities())
+        elif args.operation in {"debug_mock_json", "debug_mock_status", "debug_mock_clear"}:
+            raise BrowserError("session_required", "Use session or mcp for test responses, starting with tab_open in the same connection.")
         else:
             value = sys.stdin.read() if args.arguments == "-" else args.arguments
             emit(await browser.call(args.operation, **parse_object(value)))

@@ -2,7 +2,7 @@
 
 # browser-use
 
-使用同一套指令控制 Cra 和 Chrome。Cra 网页由 Cra 原生 MCP 操作。Chrome 的指令转换为 Google 官方 Chrome DevTools MCP 调用。调试两个浏览器都使用同一套 `debug_*` 指令。 用 `page_evaluate` 读取当前网页的文字、尺寸和最终样式。要看元素的 CSS 来源或截取它的 PNG，可用 `debug_css_styles` 和 `debug_element_screenshot`。
+使用同一套指令操作 Cra 和 Chrome。Cra 使用原生 MCP，Chrome 使用 Google 官方 Chrome DevTools MCP。两个浏览器都能查 CSS 来源、展开报错、截取元素和整页，或在本机开发页复现接口的空态和错误态。两张 PNG 还可在本机比较并标出差异。
 
 - [Python 使用入口](PYSKILL.md) 与[普通终端入口](SKILL.md)
 - [连接条件与旧版归档](references/common.md)

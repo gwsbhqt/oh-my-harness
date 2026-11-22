@@ -13,8 +13,9 @@ import secrets
 import sys
 from urllib.parse import urlsplit
 
-from .chrome import snapshot_selector_uid
-from .protocol import BrowserError, validate
+from .capture import save_full_page
+from .chrome import _evaluate, snapshot_selector_uid
+from .protocol import BrowserError, mcp_result, validate
 
 
 _PAGE = {"type": "string", "minLength": 1, "description": "The tabId returned by the control backend."}
@@ -49,6 +50,12 @@ DEBUG_SCHEMAS = {
         **_PAGING, "types": {"type": "array", "items": {"type": "string", "enum": _CONSOLE_TYPES}},
         "includePreservedMessages": _BOOL, "includeStackTraces": _BOOL,
     }),
+    "debug_console_message": _schema("Expand one console message from this tab.", {
+        "msgid": {"type": "integer", "minimum": 1, "description": "ID from debug_console on this tab."},
+    }, "msgid"),
+    "debug_full_page_screenshot": _schema("Save a full-page, native-resolution PNG.", {
+        "filePath": {**_PATH, "description": "Absolute new .png file in an existing local directory."},
+    }, "filePath"),
     "debug_network": _schema("List network requests collected for this tab.", {
         **_PAGING, "resourceTypes": {"type": "array", "items": {"type": "string", "enum": _RESOURCE_TYPES}},
         "includePreservedRequests": _BOOL,
@@ -58,6 +65,15 @@ DEBUG_SCHEMAS = {
         "pageIdx": {"type": "integer", "minimum": 0, "default": 0, "description": "从 0 开始的页码。"},
     }, "selector"),
     "debug_element_screenshot": _schema("获取普通网页元素的 PNG 截图。", {"selector": _SELECTOR}, "selector"),
+    "debug_mock_json": _schema("为本次新开的本机开发页设置一条 JSON 测试响应。仅适合 GET/HEAD 接口。", {
+        "url": {"type": "string", "minLength": 1, "description": "与开发页同源的确切 HTTP(S) 接口地址。主机须为回环 IP 或 localhost。"},
+        "json": {"description": "返回给本机开发页面的 JSON 值。"},
+        "status": {"type": "integer", "minimum": 200, "maximum": 599, "default": 200,
+                   "description": "200 或 400–599（407 除外）。"},
+        "resourceType": {"type": "string", "enum": ["fetch", "xhr"], "default": "fetch"},
+    }, "url", "json"),
+    "debug_mock_status": _schema("核对此测试响应在页面上的命中、错误和送达次数。", {}),
+    "debug_mock_clear": _schema("只撤销本次会话为该开发页设置的测试响应。", {}),
     "debug_request": _schema("Inspect a request listed for this tab.", {
         "reqid": {"type": "integer", "minimum": 1, "description": "requestId from debug_network for the same tab."},
         "requestFilePath": _PATH, "responseFilePath": _PATH,
@@ -73,6 +89,7 @@ DEBUG_SCHEMAS = {
 }
 DEBUG_TOOLS = frozenset(DEBUG_SCHEMAS)
 _GOOGLE = {
+    "debug_console_message": "get_console_message",
     "debug_console": "list_console_messages", "debug_network": "list_network_requests",
     "debug_css_styles": "get_css_styles", "debug_element_screenshot": "take_screenshot",
     "debug_request": "get_network_request", "debug_trace_start": "performance_start_trace",
@@ -106,7 +123,7 @@ def _page_ids(reply):
     _check_connection(reply, outcome="not_sent")
     structured = reply.get("structuredContent")
     if not isinstance(structured, dict):
-        raise BrowserError("unsupported", "Cra tab binding requires Google MCP --experimental-structured-content.")
+        raise BrowserError("unsupported", "Document binding requires Google MCP --experimental-structured-content.")
     pages = structured.get("pages", [])
     if not isinstance(pages, list):
         raise BrowserError("protocol_error", "Invalid Google page list.")
@@ -144,7 +161,7 @@ def _cra_value(reply):
     # Cra 0.1.53 page_evaluate returns the decoded object with result.value.
     result = reply.get("result") if isinstance(reply, dict) else None
     if not isinstance(result, dict) or "value" not in result:
-        raise BrowserError("protocol_error", "Cra returned an unrecognized page_evaluate result.")
+        raise BrowserError("protocol_error", "The control browser returned an unrecognized page_evaluate result.")
     return result["value"]
 
 
@@ -204,20 +221,23 @@ def _check_trace(reply, recording):
 class Debugger:
     """Callables belong to one fixed Google MCP process with page ID routing enabled.
 
-    Supply either a Cra native-tool callable for its explicitly configured instance,
-    or ChromeControl's async tabId resolver. The caller converts MCP and transport
-    errors to BrowserError. Successful calls preserve Google's complete MCP result.
+    Supply a Cra-style control callable to verify the same document across connections,
+    or the async tabId resolver from the same Google connection. Forwarded tools preserve
+    the upstream MCP result. Local captures and test responses return their own receipts.
     Binding uses a temporary document property discoverable by the page through
     reflection. It assumes the page cooperates with JavaScript evaluation.
     """
 
-    def __init__(self, google, *, cra=None, chrome_page_id=None):
+    def __init__(self, google, *, cra=None, chrome_page_id=None, test_tabs=None):
         self._google = google
         self._cra = cra
         self._chrome_page_id = chrome_page_id
         self._binding_lock = asyncio.Lock()
+        self._test_tabs = test_tabs if test_tabs is not None else set()
+        self._mock_pages = {}
+        self._mocks = None
 
-    async def _cra_page_id(self, tab_id):
+    async def _match_page(self, tab_id):
         # Check that Google is available before touching the Cra document. Page IDs
         # are never cached. Google keeps IDs unique across its in-process reconnects.
         _page_ids(await self._google("list_pages", {}))
@@ -227,7 +247,7 @@ class Debugger:
         try:
             create = {"tabId": tab_id, "expression": _install_marker(key, owner)}
             if _cra_value(await self._cra("page_evaluate", create)) is not True:
-                raise BrowserError("tab_binding_failed", "Cra could not install the document marker.")
+                raise BrowserError("tab_binding_failed", "The selected document did not accept the identity marker.")
             # The native call may have woken a sleeping tab after the connection check.
             for page_id in _page_ids(await self._google("list_pages", {})):
                 challenge = secrets.token_hex(16)
@@ -255,7 +275,7 @@ class Debugger:
                 if _probe_result(probe) == owner:
                     matches.append((page_id, challenge))
             if len(matches) != 1:
-                raise BrowserError("tab_binding_failed", f"The Cra document matched {len(matches)} Google pages. Expected one.")
+                raise BrowserError("tab_binding_failed", f"The selected document matched {len(matches)} Google pages. Expected one.")
         finally:
             # The first reply may be lost after the property was created. Cleanup is
             # conditional on ownership even in that case. pagehide/timer also clean it.
@@ -272,7 +292,7 @@ class Debugger:
                 pending.add_note(message)
         page_id, challenge = matches[0]
         if answer != challenge:
-            raise BrowserError("tab_binding_failed", "The Cra document changed or did not confirm the Google page's challenge.")
+            raise BrowserError("tab_binding_failed", "The selected document changed or did not confirm the Google page's challenge.")
         return page_id
 
     async def _inspect(self, name, arguments):
@@ -285,12 +305,74 @@ class Debugger:
         _check_connection(reply, outcome="not_sent")
         return reply
 
+    async def _install_mock(self, tab_id, page_id, options):
+        from .mock_responses import MockResponses, local_origin
+
+        if self._mocks is None:
+            self._mocks = MockResponses(self._inspect)
+        previous = self._mock_pages.get(tab_id)
+        if previous and previous[0] != page_id:
+            raise BrowserError("connection_changed", "This tab now resolves to another page ID. Clear the previous test response first.")
+        document_url = await _evaluate(self._inspect, page_id, "() => location.href")
+        try:
+            return await self._mocks.install(page_id, document_url=document_url, url=options["url"],
+                                             resource_type=options.get("resourceType", "fetch"),
+                                             status=options.get("status", 200), json_body=options["json"],
+                                             dedicated=tab_id in self._test_tabs)
+        finally:
+            if self._mocks.has(page_id):
+                self._mock_pages[tab_id] = (page_id, local_origin(document_url))
+
+    async def _clear_mock(self, tab_id):
+        page_id, _ = self._mock_pages[tab_id]
+        try:
+            return await self._mocks.clear(page_id)
+        finally:
+            if not self._mocks.has(page_id):
+                self._mock_pages.pop(tab_id, None)
+
+    async def before_control(self, name, arguments):
+        tab = arguments.get("tabId")
+        if tab not in self._mock_pages:
+            return
+        from .mock_responses import local_origin
+
+        _, origin = self._mock_pages[tab]
+        steps = arguments["steps"] if name == "page_batch" else [{"tool": name, "arguments": arguments}]
+        for step in steps:
+            tool, args = step["tool"], step.get("arguments", {})
+            if (tool == "tab_close" or (tool == "page_history" and args.get("action") != "reload")
+                    or (tool == "page_navigate" and local_origin(args.get("url", "")) != origin)):
+                await self._clear_mock(tab)
+                break
+
+    async def aclose(self):
+        if self._mocks is not None:
+            await self._mocks.close()
+
     async def call(self, name, arguments):
         if name not in DEBUG_TOOLS:
             raise BrowserError("unknown_tool", f"Unknown debug tool {name}")
         validate(arguments, DEBUG_SCHEMAS[name], name)
         options = dict(arguments)
         tab_id = options.pop("tabId")
+        if name.startswith("debug_mock_"):
+            if tab_id not in self._test_tabs:
+                raise BrowserError("unsupported_target", "Use a loopback development tab opened by this Browser session.")
+            if name != "debug_mock_json":
+                existing = self._mock_pages.get(tab_id)
+                if existing is None:
+                    value = {"state": "absent", "tabId": tab_id, "hits": 0, "errors": 0, "served": 0}
+                elif name == "debug_mock_clear":
+                    value = await self._clear_mock(tab_id)
+                else:
+                    page_id, _ = existing
+                    try:
+                        value = await self._mocks.inspect(page_id)
+                    finally:
+                        if not self._mocks.has(page_id):
+                            self._mock_pages.pop(tab_id, None)
+                return {**mcp_result(value), "structuredContent": value}
         if name in {"debug_console", "debug_network"} and "pageIdx" in options and "pageSize" not in options:
             raise BrowserError("invalid_arguments", "pageIdx requires pageSize.")
         if name == "debug_trace_start":
@@ -304,13 +386,19 @@ class Debugger:
             raise BrowserError("unavailable", "Debugging requires a Google MCP connection to the specified browser instance.")
         if self._cra is not None and self._chrome_page_id is None:
             async with self._binding_lock:
-                page_id = await self._cra_page_id(tab_id)
+                page_id = await self._match_page(tab_id)
         elif self._chrome_page_id is not None and self._cra is None:
             page_id = await self._chrome_page_id(tab_id)
         else:
             raise BrowserError("unavailable", "Configure one tab resolver for the requested browser instance.")
         if not _valid_id(page_id):
             raise BrowserError("tab_binding_failed", "The tab resolver returned an invalid Google page ID.")
+        if name == "debug_mock_json":
+            value = await self._install_mock(tab_id, page_id, options)
+            return {**mcp_result(value), "structuredContent": value}
+        if name == "debug_full_page_screenshot":
+            image = await save_full_page(self._inspect, page_id, options["filePath"])
+            return {**mcp_result(image), "structuredContent": image}
         if "selector" in options:
             options["uid"] = await snapshot_selector_uid(self._inspect, page_id, options.pop("selector"))
         if name == "debug_element_screenshot":

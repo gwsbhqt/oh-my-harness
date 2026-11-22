@@ -22,3 +22,5 @@ browser-use --browser chrome --endpoint http://127.0.0.1:9222 session
 ## MCP 客户端
 
 将 `browser-use` 注册为所需 MCP 客户端的 stdio 可执行文件。参数示例为 `["--browser","chrome","--endpoint","http://127.0.0.1:9222","mcp"]`。通过 `initialize`、`tools/list` 和 `tools/call` 使用同一会话。每个进程绑定一个目标浏览器，无须另起 BU 后台服务。
+
+本机已保存的图片可用一次命令比较，不需要调试连接，例如 `browser-use compare_screenshots '{"baseline":"before.png","current":"after.png","output":"changes.png"}'`。模拟接口需要持续会话，按 `tab_open`、`debug_mock_json`、点击、`debug_mock_status` 和 `debug_mock_clear` 的顺序调用。会话退出会回收临时响应。

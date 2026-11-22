@@ -1,6 +1,6 @@
 ---
 name: browser-use
-description: "用同一套 API 操作 Cra 或 Chrome 网页，运行页面脚本，并用官方 Chrome DevTools MCP 检查同一标签的元素样式、截图、请求、性能和内存。"
+description: "用同一套 API 操作 Cra 和 Chrome，查样式和报错、截整页、比较 PNG，并在本机开发页复现空数据和 HTTP 错误。"
 ---
 
 # browser-use
@@ -31,7 +31,9 @@ browser-use --browser cra session
 
 ## 调试同一张网页
 
-使用上面拿到的 `tabId`。`debug_css_styles` 按唯一 CSS 选择器查样式来源，`debug_element_screenshot` 截取指定控件。`debug_network` 读取网络请求，`debug_console` 读取控制台，`debug_trace_start` 和 `debug_trace_stop` 成对记录性能，`debug_heap_snapshot` 获取内存快照。两种浏览器都调用 Google 的官方工具。Cra 的调试需要两套官方工具能访问同一实例，并允许在页面执行 JavaScript 以核对身份。
+使用同一张标签的 `tabId`。`debug_css_styles` 查样式来源，`debug_element_screenshot` 截取单个控件。`debug_full_page_screenshot` 把整页原图保存为 PNG，`compare_screenshots` 在本机比较两张图。`debug_console` 配合 `debug_console_message` 展开一条报错，`debug_network` 配合 `debug_request` 展开请求。性能记录和内存快照也使用 Google 官方调试器。Cra 还需允许在当前页运行 JavaScript，以核对目标。
+
+测试本机开发页面的空态和错误态时，在同一个 `Browser` 会话内新开测试标签，使用 `debug_mock_json`、`debug_mock_status` 和 `debug_mock_clear`。可用接口和实际命中条件见[测试响应与画面对比](references/interfaces.md#本机开发页的接口测试)。
 
 ```text
 browser-use --browser chrome session

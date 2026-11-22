@@ -2,7 +2,7 @@
 
 # browser-use
 
-Control Cra and Chrome with a common Cra-shaped API. Cra uses its native MCP service. Chrome control uses the official Chrome DevTools MCP. Both browsers use the same `debug_*` calls to inspect CSS rule sources, capture individual elements and diagnose network, console, performance and memory behavior.
+Control Cra and Chrome with one Cra-shaped API. Cra uses its native MCP service and Chrome uses Google's Chrome DevTools MCP. Both support CSS and console inspection, element and full-page PNGs, and JSON fixtures for read endpoints on loopback development pages. Compare two PNGs locally to locate visual changes.
 
 Run `browser-use --help` for connection options and `browser-use --browser chrome tools` to print the shared input schemas. Use `session` for a sequence of commands or `mcp` for a persistent stdio MCP connection. The package requires Python 3.12 or newer, the selected browser and its official MCP server. Python itself has no third-party runtime dependencies.
 

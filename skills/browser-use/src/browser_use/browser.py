@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import AsyncExitStack
 from copy import deepcopy
 from functools import partial
 
@@ -12,7 +13,17 @@ from .mcp_client import StdioMcp, cra_command as make_cra_command, google_comman
 from .protocol import BrowserError, CONTROL_SCHEMAS, TOOL_DESCRIPTIONS, checked_reply, mcp_result, native_value, validate
 
 
-SCHEMAS = {**CONTROL_SCHEMAS, **DEBUG_SCHEMAS}
+FILE_TOOLS = {
+    "compare_screenshots": {
+        "type": "object", "additionalProperties": False, "required": ["baseline", "current"],
+        "properties": {name: {"type": "string", "minLength": 1, "description": description}
+                       for name, description in {
+                           "baseline": "本机基准 PNG 路径。", "current": "本机待比较 PNG 路径。",
+                           "output": "可选的新 PNG 路径，仅在同尺寸画面有差异时写入。",
+                       }.items()},
+    },
+}
+SCHEMAS = {**CONTROL_SCHEMAS, **DEBUG_SCHEMAS, **FILE_TOOLS}
 
 
 class Browser:
@@ -34,11 +45,14 @@ class Browser:
         self._cra_socket = cra_socket
         self._cra_client = None
         self._google_client = None
+        self._capture_client = None
         self._closed = False
         self._locks = {}
+        self._test_tabs = set()
         self._chrome = ChromeControl(self._google, local_files=local_files) if browser == "chrome" else None
         self._debug = Debugger(self._google, cra=self._cra if browser == "cra" else None,
-                               chrome_page_id=self._chrome.page_id if self._chrome else None)
+                               chrome_page_id=self._chrome.page_id if self._chrome else None, test_tabs=self._test_tabs)
+        self._capture = Debugger(self._google_capture, cra=self._chrome.call if self._chrome else self._cra)
 
     def __getattr__(self, name):
         if name in SCHEMAS:
@@ -59,7 +73,8 @@ class Browser:
         supported = set(CHROME_TOOLS) | {"page_batch"} if self._chrome else set(CONTROL_SCHEMAS)
         return {"browser": self.browser, "control": sorted(supported),
                 "unsupported": sorted(set(CONTROL_SCHEMAS) - supported),
-                "debug": sorted(DEBUG_SCHEMAS), "debugConfigured": bool(self.endpoint or self._google_argv)}
+                "debug": sorted(DEBUG_SCHEMAS), "files": sorted(FILE_TOOLS),
+                "debugConfigured": bool(self.endpoint or self._google_argv)}
 
     async def _cra(self, name, arguments):
         if self._cra_client is None and self._cra_argv is None and not (self._cra_socket or self._cra_executable):
@@ -83,13 +98,22 @@ class Browser:
         reply = await self._cra_client.call(name, arguments)
         return native_value(name, reply)
 
+    def _google_command(self):
+        if not self.endpoint and not self._google_argv:
+            raise BrowserError("connection_failed", f"Set an explicit debugging endpoint for {self.browser}")
+        return self._google_argv or make_google_command(self.endpoint, executable=self._google_executable)
+
     async def _google(self, name, arguments):
         if self._google_client is None:
-            if not self.endpoint and not self._google_argv:
-                raise BrowserError("connection_failed", f"Set an explicit debugging endpoint for {self.browser}")
-            argv = self._google_argv or make_google_command(self.endpoint, executable=self._google_executable)
-            self._google_client = StdioMcp(argv)
+            self._google_client = StdioMcp(self._google_command())
         return checked_reply(name, await self._google_client.call(name, arguments))
+
+    async def _google_capture(self, name, arguments):
+        if self._capture_client is None:
+            # Google's preview bounds apply even to files and are fixed at process startup.
+            preview_flags = {"--screenshot-max-width=1280", "--screenshot-max-height=1280"}
+            self._capture_client = StdioMcp([arg for arg in self._google_command() if arg not in preview_flags])
+        return checked_reply(name, await self._capture_client.call(name, arguments))
 
     async def call(self, name, /, **arguments):
         """Run one tool against this browser. Submitted operations are never replayed."""
@@ -108,13 +132,27 @@ class Browser:
             return await self._dispatch(name, arguments)
 
     async def _dispatch(self, name, arguments):
+        if name == "compare_screenshots":
+            from .visual import compare_screenshots
+            return await asyncio.to_thread(compare_screenshots, **arguments)
+        if name == "debug_full_page_screenshot":
+            return await self._capture.call(name, arguments)
         if name in DEBUG_SCHEMAS:
             return await self._debug.call(name, arguments)
+        await self._debug.before_control(name, arguments)
         if self._chrome is None:
-            return await self._cra(name, arguments)
-        if name == "page_batch":
-            return await self._chrome_batch(arguments["tabId"], arguments["steps"])
-        return await self._chrome.call(name, arguments)
+            result = await self._cra(name, arguments)
+        elif name == "page_batch":
+            result = await self._chrome_batch(arguments["tabId"], arguments["steps"])
+        else:
+            result = await self._chrome.call(name, arguments)
+        if name == "tab_open" and isinstance(result, dict) and isinstance(result.get("tabId"), str):
+            from .mock_responses import local_origin
+            if local_origin(arguments["url"]) is not None:
+                self._test_tabs.add(result["tabId"])
+        elif name == "tab_close":
+            self._test_tabs.discard(arguments["tabId"])
+        return result
 
     async def _chrome_batch(self, tab, steps):
         output = []
@@ -141,10 +179,17 @@ class Browser:
         return checked_reply("page_batch", {"content": output, "isError": failed})
 
     async def aclose(self):
-        """Disconnect the clients opened by this object. Close task tabs explicitly with tab_close."""
+        """Remove owned test responses and disconnect clients. Close task tabs explicitly with tab_close."""
         if not self._closed:
             self._closed = True
-            await asyncio.gather(*(c.aclose() for c in (self._google_client, self._cra_client) if c is not None))
+            async with AsyncExitStack() as pending:
+                for lock in tuple(self._locks.values()):
+                    await pending.enter_async_context(lock)
+                try:
+                    await self._debug.aclose()
+                finally:
+                    clients = (self._capture_client, self._google_client, self._cra_client)
+                    await asyncio.gather(*(c.aclose() for c in clients if c is not None))
 
     async def __aenter__(self):
         if self._closed:

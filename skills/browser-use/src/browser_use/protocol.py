@@ -44,9 +44,15 @@ TOOL_DESCRIPTIONS = {
     'download_cancel': '取消指定的下载任务。',
     'page_batch': '在同一标签顺序执行一组网页操作。',
     'debug_console': '查看这张页面的控制台记录。',
+    'debug_console_message': '展开这张页面上一条控制台消息的参数和可用的调用栈。',
+    'debug_full_page_screenshot': '将所选网页的完整 PNG 保存到新的本机文件，保留设备像素。',
+    'compare_screenshots': '在本机比较两张 PNG 的像素，可将变化区域标红并保存。',
     'debug_css_styles': '查看主文档中唯一匹配、可由 Google 快照定位的元素的 CSS 规则、优先级和来源。',
     'debug_element_screenshot': '按唯一 CSS 选择器截取主文档元素的 PNG 图片。目标须能在 Google 快照中定位。',
     'debug_network': '列出这张页面捕获的网络请求。',
+    'debug_mock_json': '为本次新开的回环开发页的指定 GET/HEAD 接口提供 JSON 或错误状态。',
+    'debug_mock_status': '读取该测试响应的命中、错误和实际送达次数。',
+    'debug_mock_clear': '撤销本会话在这个开发标签设置的测试响应。',
     'debug_request': '查看指定请求的详细信息。',
     'debug_trace_start': '从这张页面开始记录性能。',
     'debug_trace_stop': '停止性能记录并返回结果。',
@@ -71,7 +77,7 @@ class BrowserError(Exception):
 
 
 def validate(value, schema, path):
-    """Validate the input schema features used by the two published tool sets."""
+    """Validate the schema features used by the published tools."""
     kind = schema.get("type")
     valid = {
         "object": isinstance(value, dict), "array": isinstance(value, list),

@@ -38,7 +38,7 @@ Cra 设置中打开「允许代理在页面运行 JavaScript」后，`page_evalu
 
 网页刷新或导航到新文档会清除旧文档上的观察器。跨来源的 iframe 和样式表受浏览器同源规则限制。`getComputedStyle` 能读到生效的颜色，定位覆盖它的规则和来源行号可用 `debug_css_styles`。页面脚本运行时，载入当前文档的请求已经发出。脚本可以给随后由它发起的请求加测试标记。
 
-在隔离测试页上，Google 调试器给已绑定标签预设的请求头，可以随下一次导航的首个文档请求发出。另一来源的图片和后续导航也收到该标记，显式清除后才消失。这个验证使用无敏感信息的标记。设置请求头仅在独立的 Google 调试连接上验证，尚未作为 BU 接口发布。
+在隔离测试页上，Google 调试器给已绑定标签预设的请求头，可以随下一次导航的首个文档请求发出。另一来源的图片和后续导航也收到该标记，显式清除后才消失。这个验证使用无敏感信息的标记。设置请求头仅在独立的 Google 调试连接上验证，尚未作为 BU 接口发布。 官方的域名白名单会连其他来源的子资源一起拦截。目前缺少只给目标来源加标记、同时允许其他来源资源照常加载的上游选项。
 
 ### Chrome 输入的具体范围
 
@@ -50,13 +50,17 @@ Chrome 的 `humanize`、带修饰键的点击、右击、中击、三击、坐�
 
 ## 调试
 
-每次调用都传入此前选定的 `tabId`，返回 Google 原始 MCP 回执。可读取 `content` 和工具实际提供的 `structuredContent`。两种浏览器的选项、结果和错误均走同一段实现。
+每个 `debug_*` 指令都传此前选定的 `tabId`。Google 调试结果保留在 MCP `content` 和可用的 `structuredContent` 里。整页原图和开发页测试响应也通过 `structuredContent` 提供文件信息或命中回执。
 
 | 动作 | 主要参数 | 结果 |
 |---|---|---|
 | `debug_console` | `tabId`，可选 `types`、`pageSize`、`pageIdx` | 当前页的控制台记录 |
+| `debug_console_message` | `tabId`、`msgid` | 用本页 `debug_console` 返回的 `id` 查看参数、源位置和可用调用栈 |
 | `debug_css_styles` | `tabId`、`selector`，可选 `pageSize` 和 `pageIdx` | Google 检查器列出的匹配规则、优先级和可得的来源行号 |
 | `debug_element_screenshot` | `tabId`、`selector` | 指定元素的 PNG 截图 |
+| `debug_full_page_screenshot` | `tabId`、`filePath` | 保存整页原始 PNG，返回路径和实际像素尺寸 |
+| `debug_mock_json` | `tabId`、`url`、`json`，可选 `status`、`resourceType` | 为本次新开的回环开发页设置专用测试响应 |
+| `debug_mock_status`、`debug_mock_clear` | `tabId` | 核对命中及实际送达次数，或撤销规则 |
 | `debug_network` | `tabId`，可选 `resourceTypes`、`pageSize`、`pageIdx` | 当前页的请求与请求编号 |
 | `debug_request` | `tabId`、`reqid` | 同一页里该请求的详情。可选保存请求、响应文件 |
 | `debug_trace_start` | `tabId`，可选 `reload`、`autoStop` | 启动性能记录。自动停止时可同时传入 `filePath` |
@@ -66,3 +70,42 @@ Chrome 的 `humanize`、带修饰键的点击、右击、中击、三击、坐�
 元素调试接受主文档内唯一的 CSS 选择器，例如 `form button[type=submit]`。目标还须能对应到 Google 页面的无障碍快照节点。零个匹配、多个匹配或无法确认控件身份时会报错。截图结果的 `content` 中含 PNG 图片块，样式结果可按页读取。
 
 Cra 模式用两端都能观察的随机文档标记验证同一页。完成或出错时清理标记，页面关闭或导航期间无法确认时停止调用。Chrome 模式复用当前连接的确切页号。不要把另一个标签的请求编号交给 `debug_request`，两个标签的请求编号可以都是 1。性能录制按浏览器实例独占，记录范围可包含该实例中的其他页面。网络详情、快照和性能文件可能包含所访问页面的实际数据，请选择合适的目标页与输出位置。
+
+### 本机开发页的接口测试
+
+用本次会话的 `tab_open` 打开专用本机开发页。接口必须与顶层文档同源，主机使用 `localhost`、字面 IPv4 回环地址或 `[::1]`。`localhost` 与 `127.0.0.1` 各算一个来源。指定完整接口 URL 和资源类型。`fetch` 是默认值，`XMLHttpRequest` 使用 `xhr`。路径和查询均精确匹配。每张测试页一次使用一条规则，紧凑 UTF-8 JSON 正文上限为 1 MiB。
+
+下面的例子假设 `tab` 是会话新开的本机开发页，`api` 是该站的商品列表读取接口。用真实控件触发请求，核对页面状态和命中回执，再撤销规则。
+
+```python
+await browser.debug_mock_json(tabId=tab, url=api, json={"items": []})
+try:
+    await browser.page_click(tabId=tab, ref=refresh_button)
+    await browser.page_wait(tabId=tab, text="暂无商品")
+    status = (await browser.debug_mock_status(tabId=tab))["structuredContent"]
+    assert status["hits"] > 0 and status["errors"] == 0 and status["served"] > 0
+finally:
+    await browser.debug_mock_clear(tabId=tab)
+```
+
+错误场景可传 `status=500, json={"error": "fixture"}`。浏览器实际收到 HTTP 500。BU 用测试期间的本机固定 JSON 响应提供状态码。浏览器的网络记录仍显示原接口地址。官方模拟器由调试进程接收 GET 或 HEAD 的替代响应。匹配条件没有 HTTP 方法维度，同 URL、同资源类型还被用于写操作的接口不适合这项测试。POST 命中这条规则会被官方工具中止，并增加错误数。网页注册的服务工作线程可能自行给出结果，只有页面状态和计数都吻合才算复现。
+
+同源重载保留规则。BU 在主动跨来源导航、未知目标的历史跳转、关页和会话结束时撤回本会话的规则。网页自行跳转后，规则仍按原接口地址匹配。测试期间让该标签专用于当前场景。生效期间，Google 会停止使用该页 HTTP 缓存，性能测量应在撤销之后进行。
+
+### 整页原图与本机差异图
+
+```python
+from pathlib import Path
+
+before = Path("before.png").resolve()
+after = Path("after.png").resolve()
+await browser.debug_full_page_screenshot(tabId=tab, filePath=str(before))
+# 触发需要验证的页面变化，等到界面显示预期结果，再保存第二张图。
+await browser.debug_full_page_screenshot(tabId=tab, filePath=str(after))
+change = await browser.compare_screenshots(baseline=str(before), current=str(after),
+                                           output=str(Path("difference.png").resolve()))
+```
+
+整页截图使用独立的官方调试连接，重新核对所选文档，保存原始设备像素。原图输出请选已有目录中的新 `.png` 路径。Chromium 对单个方向超过 16384 设备像素的页面无法保证整页正确，BU 会报告限制。截图只包含捕获时页面已渲染的内容。
+
+`compare_screenshots` 也可独立使用，不需要连接浏览器。返回 `changed`、`sizeMismatch`、两张图的尺寸、变化像素数 `changedPixels` 和变化范围 `bounds`。同尺寸且有变化时，传入 `output` 才写红色差异图。相同或尺寸不同均不生成图，已有文件会保留。 支持 8 位非交错的灰度、灰度加透明度、RGB 和 RGBA 截图。每张至多 16,777,216 个像素，超过限制会明确报错。

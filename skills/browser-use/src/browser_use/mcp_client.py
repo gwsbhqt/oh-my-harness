@@ -82,7 +82,7 @@ def google_command(endpoint, *, executable=None) -> list[str]:
         command += ["--offline", "--yes", f"chrome-devtools-mcp@{_GOOGLE_VERSION}"]
     return [
         *command, f"{option}={endpoint}", "--page-id-routing", "--experimental-structured-content",
-        "--experimental-vision", "--screenshot-max-width=1280", "--screenshot-max-height=1280",
+        "--category-network-mocks", "--experimental-vision", "--screenshot-max-width=1280", "--screenshot-max-height=1280",
         "--no-usage-statistics", "--no-performance-crux",
     ]
 

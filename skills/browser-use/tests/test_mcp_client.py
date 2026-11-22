@@ -140,7 +140,7 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(command[0], 'chrome-devtools-mcp')
         self.assertIn('--browser-url=http://127.0.0.1:12345', command)
         for flag in ('--no-usage-statistics', '--no-performance-crux', '--page-id-routing',
-                     '--experimental-vision', '--experimental-structured-content',
+                     '--experimental-vision', '--experimental-structured-content', '--category-network-mocks',
                      '--screenshot-max-width=1280', '--screenshot-max-height=1280'):
             self.assertIn(flag, command)
         with patch('browser_use.mcp_client.shutil.which', side_effect=lambda name: name if name == 'npx' else None):

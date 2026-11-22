@@ -36,11 +36,24 @@ HTML = """<!doctype html>
 <style>
 button { width: 90px; }
 form button { box-sizing: border-box; width: __WIDTH__px; height: 36px; }
+body { position: relative; min-height: 1650px; }
+body::after { content: ''; position: absolute; left: 0; bottom: 0; width: 60px; height: 30px; background: #257; }
+body.received::after { background: #fd3; }
 </style>
 <h1>Parcel lookup</h1><p>Desk __DESK__</p>
 <form><label>Parcel name <input name="parcel" autocomplete="off"></label>
 <button>Look up</button></form><output aria-live="polite"></output>
+<button id="samples">Load samples</button><output id="sample-result"></output>
 <script>
+let sampleCount = 0;
+document.querySelector('#samples').onclick = async function loadSamples() {
+  const sequence = ++sampleCount;
+  const reply = await fetch('/fixture/items');
+  const data = await reply.json();
+  const result = reply.ok ? (data.items.join(',') || 'empty') : `HTTP ${reply.status}`;
+  document.querySelector('#sample-result').textContent = `Sample ${sequence}: ${result}`;
+  if (!reply.ok) console.error('Sample lookup failed', reply.status);
+};
 const form = document.querySelector('form');
 form.addEventListener('submit', async event => {
   event.preventDefault();
@@ -52,6 +65,7 @@ form.addEventListener('submit', async event => {
   window.fixtureReceipt = receipt;
   document.querySelector('output').textContent = receipt;
   console.info(receipt);
+  document.body.classList.add('received');
   performance.mark(receipt);
   const oldButton = form.querySelector('button');
   oldButton.replaceWith(oldButton.cloneNode(true));
@@ -75,6 +89,9 @@ def parcel_site():
             self.wfile.write(body)
 
         def do_GET(self):
+            if self.path == "/fixture/items":
+                self.reply(b'{"items":["original"]}', "application/json")
+                return
             if self.path != "/parcels":
                 self.send_error(404)
                 return
@@ -207,6 +224,49 @@ class LiveAcceptance(unittest.TestCase):
         self.assertEqual(len(matches), 1, (role, name, matches))
         return matches[0]
 
+    async def check_test_responses(self, browser, first, second, url):
+        api = url.removesuffix("/parcels") + "/fixture/items"
+
+        async def load(tab, expected):
+            button = await self.element_ref(browser, tab, "button", "Load samples")
+            await browser.page_click(tabId=tab, ref=button)
+            await browser.page_wait(tabId=tab, text=expected)
+
+        for status, body, expected in [(200, {"items": []}, "Sample 1: empty"),
+                                       (500, {"error": "fixture"}, "Sample 3: HTTP 500")]:
+            result = await browser.debug_mock_json(tabId=first, url=api, json=body, status=status)
+            self.assertEqual(result["structuredContent"]["hits"], 0)
+            try:
+                await load(first, expected)
+                observed = (await browser.debug_mock_status(tabId=first))["structuredContent"]
+                self.assertEqual([observed[k] for k in ("hits", "errors", "served")], [1, 0, 1])
+                if status == 200:
+                    await load(second, "Sample 1: original")
+            finally:
+                await browser.debug_mock_clear(tabId=first)
+            if status == 200:
+                await load(first, "Sample 2: original")
+        await load(first, "Sample 4: original")
+        errors = await browser.debug_console(tabId=first, types=["error"])
+        error = next(m for m in errors["structuredContent"]["consoleMessages"] if "Sample lookup failed" in m["text"])
+        detail = (await browser.debug_console_message(tabId=first, msgid=error["id"]))["structuredContent"]["consoleMessage"]
+        self.assertIn("loadSamples", detail["stackTrace"])
+
+        localhost_url = url.replace("127.0.0.1", "localhost")
+        temporary = (await browser.tab_open(url=localhost_url))["tabId"]
+        try:
+            await browser.page_wait(tabId=temporary, text="Parcel lookup")
+            localhost_api = localhost_url.removesuffix("/parcels") + "/fixture/items"
+            await browser.debug_mock_json(tabId=temporary, url=localhost_api, json={"items": []})
+            await load(temporary, "Sample 1: empty")
+            await browser.page_navigate(tabId=temporary, url=url)
+            await browser.page_wait(tabId=temporary, text="Parcel lookup")
+            for action in (browser.debug_mock_status, browser.debug_mock_clear):
+                self.assertEqual((await action(tabId=temporary))["structuredContent"]["state"], "absent")
+            await load(temporary, "Sample 1: original")
+        finally:
+            await browser.tab_close(tabId=temporary)
+
     async def check_session(self, backend, endpoint, cra_argv, google_argv, directory, url, submissions):
         from browser_use import Browser, BrowserError
 
@@ -258,6 +318,11 @@ class LiveAcceptance(unittest.TestCase):
                     await browser.page_fill(tabId=tab, ref=box, text=parcel)
 
                 first, second = tabs
+                await self.check_test_responses(browser, first, second, url)
+                baseline = directory / "before.png"
+                before_image = await browser.debug_full_page_screenshot(tabId=first, filePath=str(baseline))
+                self.assertGreater(before_image["structuredContent"]["height"], 1600)
+                self.assertEqual(before_image["structuredContent"]["path"], str(baseline))
                 button = await self.element_ref(browser, first, "button", "Look up")
                 trace = directory / "parcel-trace.json.gz"
                 await browser.debug_trace_start(tabId=first)
@@ -269,6 +334,17 @@ class LiveAcceptance(unittest.TestCase):
                 with gzip.open(trace, "rt", encoding="utf-8") as trace_file:
                     events = json.load(trace_file)["traceEvents"]
                 self.assertTrue(any(event.get("name") == receipts[first] for event in events))
+
+                updated, difference = directory / "after.png", directory / "difference.png"
+                await browser.debug_full_page_screenshot(tabId=first, filePath=str(updated))
+                change = await browser.compare_screenshots(baseline=str(baseline), current=str(updated),
+                                                           output=str(difference))
+                self.assertGreater(change["changedPixels"], 0)
+                self.assertGreater(change["bounds"]["y"] + change["bounds"]["height"], 1600)
+                self.assertTrue(difference.is_file())
+                with self.assertRaises(BrowserError) as existing:
+                    await browser.debug_full_page_screenshot(tabId=first, filePath=str(baseline))
+                self.assertEqual(existing.exception.code, "output_exists")
 
                 # A successful lookup replaced the button with an identical new node.
                 with self.assertRaises(BrowserError):
@@ -288,6 +364,9 @@ class LiveAcceptance(unittest.TestCase):
                     messages = [m["text"] for m in log["consoleMessages"]]
                     self.assertIn(receipt, messages)
                     self.assertNotIn(other, messages)
+                    msgid = next(m["id"] for m in log["consoleMessages"] if m["text"] == receipt)
+                    message = await browser.debug_console_message(tabId=tab, msgid=msgid)
+                    self.assertEqual(message["structuredContent"]["consoleMessage"]["text"], receipt)
                     network = (await browser.debug_network(tabId=tab))["structuredContent"]
                     queries = [r for r in network["networkRequests"] if r["method"] == "POST"]
                     expected_url = url.removesuffix("/parcels") + "/lookup/" + parcels[index]
