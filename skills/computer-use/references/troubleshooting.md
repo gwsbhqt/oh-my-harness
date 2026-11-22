@@ -66,7 +66,7 @@
 - **多显示器未做适配。** `screens` 能列出来，但坐标是全局的，副屏上的窗口可能定位不准。
 - **Spotlight / 通知中心 / 登录窗口够不着。** Dock 和控制中心可以（`apps --all` 能看到），
   但 Spotlight 这类临时浮层通常抓不到。
-- **Cra 网页使用官方 MCP。** Computer-use 用于操作 Cra 的原生界面，固定本任务窗口后再操作。Chrome 网页使用 `browser-use`，固定标签页后操作。`snap` 也能为支持网页辅助模式的 Chrome 和 Electron 应用开启该模式，仍只有外壳时可用 `webmode` 检查。
+- **网页内容使用 browser-use。** Cra 和 Chrome 使用相同的网页接口，按任务标签的编号操作。computer-use 处理浏览器的原生界面，先选定本任务的窗口。`snap` 也能为支持网页辅助模式的 Chrome 和 Electron 应用开启该模式，仍只有外壳时可用 `webmode` 检查。
 
 ---
 

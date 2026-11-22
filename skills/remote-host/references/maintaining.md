@@ -28,7 +28,7 @@ Anything sent over ssh passes the host's **login shell** (fish on the Macs): kee
 
 ## 共用远程控制代码
 
-remote-host、computer-use、dsh-use、browser-use 共用的远程控制核心在 `skills/_shared/agentkit/remote/`，这些工具都从这里加载，不复制 SSH 代码，也不调用 remote-host 命令行子进程：
+remote-host、computer-use、dsh-use 共用的远程控制核心在 `skills/_shared/agentkit/remote/`，这些工具都从这里加载，不复制 SSH 代码，也不调用 remote-host 命令行子进程：
 
 | 模块 | 管什么 |
 | --- | --- |
@@ -41,10 +41,9 @@ remote-host、computer-use、dsh-use、browser-use 共用的远程控制核心�
 | `notifications.py` | dsh-use 远端重启的本机观察进程（子进程用 `python -m agentkit.remote.notifications`） |
 | `done_watch.py` | dsh-use 跨机器派单 `--notify self` 的本机观察进程：远端真做完后通知本机发起会话（子进程用 `python -m agentkit.remote.done_watch`） |
 
-入口找它的方法统一是「按自身真实路径推出 `skills/_shared`」，缺了就报错退出：remote-host 在 `src/remote_host/__init__.py`，computer-use 在 `src/computer_use/__init__.py` 和 `scripts/computer-use`，browser-use 在 `src/browser_use/__init__.py`，dsh-use 在插件仓库 `dsh-use/bin/dsh-use`。共用部分的测试在 `_shared/tests/`。
+入口找它的方法统一是「按自身真实路径推出 `skills/_shared`」，缺了就报错退出：remote-host 在 `src/remote_host/__init__.py`，computer-use 在 `src/computer_use/__init__.py` 和 `scripts/computer-use`，dsh-use 在插件仓库 `dsh-use/bin/dsh-use`。共用部分的测试在 `_shared/tests/`。
 
 - `dispatch(tool, argv) -> (args, code)`：computer-use、dsh-use、clash-use 用。消费机器参数与 `use` / `pin` / `hosts`；`code` 为 `None` 表示继续本机入口，整数表示命令已在远端或本地完成。
-- `select_target(tool, argv)` / `control_target(tool, argv)`：browser-use 用，只选机或只执行 `use` / `pin` / `hosts`，不经 SSH 执行业务命令。
 - `route("remote-host", argv) -> (args, host, code)`：remote-host 用。只消费机器参数、处理 `use` / `pin` / `hosts`，把 `-H` 的原值交回 remote-host；`-H a,b` 的多机并发和不需要机器的命令由 remote-host 自己判断。
 - `resolve_target(tool, host=None)`：无副作用读取各工具的默认目标，返回 `local` 或已知 SSH 别名；无效目标抛 `ValueError`，不能据此静默回本机。
 - 远程 `computer-use serve` 明确拒绝：脚本暂存不支持双向标准输入流，不能以空输入的成功退出伪装长驻服务。

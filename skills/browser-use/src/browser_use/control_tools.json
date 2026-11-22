@@ -1,0 +1,786 @@
+{
+  "download_cancel": {
+    "type": "object",
+    "properties": {
+      "downloadId": {
+        "type": "string"
+      },
+      "tabId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "tabId",
+      "downloadId"
+    ],
+    "additionalProperties": false
+  },
+  "download_status": {
+    "type": "object",
+    "properties": {
+      "downloadId": {
+        "type": "string"
+      },
+      "tabId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "tabId",
+      "downloadId"
+    ],
+    "additionalProperties": false
+  },
+  "folder_create": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string"
+      },
+      "space": {
+        "type": "string"
+      },
+      "tabIds": {
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 50,
+        "type": "array"
+      }
+    },
+    "required": [
+      "name"
+    ],
+    "additionalProperties": false
+  },
+  "history_search": {
+    "type": "object",
+    "properties": {
+      "days": {
+        "maximum": 90,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "limit": {
+        "maximum": 200,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "query": {
+        "type": "string"
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "page_batch": {
+    "type": "object",
+    "properties": {
+      "steps": {
+        "items": {
+          "properties": {
+            "arguments": {
+              "type": "object"
+            },
+            "tool": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "tool"
+          ],
+          "type": "object"
+        },
+        "maxItems": 50,
+        "minItems": 1,
+        "type": "array"
+      },
+      "tabId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "tabId",
+      "steps"
+    ],
+    "additionalProperties": false
+  },
+  "page_click": {
+    "type": "object",
+    "properties": {
+      "button": {
+        "enum": [
+          "left",
+          "right",
+          "middle"
+        ],
+        "type": "string"
+      },
+      "changes": {
+        "type": "boolean"
+      },
+      "clickCount": {
+        "maximum": 3,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "humanize": {
+        "type": "boolean"
+      },
+      "modifiers": {
+        "type": "string"
+      },
+      "ref": {
+        "maxLength": 100,
+        "type": "string"
+      },
+      "selector": {
+        "maxLength": 2048,
+        "type": "string"
+      },
+      "tabId": {
+        "type": "string"
+      },
+      "x": {
+        "type": "number"
+      },
+      "y": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "tabId"
+    ],
+    "additionalProperties": false
+  },
+  "page_console": {
+    "type": "object",
+    "properties": {
+      "clear": {
+        "type": "boolean"
+      },
+      "level": {
+        "enum": [
+          "all",
+          "warning",
+          "error"
+        ],
+        "type": "string"
+      },
+      "tabId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "tabId"
+    ],
+    "additionalProperties": false
+  },
+  "page_dialog": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "enum": [
+          "accept",
+          "dismiss"
+        ],
+        "type": "string"
+      },
+      "promptText": {
+        "type": "string"
+      },
+      "tabId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "tabId",
+      "action"
+    ],
+    "additionalProperties": false
+  },
+  "page_download": {
+    "type": "object",
+    "properties": {
+      "tabId": {
+        "type": "string"
+      },
+      "url": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "tabId",
+      "url"
+    ],
+    "additionalProperties": false
+  },
+  "page_drag": {
+    "type": "object",
+    "properties": {
+      "changes": {
+        "type": "boolean"
+      },
+      "humanize": {
+        "type": "boolean"
+      },
+      "ref": {
+        "maxLength": 100,
+        "type": "string"
+      },
+      "selector": {
+        "maxLength": 2048,
+        "type": "string"
+      },
+      "tabId": {
+        "type": "string"
+      },
+      "targetSelector": {
+        "maxLength": 2048,
+        "type": "string"
+      }
+    },
+    "required": [
+      "tabId",
+      "targetSelector"
+    ],
+    "additionalProperties": false
+  },
+  "page_evaluate": {
+    "type": "object",
+    "properties": {
+      "expression": {
+        "type": "string"
+      },
+      "tabId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "tabId",
+      "expression"
+    ],
+    "additionalProperties": false
+  },
+  "page_fill": {
+    "type": "object",
+    "properties": {
+      "changes": {
+        "type": "boolean"
+      },
+      "humanize": {
+        "type": "boolean"
+      },
+      "ref": {
+        "maxLength": 100,
+        "type": "string"
+      },
+      "selector": {
+        "maxLength": 2048,
+        "type": "string"
+      },
+      "tabId": {
+        "type": "string"
+      },
+      "text": {
+        "maxLength": 20000,
+        "type": "string"
+      }
+    },
+    "required": [
+      "tabId",
+      "text"
+    ],
+    "additionalProperties": false
+  },
+  "page_history": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "enum": [
+          "back",
+          "forward",
+          "reload"
+        ],
+        "type": "string"
+      },
+      "tabId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "tabId",
+      "action"
+    ],
+    "additionalProperties": false
+  },
+  "page_hover": {
+    "type": "object",
+    "properties": {
+      "humanize": {
+        "type": "boolean"
+      },
+      "ref": {
+        "maxLength": 100,
+        "type": "string"
+      },
+      "selector": {
+        "maxLength": 2048,
+        "type": "string"
+      },
+      "tabId": {
+        "type": "string"
+      },
+      "x": {
+        "type": "number"
+      },
+      "y": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "tabId"
+    ],
+    "additionalProperties": false
+  },
+  "page_navigate": {
+    "type": "object",
+    "properties": {
+      "tabId": {
+        "type": "string"
+      },
+      "url": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "tabId",
+      "url"
+    ],
+    "additionalProperties": false
+  },
+  "page_network": {
+    "type": "object",
+    "properties": {
+      "clear": {
+        "type": "boolean"
+      },
+      "tabId": {
+        "type": "string"
+      },
+      "writesOnly": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "tabId"
+    ],
+    "additionalProperties": false
+  },
+  "page_pdf": {
+    "type": "object",
+    "properties": {
+      "tabId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "tabId"
+    ],
+    "additionalProperties": false
+  },
+  "page_press": {
+    "type": "object",
+    "properties": {
+      "changes": {
+        "type": "boolean"
+      },
+      "humanize": {
+        "type": "boolean"
+      },
+      "key": {
+        "type": "string"
+      },
+      "modifiers": {
+        "type": "string"
+      },
+      "ref": {
+        "maxLength": 100,
+        "type": "string"
+      },
+      "selector": {
+        "maxLength": 2048,
+        "type": "string"
+      },
+      "tabId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "tabId",
+      "key"
+    ],
+    "additionalProperties": false
+  },
+  "page_read": {
+    "type": "object",
+    "properties": {
+      "offset": {
+        "maximum": 10000000,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "tabId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "tabId"
+    ],
+    "additionalProperties": false
+  },
+  "page_screenshot": {
+    "type": "object",
+    "properties": {
+      "tabId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "tabId"
+    ],
+    "additionalProperties": false
+  },
+  "page_scroll": {
+    "type": "object",
+    "properties": {
+      "dx": {
+        "maximum": 2000,
+        "minimum": -2000,
+        "type": "integer"
+      },
+      "dy": {
+        "maximum": 2000,
+        "minimum": -2000,
+        "type": "integer"
+      },
+      "humanize": {
+        "type": "boolean"
+      },
+      "ref": {
+        "maxLength": 100,
+        "type": "string"
+      },
+      "selector": {
+        "maxLength": 2048,
+        "type": "string"
+      },
+      "tabId": {
+        "type": "string"
+      },
+      "x": {
+        "type": "number"
+      },
+      "y": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "tabId"
+    ],
+    "additionalProperties": false
+  },
+  "page_select": {
+    "type": "object",
+    "properties": {
+      "changes": {
+        "type": "boolean"
+      },
+      "humanize": {
+        "type": "boolean"
+      },
+      "label": {
+        "type": "string"
+      },
+      "ref": {
+        "maxLength": 100,
+        "type": "string"
+      },
+      "selector": {
+        "maxLength": 2048,
+        "type": "string"
+      },
+      "tabId": {
+        "type": "string"
+      },
+      "value": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "tabId"
+    ],
+    "additionalProperties": false
+  },
+  "page_snapshot": {
+    "type": "object",
+    "properties": {
+      "interactive": {
+        "type": "boolean"
+      },
+      "query": {
+        "type": "string"
+      },
+      "tabId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "tabId"
+    ],
+    "additionalProperties": false
+  },
+  "page_type": {
+    "type": "object",
+    "properties": {
+      "changes": {
+        "type": "boolean"
+      },
+      "humanize": {
+        "type": "boolean"
+      },
+      "ref": {
+        "maxLength": 100,
+        "type": "string"
+      },
+      "selector": {
+        "maxLength": 2048,
+        "type": "string"
+      },
+      "tabId": {
+        "type": "string"
+      },
+      "text": {
+        "maxLength": 20000,
+        "type": "string"
+      }
+    },
+    "required": [
+      "tabId",
+      "text"
+    ],
+    "additionalProperties": false
+  },
+  "page_upload": {
+    "type": "object",
+    "properties": {
+      "changes": {
+        "type": "boolean"
+      },
+      "paths": {
+        "items": {
+          "maxLength": 4096,
+          "type": "string"
+        },
+        "maxItems": 8,
+        "minItems": 1,
+        "type": "array"
+      },
+      "ref": {
+        "maxLength": 100,
+        "type": "string"
+      },
+      "selector": {
+        "maxLength": 2048,
+        "type": "string"
+      },
+      "tabId": {
+        "type": "string"
+      },
+      "x": {
+        "type": "number"
+      },
+      "y": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "tabId",
+      "paths"
+    ],
+    "additionalProperties": false
+  },
+  "page_wait": {
+    "type": "object",
+    "properties": {
+      "selector": {
+        "maxLength": 2048,
+        "type": "string"
+      },
+      "state": {
+        "enum": [
+          "visible",
+          "hidden",
+          "attached",
+          "detached"
+        ],
+        "type": "string"
+      },
+      "tabId": {
+        "type": "string"
+      },
+      "text": {
+        "maxLength": 20000,
+        "type": "string"
+      },
+      "timeoutMs": {
+        "maximum": 10000,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "url": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "tabId"
+    ],
+    "additionalProperties": false
+  },
+  "site_notes": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "enum": [
+          "get",
+          "set",
+          "append",
+          "delete",
+          "list"
+        ],
+        "type": "string"
+      },
+      "site": {
+        "type": "string"
+      },
+      "tabId": {
+        "type": "string"
+      },
+      "text": {
+        "maxLength": 20000,
+        "type": "string"
+      }
+    },
+    "required": [
+      "action"
+    ],
+    "additionalProperties": false
+  },
+  "tab_close": {
+    "type": "object",
+    "properties": {
+      "tabId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "tabId"
+    ],
+    "additionalProperties": false
+  },
+  "tab_move": {
+    "type": "object",
+    "properties": {
+      "after": {
+        "type": "string"
+      },
+      "folder": {
+        "type": "string"
+      },
+      "section": {
+        "enum": [
+          "favorites",
+          "pinned",
+          "today"
+        ],
+        "type": "string"
+      },
+      "space": {
+        "type": "string"
+      },
+      "tabId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "tabId"
+    ],
+    "additionalProperties": false
+  },
+  "tab_open": {
+    "type": "object",
+    "properties": {
+      "activate": {
+        "type": "boolean"
+      },
+      "select": {
+        "type": "boolean"
+      },
+      "space": {
+        "type": "string"
+      },
+      "url": {
+        "type": "string"
+      },
+      "windowless": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "url"
+    ],
+    "additionalProperties": false
+  },
+  "tab_show": {
+    "type": "object",
+    "properties": {
+      "activate": {
+        "type": "boolean"
+      },
+      "tabId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "tabId"
+    ],
+    "additionalProperties": false
+  },
+  "tab_update": {
+    "type": "object",
+    "properties": {
+      "muted": {
+        "type": "boolean"
+      },
+      "sleep": {
+        "type": "boolean"
+      },
+      "tabId": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "tabId"
+    ],
+    "additionalProperties": false
+  },
+  "tabs_list": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  }
+}

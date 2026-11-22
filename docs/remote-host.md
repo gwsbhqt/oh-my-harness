@@ -20,7 +20,7 @@ result = await skills.remote_host.run(
 )
 ```
 
-检查 `result.code`、`result.out` 和 `result.err`。退出码为零只证明这条命令成功，不证明目标上的后续操作。机器固定设置可以保留默认目标、解释器和工作目录，但每个工具独立保存选机结果。这里选中目标，不会替 browser-use 或 computer-use 选目标。
+检查 `result.code`、`result.out` 和 `result.err`。退出码为零只证明这条命令成功，不证明目标上的后续操作。机器固定设置可以保留默认目标、解释器和工作目录，但每个工具独立保存选机结果。computer-use 单独选择主机，browser-use 单独选择浏览器与调试地址。
 
 ## 选择合适的执行方式
 
@@ -34,7 +34,7 @@ result = await skills.remote_host.run(
 
 写操作超时或连接断开时，远程结果可能未知。重试前检查目标或已记录任务。Python 结果通过 `remote_unknown` 和 `outcome` 表达这个区别。停止本地连接不能证明远程工作已停止。
 
-Unix 目标需要具备所选操作要求的解释器和工具。Windows SSH 支持仅限明确的 PowerShell 脚本执行，不提供 Windows 桌面或浏览器控制。原生应用与浏览器功能还要求目标上有对应工具。缺命令会报错，不会退回本机或自动安装。
+Unix 目标需要具备所选操作要求的解释器和工具。Windows SSH 支持仅限明确的 PowerShell 脚本执行，不提供 Windows 桌面或浏览器控制。远程原生应用操作还要求目标上有对应的桌面工具。缺命令会报错，不会退回本机或自动安装。
 
 脚本以已认证账号的真实权限运行。受信任的 Python 环境也不是沙箱。DSH 工具审批约束工具调用，不能约束 Python 直接访问文件、网络或进程。修改前检查解析后的路径，验证结果时考虑软链接。
 

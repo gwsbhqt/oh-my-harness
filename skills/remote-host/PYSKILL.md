@@ -156,7 +156,7 @@ verified.ok, verified.code, manifest.ok, manifest.code
 
 机器的认证方式、登录 shell、跳转和代理按用户自己的 SSH 配置读取。Kerberos 目标需要有效票据；SSH 库不能替代真实 SSH 的系统认证。目标的登录权限和解释器必须实际核对，工具不安装或升级远端软件。环境与代理说明见 [主机与代理](references/hosts-and-proxy.md)。
 
-载荷依赖读 [第三方库](references/payload-libraries.md)，实现维护读 [维护说明](references/maintaining.md)，传输与远程产物限制读 [共用远程边界](references/transport.md)。其他技能的浏览器、桌面、代理与 DSH 控制能力优先走各自正式入口，并显式选同一机器，见 [共用远程与收尾](references/common.md#共用远程与收尾)。
+载荷依赖读 [第三方库](references/payload-libraries.md)，实现维护读 [维护说明](references/maintaining.md)，传输与远程产物限制读 [共用远程边界](references/transport.md)。桌面、代理和 DSH 控制能力用各自技能的正式入口，并明确选择机器。browser-use 另行选择 Cra 或 Chrome，Chrome 通过指定调试地址选择实例。见[共用远程与收尾](references/common.md#共用远程与收尾)。
 
 ## 收尾与未知结果
 

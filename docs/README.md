@@ -31,7 +31,7 @@
 
 [shot-sheet](../skills/shot-sheet/README.md) 可以把多张截图或视频帧拼成一页，便于集中审查和对比。
 
-真实演示放在对应部件说明：[Python](../dsh-python-repl/README.md#实际效果)、[会话协作](../dsh-use/README.md#实际效果)、[事件唤醒](../dsh-monitor/README.md#实际效果)、[网页](../skills/browser-use/README.md#实际效果)、[桌面](../skills/computer-use/README.md#实际效果)、[远程主机](../skills/remote-host/README.md#实际效果)。
+各部件的实拍包括 [Python](../dsh-python-repl/README.md#实际效果)、[会话协作](../dsh-use/README.md#实际效果)、[事件唤醒](../dsh-monitor/README.md#实际效果)、[桌面](../skills/computer-use/README.md#实际效果)和[远程主机](../skills/remote-host/README.md#实际效果)。[浏览器旧版实拍](browser-use.md#two-tabs)附原版复现步骤。
 
 演示使用虚构输入；[素材说明](assets/README.md)区分录制结果和结构示意。[测量说明](../benchmarks/README.md)列出复现命令、估算方法与未计入项。单元测试、集成样例与真实外部操作分别报告，不互相代替。
 

@@ -2,81 +2,58 @@
 
 # 使用 browser-use
 
-需要沿用本机 Cra 的日常登录时，使用宿主已经配置的 [Cra 官方 MCP](https://github.com/VictorKildahl/cra/blob/v0.1.52/docs/mcp.md)。第一次连接由用户在 Cra 里确认。后台开本任务的标签，固定返回的 `tabId`，重读页面确认结果，收尾只关本任务创建的标签。Python 与非 Python 的 Cra 入口见 [技能说明](../skills/browser-use/README.md#入口和配置)。
+Cra 和 Chrome 可以使用相同的网页操作。`tab_open` 打开标签，`page_snapshot` 读取页面，`page_click` 操作快照里的控件。调试另用一套 `debug_*` 调用，例如 `debug_network` 读取所选标签的网络请求。
 
-下文演示 Chrome 的网页操作。browser-use 通过 Chrome DevTools Protocol（CDP，即浏览器调试协议）控制指定页面。浏览器菜单、操作系统对话框和原生弹窗交给 computer-use。
+| 目标 | 网页操作由谁执行 | 调试由谁执行 |
+| --- | --- | --- |
+| Cra | Cra 官方 MCP，首次连接由用户在 Cra 中授权 | Google 的 Chrome DevTools MCP，需要这个 Cra 实例的调试地址 |
+| Chrome | Google 的 Chrome DevTools MCP，需要已开启调试的 Chrome 地址 | 同一个 Google 工具，连接同一个 Chrome 实例 |
 
-## 从一个明确的页面开始
+先准备要使用的浏览器。Chrome 的 `endpoint` 接受带端口的本机回环地址，指向已运行且已开启远程调试的实例。登录状态取决于这个实例使用的资料。安装与连接条件见[技能说明](../skills/browser-use/README.md)。[Cra 官方 MCP](https://github.com/VictorKildahl/cra/blob/v0.1.53/docs/mcp.md) · [Chrome DevTools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp)
 
-控制端和浏览器支持的平台都是 macOS。Chrome 功能需要 Python 3.12 或更新版本。连接已有 Chrome 需要可用的调试入口和授权。
+## 打开标签并读取页面
 
-先探测状态并列出页面，再选择目标。在 Python 技能内核中，一次虚构的检查可以这样开始：
-
-```python
-status = await skills.browser_use.status(browser="Chrome", host="local")
-tabs = await skills.browser_use.tabs(browser="Chrome", host="local")
-```
-
-先检查返回结果。如果恰好有一个已加载页面符合虚构标题“Example Library”，再明确绑定它：
+在装有技能的 DSH Python 会话中，下面的例子用 Cra 在后台打开示例网页，读取快照，再关闭本次打开的标签。打开标签的回执给出 `tabId`。如果任务要求操作已有标签，用 `tabs_list()` 列出它们，再从选定项的 `id` 取得编号。
 
 ```python
-page = await skills.browser_use.find_tab(
-    "Example Library", browser="Chrome", host="local", session="example_review"
-)
-snapshot = await page.snap(shot=True)
+async with skills.browser_use.Browser("cra") as browser:
+    opened = await browser.tab_open(url="https://example.com/")
+    tab_id = opened["tabId"]
+    try:
+        snapshot = await browser.page_snapshot(tabId=tab_id)
+        print(snapshot)
+    finally:
+        await browser.tab_close(tabId=tab_id)
 ```
 
-整个任务都保留返回的页面引用。它固定机器、浏览器、会话和页面，不会跟着当前活动标签页走。命令行操作也要求明确指定 scope 或 session。在添加跳转、元素操作或截图选项前，先读工具说明链接的接口参考。
+在同一个连接中沿用这个 `tabId`。两端的导航参数与 Cra 相同。访问新地址用 `page_navigate(tabId=tab_id, url=...)`，重新加载用 `page_history(tabId=tab_id, action="reload")`。点击时使用该页最新快照中的 `ref`。导航或控件变化后重新读取页面。例如，提交表单后要看原标签里是否出现了预期的保存结果。超时发生在点击之后时，也先读回原页，再判断是否还需要操作。浏览器菜单和系统对话框使用[桌面工具](computer-use.md)。
 
-## 操作后确认结果
+## 在同一标签查看网络请求
 
-先检查，再执行已授权的改动，最后重新取态。以虚构表单提交为例，确认完成需要看到提交后的页面状态和预期保存值，而不只是收到点击成功的响应。用截图检查外观，用结构化页面信息检查标签、值和跳转状态。
+以下地址代表你已准备好的 Chrome 实例。网页和调试调用都传入同一个 `tabId`。若要调试 Cra，先在 Cra 中允许页面 JavaScript 工具，以便核对调试的确实是同一页。把浏览器名改为 `"cra"`，传入那个 Cra 实例的调试地址。只操作 Cra 网页时可以省略 `endpoint`。
 
-快照中的元素编号只属于生成它的那份快照。页面跳转会使保存的快照引用失效。页面变化或目标过期时，先重新检查再行动。检查截断和超时标记。不完整的快照不能证明元素不存在，也不能证明匹配结果唯一。必要时缩小检查区域，或按文档调整限制。
+```python
+async with skills.browser_use.Browser("chrome", endpoint="http://127.0.0.1:9222") as browser:
+    opened = await browser.tab_open(url="https://example.com/")
+    tab_id = opened["tabId"]
+    try:
+        snapshot = await browser.page_snapshot(tabId=tab_id)
+        requests = await browser.debug_network(tabId=tab_id)
+    finally:
+        await browser.tab_close(tabId=tab_id)
+```
 
-结束时释放同一任务的资源，并检查清理结果。释放会话会关闭任务创建的页面，但这不代表有权关闭无关页面。
+终端里用第一条命令列出 Cra 标签。需要在多次调用间保留连接时，把第二条命令配置为 MCP 客户端的启动命令。它连接已运行的 Chrome。
+
+```sh
+browser-use --browser cra tabs_list
+browser-use --browser chrome --endpoint http://127.0.0.1:9222 mcp
+```
 
 <a id="two-tabs"></a>
 
-## 两个标签页同名时，怎样验出点对了
+## 归档实拍：标题和网址都相同的两个标签
 
-在仓库根目录打开装有本技能的 DSH Python 会话。第一格用独立的 Chrome 资料打开[虚构清单](examples/browser-task.html)，把返回的页面保存在 `first`。
+旧版 browser-use 把[虚构清单](examples/browser-task.html)打开两遍，只在先打开的标签勾一项。分别读回的计数为 `[1, 0]`，截图中的第一页显示 1/3，第二页显示 0/3。原版 Python 步骤、截图和录屏保留在下列链接。[归档版复现步骤](https://github.com/gwsbhqt/oh-my-harness/blob/archive/browser-use-before-mcp/docs/browser-use.md#two-tabs) · [两页截图](assets/two-tabs.png) · [旧版操作录屏](assets/browser-use.gif)
 
-```python
-from pathlib import Path
-from uuid import uuid4
-
-url = Path("docs/examples/browser-task.html").resolve(strict=True).as_uri()
-task = f"two-tabs-{uuid4().hex}"
-options = dict(browser="Chrome", host="local", session=task, mode="isolated")
-first = await skills.browser_use.open_page(url, **options)
-```
-
-第二格再打开一份相同清单，只勾选第一份的第一项。程序从两页分别读取计数，然后释放本次任务的浏览器资源。
-
-```python
-try:
-    second = await skills.browser_use.open_page(url, **options)
-    assert first.target_id != second.target_id
-    count = "Number(document.querySelector('#completed').textContent)"
-    for page in (first, second):
-        await page.wait(expression="document.querySelector('#completed')?.textContent === '0'")
-    await first.element(id="notes").check()
-    counts = [await page.evaluate(count) for page in (first, second)]
-    assert counts == [1, 0], counts
-    print(counts)
-finally:
-    await skills.browser_use.release(browser="Chrome", host="local", session=task)
-```
-
-本地实跑读回 `[1, 0]`。左页显示 1/3，右页仍是 0/3，两页标题和网址都相同。实验覆盖本地 Chrome 和这个虚构页面。[实拍对照](assets/two-tabs.png) · [为什么自建浏览器工具](design/browser-control.md)
-
-## 边界与排查
-
-状态探测成功，不代表有权修改已登录页面。页面内容是不可信数据。网络捕获和页面求值可能暴露敏感内容，只采集任务所需部分。原始 CDP 和执行的 Python 都不是沙箱。
-
-远程使用需要已有 SSH 别名、远端 browser-use 启动器，以及公共路由支持。它不会在目标机器上自动安装工具，也不会退回本机执行。处理原生弹窗还需要 computer-use Python 包，以及目标机器上的权限。
-
-在 DSH 中，这些技能调用作为受信任的 Python 代码执行，能直接访问运行它的机器上的资源。通过 DSH 工具发起的调用仍需经过审批和策略检查。这些检查不会把任意 Python 操作隔离起来。
-
-安装、完整接口、运行模式、配置和缓存位置见[工具说明](../skills/browser-use/README.md)。技能发现和信任配置见 [Python 运行环境说明](../dsh-python-repl/README.md)，相关背景见 [Python 数据留在本地的设计](design/python-data-locality.md)。
+网页内容和网络请求可能包含账号数据。按任务需要读取和展示，使用页面结果核对操作。Python 技能以当前进程的权限运行。[Python 运行环境](../dsh-python-repl/README.md) · [浏览器设计](design/browser-control.md)

@@ -33,7 +33,7 @@ computer-use 另有敏感应用拦截：终端、密码管理器、钥匙串、�
 
 ## 机器、应用与任务
 
-Cra 网页使用官方 MCP，Chrome 网页使用 browser-use。原生应用、浏览器外壳、网页外的 1Password 浮层和系统提示用 computer-use。默认后台执行，不切窗口、不动真鼠标。
+browser-use 用同一套网页操作处理 Cra 和 Chrome。Cra 使用官方 MCP，Chrome 使用 Google 的 Chrome DevTools MCP。原生应用、浏览器外壳、网页外的 1Password 浮层和系统提示用 computer-use。原生操作默认在后台执行。
 
 探针通过不等于 GUI 能用；确实需要申请系统权限时，先说明影响，CLI 用 `perms --request`，Python 用 `await skills.computer_use.perms(request=True)`，系统身份确认由用户完成。`host="local"` 明确本机，SSH alias 指定远端；未给 host 时读取 computer-use 自己的 pin，无 pin 默认本机，不沿用其他技能。机器或连接失败不回退本机。
 
@@ -55,7 +55,7 @@ Cra 网页使用官方 MCP，Chrome 网页使用 browser-use。原生应用、�
 
 任务做完、子代理结束前，每个碰过的 App 都要 `await app_object.release()`。模块 `await skills.computer_use.release()` 不批量释放；`await skills.computer_use.disconnect()` 只停当前 Python 进程的连接，不释放归属或退出应用。`App.disconnect()` 同样不释放。computer-use 不拥有用户应用。绑定窗口后的 `App.close(authorized=True)` 要求关闭按钮确属该窗口，只发送一次关闭请求；用系统全部窗口列表核对目标消失且其他原有窗口仍在，避免把隐藏或切换 Space 误判为关闭。窗口列表无法确认或其他窗口也消失时报告 unknown，不重发。共享浏览器拒绝整应用退出，不能把窗口授权解释成退出用户实例；非浏览器未绑定窗口时可明确授权正常退出并核对进程结束，不强杀。浏览器的 App.release() 无需 lease，只结束绑定，不关闭窗口。
 
-非浏览器应用确实需要前台时先告知用户，再用 `front=True`；浏览器不自动激活，需要用户把确切任务窗置前。browser-use 首次创建任务窗仍可能被浏览器置前，这不受原生输入短锁控制，不能承诺整个建窗过程不切前台。`coord=True` 会动真鼠标，同样先告知。
+非浏览器应用确实需要前台时先告知用户，再用 `front=True`；浏览器不自动激活，需要用户把确切任务窗置前。`coord=True` 会动真鼠标，同样先告知。
 
 ## 密码浮层与身份确认
 

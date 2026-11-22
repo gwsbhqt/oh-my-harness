@@ -37,7 +37,7 @@
 - 上面跑普通 HTTP：`GET /v1/health`、`GET /v1/commands`、`POST /v1/run {command,args,options}`。
   排查可以直接 `curl --unix-socket ~/.dsh/dsh-use/dsh.sock http://x/v1/health`。
 - 每次调用记一行到 `$DSH_HOME/dsh-use/audit.log`（时间、命令、成功与否、耗时；不记消息正文）。
-- 不对网络开放。跨机器由命令入口通过可选共享库 `agentkit/remote/` 里与 remote-host、computer-use、browser-use 共用的 SSH 代码，在远端运行 dsh-use；不新增网络通信口或令牌。`-H` 单次选机器，`use` / `pin` 记住 dsh-use 自己的默认机器，`use local` / `use --clear` 恢复本机。
+- 不对网络开放。跨机器由命令入口通过可选共享库 `agentkit/remote/` 里与 remote-host、computer-use 共用的 SSH 代码，在远端运行 dsh-use；不新增网络通信口或令牌。`-H` 单次选机器，`use` / `pin` 记住 dsh-use 自己的默认机器，`use local` / `use --clear` 恢复本机。
 
 ## 命令
 

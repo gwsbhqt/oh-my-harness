@@ -38,10 +38,10 @@ flowchart TB
 | 会话与模型 | DSH 的执行循环、模型连接、目标和任务服务 | 扩展宿主能力，并保持它的调用归属。 |
 | Python 执行 | Prime 的持久执行与快照核心 | 接入 DSH、每格工具授权、后台任务、恢复报告、技能加载和展示预算。 |
 | 多会话协作 | DSH 的会话与子代理服务 | 控制运行中实例、保存回执、观察停止状态、通知与独立验收流程。 |
-| 设备操作 | 浏览器调试接口、macOS 辅助功能、OpenSSH | 固定目标、调用入口、错误与结果核对。 |
+| 设备操作 | Cra 官方 MCP、Google 的 Chrome DevTools MCP、macOS 辅助功能、OpenSSH | 两个浏览器共用的网页操作和调试接口、窗口与主机选择、结果核对。 |
 | 长任务上下文 | DSH 的消息和压缩机制 | 用户原话附录、长度预算、消息整理和输出防护。 |
 
-DSH 已经可以让模型在一段程序里调用多个工具。这个项目沿用 DSH 的工具入口，接入 Prime 的 Python 执行与快照代码，同一会话下一段程序可以继续用刚才的变量。具体到浏览器，变量可以指向先打开的那个标签页，即使两页的网址和标题都一样。换到 Mac 应用，技能还要确认接收输入的进程和窗口。[内核如何分工](design/python-data-locality.md) · [两页同名的实验](browser-use.md#two-tabs) · [输入怎样送到指定窗口](design/desktop-control.md) · [Prime 来源和哈希](../dsh-python-repl/vendor/PROVENANCE.md)
+DSH 已经可以让模型在一段程序里调用多个工具。这个项目沿用 DSH 的工具入口，接入 Prime 的 Python 执行与快照代码，同一会话下一段程序可以继续用刚才的变量。具体到浏览器，变量可以指向先打开的那个标签页，即使两页的网址和标题都一样。换到 Mac 应用，技能还要确认接收输入的进程和窗口。[内核如何分工](design/python-data-locality.md) · [旧版同名标签实拍](browser-use.md#two-tabs) · [输入怎样送到指定窗口](design/desktop-control.md) · [Prime 来源和哈希](../dsh-python-repl/vendor/PROVENANCE.md)
 
 ## 跟着一份结果走
 
@@ -79,7 +79,7 @@ oh-my-harness/
 | Python 内核的启动、恢复与回收 | [session.ts](../dsh-python-repl/src/session.ts) |
 | 每格工具权限何时有效 | [lease.ts](../dsh-python-repl/src/lease.ts) · [后台工具](../dsh-python-repl/src/background-tools.ts) |
 | 派单、状态判断和停止条件 | [service.ts](../dsh-use/src/service.ts) · [完成通知](../dsh-use/src/done-watch.ts) |
-| 浏览器动作与目标 | [engine.py](../skills/browser-use/src/browser_use/engine.py) · [客户端回执](../skills/browser-use/src/browser_use/client.py) |
+| 浏览器网页操作与调试 | [Python 接口](../skills/browser-use/src/browser_use/__init__.py) · [选择浏览器与标签](browser-use.md) |
 | 原生桌面操作 | [computer-use.swift](../skills/computer-use/bin/computer-use.swift) |
 | 远程选择与能力检查 | [target.py](../skills/_shared/agentkit/remote/target.py) |
 | 压缩后的用户原话附录 | [summary.ts](../dsh-compaction-bound/src/summary.ts) |

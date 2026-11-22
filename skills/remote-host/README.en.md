@@ -46,7 +46,7 @@ Optional network labels are read from `${XDG_CONFIG_HOME:-~/.config}/remote-host
 
 `REMOTE_HOST_PROXY=host:port` overrides the child-process proxy address. Direct proxy borrowing needs a destination that can reach the calling machine. `reverse_proxy` instead creates a private, temporary SSH forwarding connection to an explicitly selected alias; it requires suitable remote `sh` and `lsof` support and does not change the user's SSH configuration or start a proxy service. Read [host and proxy behavior](references/hosts-and-proxy.md) and the [CLI reference](references/cli.md).
 
-SSH destinations must already have the required command or interpreter. Native desktop/browser features additionally require their named tool and `_shared` support on the destination. Missing commands fail; there is no fallback to this machine and no automatic tool installation.
+SSH destinations must already have the required command or interpreter. Remote native desktop control also requires computer-use and its dependencies on the destination. Missing commands fail; there is no fallback to this machine and no automatic tool installation.
 
 ## Safety and development
 

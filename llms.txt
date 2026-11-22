@@ -28,7 +28,7 @@ The Chinese README is the primary, default documentation; the paired English doc
 - [Message tidy](docs/dsh-message-tidy.en.md): Instruction diffs and provenance-aware notices.
 - [Image cap](docs/dsh-image-cap.en.md): Request image limits and resizing constraints.
 - [History cap](docs/dsh-history-cap.en.md): UI history pagination, not model token limits.
-- [Browser control](docs/browser-use.en.md): Explicit CDP pages and cooperative task ownership.
+- [Browser control](docs/browser-use.en.md) covers shared page and debugging APIs for Cra and Chrome, with an explicit tab ID.
 - [Computer control](docs/computer-use.en.md): Native macOS targets, input, and result inspection.
 - [Remote host](docs/remote-host.en.md): Real SSH destinations and content verification.
 
@@ -40,7 +40,7 @@ The Chinese README is the primary, default documentation; the paired English doc
 ## Design and evidence
 
 - [Python on DSH](docs/design/python-data-locality.en.md) explains how programmatic tool calling, Prime Agent’s execution core, and the DSH bridge fit together.
-- [Choosing a browser tool](docs/design/browser-control.en.md) compares ways to control an exact tab and includes a two-tab readback.
+- [Choosing a browser tool](docs/design/browser-control.en.md) explains how Cra and Chrome target a tab and links the archived two-tab experiment.
 - [Choosing a Mac desktop tool](docs/design/desktop-control.en.md) compares screen-driven interaction with addressing a native window.
 - [Three generations of compaction](docs/design/three-generations-of-compaction.en.md): Historical choices and the current bounded host extension.
 - [Controller and worker](docs/design/controller-worker.en.md): Receipts, observation, and independent acceptance.

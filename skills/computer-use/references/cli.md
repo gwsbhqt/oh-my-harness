@@ -65,7 +65,7 @@ computer-use --local owner 计算器 release --scope task-a --lease LEASE --json
 | `winmove <app> X,Y` / `winsize <app> 宽,高` | 移动 / 调整窗口（后台生效） |
 | `shot <app>` | 只截图，返回文件路径 |
 | `open <名字>` | 启动应用（中文名、英文名、bundle id、`.app` 路径都认；默认后台，`--front` 才抢焦点） |
-| `webmode <app>` | 让 Chrome / Electron 把网页内容交给辅助功能。`snap` 会为支持该模式的应用自动开启，`--off` 可关闭。Cra 网页使用官方 MCP |
+| `webmode <app>` | 让 Chrome / Electron 把网页内容交给辅助功能。`snap` 会为支持该模式的应用自动开启，`--off` 可关闭。Cra 和 Chrome 网页使用 browser-use |
 | `perms` | 查权限与投递通道：辅助功能 / 事件合成 / 截图 / 权限归属进程 |
 | `wake [--hold 秒] [--input none\|space\|return\|escape]` | 正常唤醒显示器并核对桌面状态；只做公开电源活动声明和非文本系统输入，不输密码、不改锁屏设置。`state=desktop` 才能继续，`loginwindow` 表示需要身份验证 |
 
@@ -117,4 +117,4 @@ JSON `snap` / `diff` 返回 `snapshot` 凭证，并报告 `truncated`、`timedOu
 
 文本用 `--` 分隔并原样放后面，例如 `computer-use type Finder --scope task-a --json -- --json`；换行须 `--allow-newline`。编号操作用 `--snapshot TOKEN`，TOKEN 来自刚才完整取态。只有明确需要前台时先告知再 `--front`；`--coord` 会动真鼠标也先告知。排障见 [权限与故障](troubleshooting.md)。
 
-`approve-debug "Google Chrome" [--watch 秒]` 只在 Chrome 的远程调试授权窗已经在前台时点击唯一的允许按钮。框消失后由 browser-use 核对连接。Cra 的首次 MCP 权限请用户按官方 MCP 提示处理。
+`approve-debug "Google Chrome" [--watch 秒]` 是独立的原生授权框命令。它只在 Chrome 远程调试授权窗已在前台时点击唯一的允许按钮。框消失后需从所选调试地址另行核对连接。Cra 的首次 MCP 权限由用户在 Cra 中确认。

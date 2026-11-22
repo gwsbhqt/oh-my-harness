@@ -46,7 +46,7 @@ result = await skills.remote_host.run("uname -a", host="alpha", quiet=True)
 
 `REMOTE_HOST_PROXY=host:port` 覆盖子进程的代理地址。直接借用代理时，目标机需要能连接调用端机器。`reverse_proxy` 则向明确选定的别名建立私有、临时的 SSH 转发连接；远端需要相应的 `sh` 和 `lsof` 支持。它不改用户的 SSH 配置，也不启动代理服务。详见[主机和代理行为](references/hosts-and-proxy.md)与[命令行参考](references/cli.md)。
 
-SSH 目标必须已经装好所需命令或解释器。原生桌面和浏览器功能还要求目标端具备相应工具及 `_shared` 支持。缺命令就失败；不退回本机，也不自动安装工具。
+SSH 目标必须已经装好所需命令或解释器。远程原生桌面操作还要求目标端安装 computer-use 及其依赖。缺命令就失败；不退回本机，也不自动安装工具。
 
 ## 安全和开发
 

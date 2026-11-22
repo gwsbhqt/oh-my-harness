@@ -4,15 +4,15 @@
 
 [← oh-my-harness](../../README.en.md#components)
 
-**In short:** Shared library behind browser-use, computer-use, and remote-host: connections and target-machine handling. Not used on its own.
+The native desktop and remote tools use this library for connections and target-machine selection.
 
-Internal Python support for the sibling browser, native-desktop and SSH tools. This directory is a library, not an agent skill: do not expose it as a callable skill or install a global compatibility alias.
+Internal Python support for the native desktop and SSH tools. Use this library through its consumers. Keep it out of the callable agent skill list and avoid global compatibility aliases.
 
 ## Layout and dependencies
 
-Keep `_shared` beside `browser-use`, `computer-use` and `remote-host` for source use. Consumers locate it relative to their own source. Their installation builds bundle the required library code, so installed command line packages do not need a separate global `agentkit` installation.
+Keep `_shared` beside `computer-use` and `remote-host` for source use. Consumers locate it relative to their own source. Their installation builds bundle the required library code, so installed command line packages do not need a separate global `agentkit` installation.
 
-The implementation uses the Python standard library. The supported calling platform is macOS; SSH payloads may run on compatible Unix destinations. Native UI adaptation requires macOS and the native companion's own permissions. A browser consumer additionally has its declared CDP dependencies.
+The implementation uses the Python standard library. The supported calling platform is macOS; SSH payloads may run on compatible Unix destinations. Native UI adaptation requires macOS and the native companion's own permissions.
 
 - `agentkit.cli` adapts explicitly exported Python functions into CLI actions, validates arguments, awaits asynchronous work, and preserves nonzero failures and structured output.
 - `agentkit.remote` provides explicit/per-tool target selection, SSH configuration and transport, reachability diagnostics, proxy forwarding, artifact transfer, and notification support.

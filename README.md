@@ -26,7 +26,7 @@
 | --- | --- | --- |
 | 分析大批文件、日志或工具结果 | [持久 Python](dsh-python-repl/README.md) | 数据留在变量里，下一步接着算，对话只放必要证据。 |
 | 让多个会话分工做长任务 | [会话控制](dsh-use/README.md) | 派发有回执，完成后通知主控，主控再验收。 |
-| 让 Agent 动手操作电脑 | [浏览器](skills/browser-use/README.md) · [桌面](skills/computer-use/README.md) · [SSH](skills/remote-host/README.md) | 操作绑定到明确的页面、窗口或远程主机，并读回结果。 |
+| 让 Agent 动手操作电脑 | [浏览器](skills/browser-use/README.md) · [桌面](skills/computer-use/README.md) · [SSH](skills/remote-host/README.md) | Cra 和 Chrome 共用网页操作和调试接口。桌面操作选定窗口，SSH 操作选定主机。 |
 
 上下文整理、事件监听、输出防护和界面扩展，按问题查[完整部件目录](docs/components.md)。各部件独立选择，安装步骤留在各自说明中。
 
@@ -36,12 +36,12 @@
 
 ![真实终端输出与 DSH 会话节选：同一份虚构日志的两种返回方式](docs/assets/python-data-locality.gif)
 
-这是录制结果的节选。文本量测量使用固定虚构输入，不代表模型账单或整体速度。[复现方法](benchmarks/README.md) · [派活与验收演示](dsh-use/README.md#实际效果) · [操作浏览器演示](skills/browser-use/README.md#实际效果)
+这是录制结果的节选。文本量测量使用固定虚构输入，不代表模型账单或整体速度。[复现方法](benchmarks/README.md) · [派活与验收演示](dsh-use/README.md#实际效果) · [旧版浏览器实拍](docs/browser-use.md#two-tabs)
 
 ## 值得研究什么
 
 - DSH 已经能让模型写程序调用工具，为什么还接入了 Prime Agent 的 Python 内核？[从一次统计说起](docs/design/python-data-locality.md)
-- 两个标签页同名，两个窗口也可能同名。已有 Agent 怎样找到指定的那个？[为什么自建浏览器工具](docs/design/browser-control.md) · [为什么自建 Mac 桌面工具](docs/design/desktop-control.md)
+- 两个标签页同名，两个窗口也可能同名。已有 Agent 怎样找到指定的那个？[Cra 和 Chrome 怎样选定标签页](docs/design/browser-control.md) · [为什么自建 Mac 桌面工具](docs/design/desktop-control.md)
 - **任务交接有依据。** 发送回执、执行状态、结果验收分别记录；等待交给后台通知。[设计](docs/design/controller-worker.md)
 - **长任务能收口。** 上下文有预算，压缩保留用户原话，失控输出能被拦下。[设计](docs/design/three-generations-of-compaction.md)
 

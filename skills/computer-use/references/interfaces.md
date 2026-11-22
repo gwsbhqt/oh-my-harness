@@ -4,7 +4,7 @@
 
 ## 选择机器
 
-`computer-use`、`remote-host`、`dsh-use` 和 `browser-use` 共用同一份选机和 SSH 代码（`_shared/agentkit/remote/`），但各自保存默认目标。
+`computer-use`、`remote-host` 和 `dsh-use` 共用 `_shared/agentkit/remote/` 的选机和 SSH 代码，各自保存默认目标。browser-use 单独选择浏览器及调试地址。
 `computer-use` 未设置默认目标时操作本机；不是沿用 `remote-host` 的默认机器。
 
 ```bash
@@ -141,4 +141,4 @@ Python `App.owner()` 查询，`claim()` 明确重新取得，`release()` 释放�
 
 ### Chrome 远程调试授权
 
-browser-use 连接日常 Chrome 时调用 `approve_chrome_debugging(app_name="Google Chrome", watch=30)`。工具验证应用标识为 `com.google.Chrome`，只处理带远程调试字样、唯一允许按钮和可靠窗口引用的确认框。`on_ready` 在开始观察前调用，命令行在 stderr 输出 `approve-debug ready`。Cra 的首次 MCP 权限请用户按官方 MCP 提示处理。点击前重新读取同一窗口并核对语义，短保护中要求确切前台窗口，不自动激活或恢复桌面、最小化状态。窗口不在前台时返回 not_sent，需要人工置前；发出后状态改变或框不消失返回 unknown，不重发。原确认框消失返回 approved=true、connectionVerified=false，连接成功必须由 browser-use 独立核对。没有弹框返回 approved=false；其他弹框不处理。
+独立处理 Chrome 原生调试授权框时，可显式调用 `approve_chrome_debugging(app_name="Google Chrome", watch=30)`。工具验证应用标识为 `com.google.Chrome`，只处理带远程调试字样、唯一允许按钮和可靠窗口引用的确认框。`on_ready` 在开始观察前调用，命令行在 stderr 输出 `approve-debug ready`。Cra 的首次 MCP 权限请用户按官方 MCP 提示处理。点击前重新读取同一窗口并核对语义，短保护中要求确切前台窗口，不自动激活或恢复桌面、最小化状态。窗口不在前台时返回 not_sent，需要人工置前；发出后状态改变或框不消失返回 unknown，不重发。原确认框消失返回 approved=true、connectionVerified=false，连接成功要从所选调试地址另行核对。没有弹框返回 approved=false；其他弹框不处理。

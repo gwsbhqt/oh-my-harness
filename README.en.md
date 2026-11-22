@@ -26,7 +26,7 @@ An independently maintained **collection of DSH extensions and a harness worksho
 | --- | --- | --- |
 | Analyze many files, logs, or tool results | [Persistent Python](dsh-python-repl/README.en.md) | Keep data in variables, reuse it in the next step, and display the evidence needed. |
 | Share a long task across sessions | [Session control](dsh-use/README.en.md) | Dispatch with receipts, notify the lead when work settles, then review the result. |
-| Let an agent operate a computer | [Browser](skills/browser-use/README.en.md) · [Desktop](skills/computer-use/README.en.md) · [SSH](skills/remote-host/README.en.md) | Bind actions to a specific page, window, or remote host and read back the outcome. |
+| Let an agent operate a computer | [Browser](skills/browser-use/README.en.md) · [Desktop](skills/computer-use/README.en.md) · [SSH](skills/remote-host/README.en.md) | Cra and Chrome share page and debugging APIs. Desktop actions target a window and SSH actions target a host. |
 
 Find context helpers, background events, output guards, and UI extensions in the [component catalog](docs/components.en.md). Choose components individually; each README owns its installation steps.
 
@@ -36,12 +36,12 @@ The same fictional log, returned two ways: display all the text on the left; agg
 
 ![Excerpts of real terminal output and a DSH session returning the same fictional log in two ways](docs/assets/python-data-locality.gif)
 
-Excerpts from recorded results. Text-size measurements use fixed fictional input; they do not measure model bills or overall speed. [Reproduce it](benchmarks/README.en.md) · [Dispatch and review demo](dsh-use/README.en.md#see-it-work) · [Browser demo](skills/browser-use/README.en.md#see-it-work)
+Excerpts from recorded results. The text-size measurements use fixed fictional input and exclude model bills and overall speed. [Reproduce it](benchmarks/README.en.md) · [Dispatch and review demo](dsh-use/README.en.md#see-it-work) · [Archived browser demo](docs/browser-use.en.md#two-tabs)
 
 ## What is worth exploring
 
 - DSH can already call tools from code. What made Prime Agent’s Python kernel worth integrating? [Follow a result across two cells](docs/design/python-data-locality.en.md).
-- Two tabs or windows can have the same title. How does an agent act on the one its user picked? [Why build a browser tool?](docs/design/browser-control.en.md) · [Why build a Mac desktop tool?](docs/design/desktop-control.en.md)
+- Two tabs or windows can have the same title. How does an agent act on the one its user picked? [Selecting a tab in Cra or Chrome](docs/design/browser-control.en.md) · [Why build a Mac desktop tool?](docs/design/desktop-control.en.md)
 - **Make handoffs observable.** Track send receipts, execution state, and acceptance separately; let background notifications handle waiting. [Design](docs/design/controller-worker.en.md)
 - **Give long work a stopping point.** Budget context, retain the user's exact words during compaction, and stop runaway output. [Design](docs/design/three-generations-of-compaction.en.md)
 

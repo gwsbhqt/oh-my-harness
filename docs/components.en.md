@@ -19,11 +19,11 @@ Plugins load into DSH. Skills expose operations an agent can call. Each componen
 
 | Skill | Target and capability | Read next |
 | --- | --- | --- |
-| [browser-use](../skills/browser-use/README.en.md) | Official MCP for everyday Cra pages. Chrome page inspection, input, screenshots, and remote use. | [Guide](browser-use.en.md) |
+| [browser-use](../skills/browser-use/README.en.md) | One page API for Cra and Chrome. Cra handles page actions through its official MCP and Chrome through Google’s Chrome DevTools MCP. Both use Google’s tools for debugging. | [Guide](browser-use.en.md) |
 | [computer-use](../skills/computer-use/README.en.md) | Native macOS apps and windows: inspect, target input, capture, and verify. | [Guide](computer-use.en.md) |
 | [remote-host](../skills/remote-host/README.en.md) | Execute, transfer, and verify over SSH on an explicitly selected host. | [Guide](remote-host.en.md) |
 
-They share transport and target handling in [`skills/_shared`](../skills/_shared/README.en.md). This repository's browser-use skill is maintained separately from the [browser-use project](https://github.com/browser-use/browser-use).
+Computer-use and remote-host share [transport and target selection](../skills/_shared/README.en.md). The open-source project of the same name is maintained separately from this repository’s browser-use skill. [Browser Use project](https://github.com/browser-use/browser-use)
 
 ## Review and demos
 

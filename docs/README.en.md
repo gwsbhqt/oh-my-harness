@@ -31,7 +31,7 @@ More guides: [message tidy](dsh-message-tidy.en.md) · [image budgets](dsh-image
 
 Use [shot-sheet](../skills/shot-sheet/README.en.md) to review screenshots or video frames together and compare results.
 
-Real demos live with their components: [Python](../dsh-python-repl/README.en.md#see-it-work), [session coordination](../dsh-use/README.en.md#see-it-work), [event wakeup](../dsh-monitor/README.en.md#see-it-work), [browser](../skills/browser-use/README.en.md#see-it-work), [desktop](../skills/computer-use/README.en.md#see-it-work), and [remote hosts](../skills/remote-host/README.en.md#see-it-work).
+The component guides include recordings of [Python](../dsh-python-repl/README.en.md#see-it-work), [session coordination](../dsh-use/README.en.md#see-it-work), [event wakeup](../dsh-monitor/README.en.md#see-it-work), [desktop actions](../skills/computer-use/README.en.md#see-it-work), and [remote hosts](../skills/remote-host/README.en.md#see-it-work). The [archived browser demo](browser-use.en.md#two-tabs) links the original reproduction steps.
 
 Demos use fictional inputs. The [media guide](assets/README.en.md) distinguishes recorded results from concept diagrams. The [measurement guide](../benchmarks/README.en.md) lists reproduction commands, estimation methods, and exclusions. Unit tests, integration fixtures, and real external actions are reported separately.
 

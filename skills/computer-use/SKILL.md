@@ -1,6 +1,6 @@
 ---
 name: computer-use
-description: "操作 macOS 原生应用、浏览器外壳和网页外浮层。Cra 网页使用官方 MCP，Chrome 网页使用 browser-use。"
+description: "操作 macOS 原生应用、浏览器外壳和网页外浮层。Cra 与 Chrome 网页均使用 browser-use。"
 ---
 
 # computer-use（macOS 桌面控制）
@@ -102,7 +102,7 @@ computer-use --local owner 计算器 release --scope task-b --lease LEASE --json
 
 ## 网页登录与浏览器授权
 
-Cra 网页用官方 MCP 固定任务标签页并核对登录结果。Chrome 网页由 browser-use 固定页面，确认停在登录页才调用登录。computer-use 负责网页外的 1Password 浮层。自动流程失败后需重新观察，手动浮层处理与账号选择见 [共用规则](references/common.md#密码浮层与身份确认) 及 [Chrome 浏览器操作规则](../browser-use/references/common.md#结果未知)。
+用 browser-use 在 Cra 或 Chrome 的任务标签里核对登录页。computer-use 负责网页外的 1Password 浮层，填充后回到原标签读取登录结果。浮层处理与账号选择见[共用规则](references/common.md#密码浮层与身份确认)，页面定位见[浏览器技能](../browser-use/README.md)。
 
 ```bash
 # 仅在网页已授权、账号框已点击且浮层已观察到后调用。
@@ -112,10 +112,10 @@ computer-use --local autofill Chrome --window-ref "$WINDOW_REF" --scope task-a -
 
 浮层处理只点击观察到的填充按钮，不完整或凭证过期时拒绝；看不到浮层先新截图，不猜坐标。跳转后用原页面核对，结束按各自归属释放。登录参数同时参阅 [命令参数参考](references/cli.md) 和 [内核参数参考](references/interfaces.md#python-内核里调用)。
 
-browser-use 连接日常 Chrome 时会监听 Chrome 的远程调试授权框。工具核对真实应用身份、远程调试字样、唯一的「允许」按钮和稳定窗口引用，并在短操作保护中确认原窗口仍在前台后点击。若窗口在后台，请用户将它置前。框消失后由 browser-use 核对连接。Cra 的首次 MCP 权限请用户按官方 MCP 提示处理。
+browser-use 连接调用方指定、已开启调试的 Chrome 实例。若单独处理 Chrome 原生远程调试授权框，先确认这是获准操作的实例，再显式调用下面的 computer-use 命令。它核对应用身份、远程调试字样、唯一的「允许」按钮及前台窗口。关闭提示后，用同一实例核对连接。Cra 首次 MCP 连接由用户在 Cra 内确认。
 
 ```bash
-# browser-use 接管日常 Chrome 时会自动调用；只在单独排查授权框时手动调用。
+# 仅在单独处理已授权的 Chrome 原生调试提示时调用。
 computer-use --local approve-debug "Google Chrome" --watch 30 --json
 ```
 

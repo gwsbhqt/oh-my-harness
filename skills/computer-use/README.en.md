@@ -6,7 +6,7 @@
 
 **In short:** Operates ordinary Mac app windows: read the interface, click, type, screenshot. Keystrokes go only to the chosen window.
 
-Read and control explicitly selected native macOS applications through Accessibility, screenshots and targeted input. A Swift executor supplies the native operations; Python provides asynchronous application/window handles, ownership checks and the command line interface. Use Cra’s official MCP for Cra pages and browser-use for Chrome pages.
+Read and control explicitly selected native macOS applications through Accessibility, screenshots and targeted input. A Swift executor supplies the native operations; Python provides asynchronous application/window handles, ownership checks and the command line interface. Use the same browser-use page API for Cra and Chrome. [Browser skill](../browser-use/README.en.md)
 
 
 ## See it work

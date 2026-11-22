@@ -38,10 +38,10 @@ This is a responsibility map, not a security isolation diagram. Python and trust
 | Sessions and models | DSH's agent loop, model connections, goals, and task services | Extend the host while preserving call ownership. |
 | Python execution | Prime's persistent execution and snapshot core | DSH integration, per-cell tool authority, background work, recovery reports, skill loading, and display budgets. |
 | Session coordination | DSH's session and subagent services | Running-instance access, receipts, settled-state observation, notifications, and independent acceptance workflows. |
-| Computer operations | Browser debugging, macOS accessibility, and OpenSSH | Explicit targets, callable interfaces, errors, and result inspection. |
+| Computer operations | Official Cra MCP, Google’s Chrome DevTools MCP, macOS Accessibility, and OpenSSH | Page and debugging APIs shared by the browsers, window and host selection, and result inspection. |
 | Long-task context | DSH messages and compaction | Exact user-text appendices, length budgets, message cleanup, and output guards. |
 
-DSH already lets a model call several tools in one program. This project keeps that entry point and integrates Prime’s Python execution and snapshot code so the next cell can reuse a variable. The variable might hold the first of two tabs with identical titles and URLs. In a native Mac app, sending input also requires identifying the receiving process and window. [Kernel design](design/python-data-locality.en.md) · [Two-tab experiment](browser-use.en.md#two-tabs) · [Choosing a window](design/desktop-control.en.md) · [Prime sources and hashes](../dsh-python-repl/vendor/PROVENANCE.md)
+DSH already lets a model call several tools in one program. This project keeps that entry point and integrates Prime’s Python execution and snapshot code so the next cell can reuse a variable. The variable might hold the first of two tabs with identical titles and URLs. In a native Mac app, sending input also requires identifying the receiving process and window. [Kernel design](design/python-data-locality.en.md) · [Archived two-tab experiment](browser-use.en.md#two-tabs) · [Choosing a window](design/desktop-control.en.md) · [Prime sources and hashes](../dsh-python-repl/vendor/PROVENANCE.md)
 
 ## Follow a result
 
@@ -79,7 +79,7 @@ Each `dsh-*` has its own manifest and dependencies. Components are installed ind
 | Kernel startup, recovery, and reclamation | [session.ts](../dsh-python-repl/src/session.ts) |
 | When per-cell tool authority is valid | [lease.ts](../dsh-python-repl/src/lease.ts) · [background tools](../dsh-python-repl/src/background-tools.ts) |
 | Dispatch, status, and settlement | [service.ts](../dsh-use/src/service.ts) · [done notifications](../dsh-use/src/done-watch.ts) |
-| Browser actions and target identity | [engine.py](../skills/browser-use/src/browser_use/engine.py) · [client receipts](../skills/browser-use/src/browser_use/client.py) |
+| Browser page actions and debugging | [Python API](../skills/browser-use/src/browser_use/__init__.py) · [Selecting a browser and tab](browser-use.en.md) |
 | Native desktop actions | [computer-use.swift](../skills/computer-use/bin/computer-use.swift) |
 | Remote selection and capability checks | [target.py](../skills/_shared/agentkit/remote/target.py) |
 | User-text appendices after compaction | [summary.ts](../dsh-compaction-bound/src/summary.ts) |

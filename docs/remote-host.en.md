@@ -20,7 +20,7 @@ result = await skills.remote_host.run(
 )
 ```
 
-Inspect `result.code`, `result.out`, and `result.err`. A zero exit code establishes success for that command, not every later operation on the destination. Host pins can retain a default destination, interpreter, and working directory, but each tool keeps its own machine selection. Selecting a destination here does not select it for browser-use or computer-use.
+Inspect `result.code`, `result.out`, and `result.err`. A zero exit code establishes success for that command, not every later operation on the destination. Host pins can retain a default destination, interpreter, and working directory, but each tool keeps its own machine selection. Computer-use selects its own host. Browser-use selects its browser and debugging endpoint separately.
 
 ## Choose the right execution shape
 
@@ -34,7 +34,7 @@ For a fictional directory handoff, copy into the intended destination and verify
 
 If a mutation times out or the connection drops, the remote outcome may be unknown. Check the destination or the recorded job before retrying. The Python result exposes this distinction through `remote_unknown` and `outcome`; stopping a local connection does not prove that remote work stopped.
 
-Unix destinations need the interpreters and utilities required by the selected operation. Windows SSH support is limited to explicit PowerShell payload execution and does not provide Windows desktop or browser control. Native application and browser features additionally require their tools on the destination. Missing commands fail without local fallback or automatic installation.
+Unix destinations need the interpreters and utilities required by the selected operation. Windows SSH support is limited to explicit PowerShell payload execution and does not provide Windows desktop or browser control. Remote native application control also requires its desktop tool on the destination. Missing commands fail without local fallback or automatic installation.
 
 Payloads run with the authenticated account’s real permissions. Trusted Python is also outside a sandbox; Harness tool approvals govern tool calls, not arbitrary Python host access. Inspect resolved paths before changes and account for symlinks when verifying results.
 

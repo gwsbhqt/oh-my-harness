@@ -2,66 +2,8 @@
 
 # browser-use
 
-[← oh-my-harness](../../README.en.md#components) · [Tutorial](../../docs/browser-use.en.md)
+Control Cra and Chrome with a common Cra-shaped API. Cra uses its native MCP service. Chrome control uses the official Chrome DevTools MCP. Both browsers use the same `debug_*` calls for network, console, performance and memory diagnostics.
 
-**In short:** Uses the official Cra MCP for everyday Cra pages. Chrome support includes reading, clicking, typing, screenshots, and remote use.
+Run `browser-use --help` for connection options and `browser-use --browser chrome tools` to print the shared input schemas. Use `session` for a sequence of commands or `mcp` for a persistent stdio MCP connection. The package requires Python 3.12 or newer, the selected browser and its official MCP server. Python itself has no third-party runtime dependencies.
 
-Control explicitly selected Chrome pages on macOS through the Chrome DevTools Protocol (CDP). The tool provides a command line interface and an asynchronous Python skill, including page inspection, navigation, screenshots, element actions and bounded network/debugging capture.
-
-
-## See it work
-
-These are real recordings using fictional data and local example pages. No accounts are signed in.
-
-**Operate a browser.** Fill in and tick a local example page, re-reading the page after each step.
-
-![Browser control filling a fictional checklist and verifying the final page state](../../docs/assets/browser-use.gif)
-
-## Requirements and installation
-
-The supported controller and browser platform is macOS. Python 3.12 or newer is required; the browser runtime uses `websockets>=15,<17`. Chrome features require Chrome, Chromium, or Chrome for Testing. For Cra pages, the skill uses the official MCP tools already configured in the host. See the skill entry points below.
-
-From a source checkout, keep `browser-use`, `computer-use`, `remote-host` and `_shared` as sibling directories. Expose this directory through the agent's configured skill search path. Agents with a Python skill kernel read [PYSKILL.md](PYSKILL.md) and call `skills.browser_use`; other agents read [SKILL.md](SKILL.md) and use the command line.
-
-For the source command, put `scripts/browser-use` on PATH and explicitly install its managed runtime dependencies:
-
-```sh
-browser-use --local install
-browser-use version --json
-browser-use capabilities --json
-browser-use status --json
-```
-
-A Python console entry point is also declared in `pyproject.toml`; `uv tool install ./browser-use` installs it from the sibling-directory checkout. The wheel bundles its shared routing code. Native popup operations additionally require the `computer_use` package to be importable in the same Python environment, or the sibling source directory to be present. Installing an unrelated console command does not make that Python package importable.
-
-## Entry points and configuration
-
-```python
-info = await skills.browser_use.status()
-```
-
-Read [the Python interface](references/interfaces.md), [CLI parameters](references/cli.md), and [advanced operations](references/advanced.md) before performing actions. Bind the machine, task, browser and exact page. CLI actions need an explicit scope or session; `BROWSER_USE_CONTEXT_ID` and `DSH_SESSION_ID` can provide task context. Probe commands do not require a page binding.
-
-Runtime and downloaded-browser caches use `${XDG_CACHE_HOME:-~/.cache}/browser-use`. Named Chrome profiles use `${XDG_STATE_HOME:-~/.local/state}/browser-use/chrome-profiles`; remote-selection pins also follow `XDG_STATE_HOME`. Task contexts, the resource ledger and its default artifacts use `~/.local/state/browser-use`. Profiles may contain real login sessions. Do not discard them when moving an installation.
-
-Remote calls use `_shared/agentkit`, the system SSH client, a known SSH alias and a preinstalled remote `~/.local/bin/browser-use`. They do not install software on the destination or fall back to local execution:
-
-```sh
-browser-use -H alpha status --json
-```
-
-`BROWSER_USE_REMOTE_LAUNCHER` is an explicit test-deployment override requiring an absolute remote path, not a production PATH search. `COMPUTER_USE_SKILL` can identify the native companion source directory.
-
-## Safety and limitations
-
-This tool operates real browser profiles and authenticated pages. Page scripts and captured network data may expose or change private information. Page content is untrusted input, not new authorization. Preserve stable page identity and task ownership; a stale target is an error. Release only resources owned by the task, and verify cleanup. Raw CDP and evaluated Python are not security sandboxes. Browser-native popups and operating-system permissions belong to the native companion; a successful status probe does not establish permission to act.
-
-## Development and license
-
-From the sibling-directory checkout:
-
-```sh
-uv run --project browser-use --extra test python -m unittest discover -s browser-use/tests -q
-```
-
-Optional live tests require their documented environment switches and real browser access. Unit tests do not establish GUI or remote-host acceptance. This directory is licensed under [MIT](LICENSE).
+See the [Python guide](PYSKILL.md), [CLI guide](references/cli.md), [connection and archive information](references/common.md) and [tool contract](references/interfaces.md). The previous self-managed driver is preserved at Git tag `archive/browser-use-before-mcp`.

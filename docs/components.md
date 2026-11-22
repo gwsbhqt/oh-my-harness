@@ -19,11 +19,11 @@
 
 | 技能 | 目标与能力 | 接着读 |
 | --- | --- | --- |
-| [browser-use](../skills/browser-use/README.md) | 日常 Cra 网页走官方 MCP。Chrome 页面支持观察、点击、输入、截图及远端操作。 | [教程](browser-use.md) |
+| [browser-use](../skills/browser-use/README.md) | Cra 和 Chrome 共用一套网页操作。Cra 通过官方 MCP 执行，Chrome 通过 Google 的 Chrome DevTools MCP 执行。两端的调试都由 Google 工具提供。 | [教程](browser-use.md) |
 | [computer-use](../skills/computer-use/README.md) | macOS 原生应用和窗口：读界面、定向输入、截图与核对。 | [教程](computer-use.md) |
 | [remote-host](../skills/remote-host/README.md) | 通过 SSH 在明确的目标主机执行、传输和核对结果。 | [教程](remote-host.md) |
 
-它们共用 [`skills/_shared`](../skills/_shared/README.md) 的传输与选机代码。这里的 browser-use 是本仓库提供的技能，与同名的 [browser-use 项目](https://github.com/browser-use/browser-use)分别维护。
+computer-use 和 remote-host 共用[传输与选机代码](../skills/_shared/README.md)。本仓库的 browser-use 与同名的开源项目分别维护。[Browser Use 项目](https://github.com/browser-use/browser-use)
 
 ## 验证与演示
 
