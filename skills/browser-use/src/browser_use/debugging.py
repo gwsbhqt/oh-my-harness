@@ -22,7 +22,11 @@ _PAGE = {"type": "string", "minLength": 1, "description": "The tabId returned by
 _PATH = {"type": "string", "minLength": 1}
 _BOOL = {"type": "boolean"}
 _SELECTOR = {"type": "string", "minLength": 1,
-             "description": "仅支持主文档中由 CSS 唯一匹配、且 Google 无障碍快照可定位的普通元素。"}
+             "description": "在选定范围中唯一匹配、且 Google 无障碍快照可定位的元素。"}
+_SCOPE = {"type": "array", "description": "从主文档开始依次进入同源 iframe 或开放的 Shadow DOM。",
+          "items": {"type": "object", "required": ["kind", "selector"], "additionalProperties": False,
+                    "properties": {"kind": {"type": "string", "enum": ["frame", "shadow"]},
+                                   "selector": {"type": "string", "minLength": 1}}}}
 _PAGING = {
     "pageSize": {"type": "integer", "minimum": 1},
     "pageIdx": {"type": "integer", "minimum": 0, "description": "Zero-based index. Requires pageSize."},
@@ -60,11 +64,15 @@ DEBUG_SCHEMAS = {
         **_PAGING, "resourceTypes": {"type": "array", "items": {"type": "string", "enum": _RESOURCE_TYPES}},
         "includePreservedRequests": _BOOL,
     }),
+    "debug_viewport": _schema("设置本次新开测试页的视口，省略 viewport 时恢复默认尺寸。", {
+        "viewport": {"type": "string", "minLength": 1,
+                     "description": "Google 视口格式，例如 390x844x2,mobile,touch。可能刷新页面并重置该页其他模拟条件。"},
+    }),
     "debug_css_styles": _schema("读取普通网页元素匹配的 CSS 规则和样式。", {
-        "selector": _SELECTOR, "pageSize": {**_PAGING["pageSize"], "default": 10},
+        "selector": _SELECTOR, "scope": _SCOPE, "pageSize": {**_PAGING["pageSize"], "default": 10},
         "pageIdx": {"type": "integer", "minimum": 0, "default": 0, "description": "从 0 开始的页码。"},
     }, "selector"),
-    "debug_element_screenshot": _schema("获取普通网页元素的 PNG 截图。", {"selector": _SELECTOR}, "selector"),
+    "debug_element_screenshot": _schema("获取普通网页元素的 PNG 截图。", {"selector": _SELECTOR, "scope": _SCOPE}, "selector"),
     "debug_mock_json": _schema("为本次新开的本机开发页设置一条 JSON 测试响应。仅适合 GET/HEAD 接口。", {
         "url": {"type": "string", "minLength": 1, "description": "与开发页同源的确切 HTTP(S) 接口地址。主机须为回环 IP 或 localhost。"},
         "json": {"description": "返回给本机开发页面的 JSON 值。"},
@@ -89,7 +97,7 @@ DEBUG_SCHEMAS = {
 }
 DEBUG_TOOLS = frozenset(DEBUG_SCHEMAS)
 _GOOGLE = {
-    "debug_console_message": "get_console_message",
+    "debug_console_message": "get_console_message", "debug_viewport": "emulate",
     "debug_console": "list_console_messages", "debug_network": "list_network_requests",
     "debug_css_styles": "get_css_styles", "debug_element_screenshot": "take_screenshot",
     "debug_request": "get_network_request", "debug_trace_start": "performance_start_trace",
@@ -228,12 +236,12 @@ class Debugger:
     reflection. It assumes the page cooperates with JavaScript evaluation.
     """
 
-    def __init__(self, google, *, cra=None, chrome_page_id=None, test_tabs=None):
+    def __init__(self, google, *, cra=None, chrome_page_id=None, opened_tabs=None):
         self._google = google
         self._cra = cra
         self._chrome_page_id = chrome_page_id
         self._binding_lock = asyncio.Lock()
-        self._test_tabs = test_tabs if test_tabs is not None else set()
+        self._opened_tabs = opened_tabs if opened_tabs is not None else {}
         self._mock_pages = {}
         self._mocks = None
 
@@ -318,7 +326,7 @@ class Debugger:
             return await self._mocks.install(page_id, document_url=document_url, url=options["url"],
                                              resource_type=options.get("resourceType", "fetch"),
                                              status=options.get("status", 200), json_body=options["json"],
-                                             dedicated=tab_id in self._test_tabs)
+                                             dedicated=self._opened_tabs.get(tab_id) is not None)
         finally:
             if self._mocks.has(page_id):
                 self._mock_pages[tab_id] = (page_id, local_origin(document_url))
@@ -356,8 +364,10 @@ class Debugger:
         validate(arguments, DEBUG_SCHEMAS[name], name)
         options = dict(arguments)
         tab_id = options.pop("tabId")
+        if name == "debug_viewport" and tab_id not in self._opened_tabs:
+            raise BrowserError("unsupported_target", "Set the viewport on a test tab opened by this Browser session.")
         if name.startswith("debug_mock_"):
-            if tab_id not in self._test_tabs:
+            if self._opened_tabs.get(tab_id) is None:
                 raise BrowserError("unsupported_target", "Use a loopback development tab opened by this Browser session.")
             if name != "debug_mock_json":
                 existing = self._mock_pages.get(tab_id)
@@ -400,7 +410,7 @@ class Debugger:
             image = await save_full_page(self._inspect, page_id, options["filePath"])
             return {**mcp_result(image), "structuredContent": image}
         if "selector" in options:
-            options["uid"] = await snapshot_selector_uid(self._inspect, page_id, options.pop("selector"))
+            options["uid"] = await snapshot_selector_uid(self._inspect, page_id, options.pop("selector"), options.pop("scope", None))
         if name == "debug_element_screenshot":
             options["format"] = "png"
         result = await self._google(_GOOGLE[name], {"pageId": page_id, **options})

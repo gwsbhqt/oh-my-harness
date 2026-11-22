@@ -42,6 +42,12 @@ def test_shorthand_names_are_discoverable_and_unknown_names_are_rejected():
         assert invalid.value.code == "invalid_arguments"
 
 
+def test_viewport_refuses_an_existing_tab_before_connecting():
+    with pytest.raises(BrowserError) as failure:
+        asyncio.run(Browser("cra").debug_viewport(tabId="existing", viewport="390x844x2,mobile,touch"))
+    assert failure.value.code == "unsupported_target"
+
+
 def test_two_browsers_offer_identical_control_and_debug_schemas():
     cra, chrome = Browser("cra"), Browser("chrome")
     assert cra.tools() == chrome.tools()

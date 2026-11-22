@@ -261,6 +261,79 @@ class ElementDebugTests(unittest.IsolatedAsyncioTestCase):
         result = subprocess.run(["node", "-e", script], input=json.dumps(functions), capture_output=True, text=True, check=True)
         self.assertEqual(json.loads(result.stdout), [1, 1, 0, -1, 2, -1, -1, -1, -1])
 
+    @unittest.skipUnless(shutil.which("node"), "Requires Node.js to exercise the scoped DOM identity probe")
+    async def test_nested_scope_proves_each_iframe_before_matching_shadow_content(self):
+        snapshot = button_snapshot("main")
+        for uid in ("neighbor", "desk"):
+            document = button_snapshot(uid + "-light", uid + "-shadow")["structuredContent"]["snapshot"]
+            snapshot["structuredContent"]["snapshot"]["children"].append({
+                "id": uid, "role": "Iframe", "name": "Desk", "children": [document],
+            })
+        scope = [{"kind": "shadow", "selector": "#shell"}, {"kind": "frame", "selector": ".desk"},
+                 {"kind": "shadow", "selector": ".panel"}]
+        google = AsyncMock(side_effect=[snapshot, evaluated(None), evaluated(1), evaluated(1), receipt("Styles")])
+        debug = Debugger(google, chrome_page_id=AsyncMock(return_value=23))
+        await debug.call("debug_css_styles", {"tabId": "task-b", "scope": scope, "selector": "button"})
+        probes = [c.args[1] for c in google.await_args_list if c.args[0] == "evaluate_script"]
+        self.assertEqual([p.get("args", []) for p in probes], [[], ["neighbor", "desk"], ["desk-light", "desk-shadow"]])
+        self.assertEqual(google.await_args, call("get_css_styles", {"pageId": 23, "uid": "desk-shadow"}))
+
+        script = """
+          const assert = require('node:assert/strict');
+          const [check, frameUid, targetUid] = JSON.parse(require('node:fs').readFileSync(0, 'utf8')).map(s => eval(`(${s})`));
+          class Iframe {}
+          const top = {HTMLIFrameElement: Iframe, origin: 'https://example.invalid'};
+          const child = {top, origin: top.origin};
+          top.top = top;
+          const root = (selectors, extra = {}) => ({querySelectorAll: s => selectors[s] ?? [], ...extra});
+          const target = {isConnected: true, name: 'Look up'}, other = {...target};
+          const buttons = {button: [target]}, panel = {shadowRoot: root(buttons, {mode: 'open'})};
+          child.document = root({'.panel': [panel], button: [other]}, {defaultView: child});
+          const desk = Object.assign(new Iframe(), {contentDocument: child.document, isConnected: true});
+          const desks = {'.desk': [desk]}, shell = {shadowRoot: root(desks, {mode: 'open'})};
+          top.document = root({'#shell': [shell], button: [other]}, {defaultView: top});
+          desk.ownerDocument = top.document;
+          global.window = top;
+          assert.equal(check(), null);
+          assert.equal(frameUid({...desk}, desk), 1);
+          global.window = child;
+          assert.equal(targetUid(other, target), 1);
+          assert.equal(targetUid(other), -1);
+          buttons.button = [other];
+          assert.equal(targetUid(target), -1);
+          for (const count of [0, 2]) {
+            buttons.button = Array(count).fill(target);
+            assert.match(check().message, new RegExp(`Target selector matched ${count}`));
+            assert.equal(targetUid(target), -1);
+          }
+          buttons.button = [target];
+          for (const count of [0, 2]) {
+            desks['.desk'] = Array(count).fill(desk);
+            assert.match(check().message, new RegExp(`Scope step 2 matched ${count}`));
+            assert.equal(frameUid(desk), -1);
+          }
+          desks['.desk'] = [desk];
+          panel.shadowRoot = null;
+          assert.match(check().message, /open shadow root/);
+          assert.equal(targetUid(target), -1);
+          desk.contentDocument = null;
+          assert.match(check().message, /same-origin iframe/);
+          assert.equal(targetUid(target), -1);
+        """
+        subprocess.run(["node", "-e", script], input=json.dumps([p["function"] for p in probes]),
+                       capture_output=True, text=True, check=True)
+
+    async def test_failed_scope_does_not_send_the_debug_request(self):
+        for tool in ("debug_css_styles", "debug_element_screenshot"):
+            failure = {"code": "unsupported_target", "message": "Scope step 1 requires an open shadow root."}
+            google = AsyncMock(side_effect=[button_snapshot("main"), evaluated(failure)])
+            debug = Debugger(google, chrome_page_id=AsyncMock(return_value=23))
+            with self.subTest(tool=tool), self.assertRaisesRegex(BrowserError, "open shadow root") as error:
+                await debug.call(tool, {"tabId": "task-b", "scope": [{"kind": "shadow", "selector": "#closed"}],
+                                        "selector": "button"})
+            self.assertEqual((error.exception.code, error.exception.outcome), ("unsupported_target", "not_sent"))
+            self.assertEqual([c.args[0] for c in google.await_args_list], ["take_snapshot", "evaluate_script"])
+
     async def test_unproven_element_never_sends_a_style_or_screenshot_request(self):
         snapshot = button_snapshot("3_1")
         cases = [

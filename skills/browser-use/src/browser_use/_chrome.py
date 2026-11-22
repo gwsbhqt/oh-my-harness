@@ -11,7 +11,7 @@ from functools import partial
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from .input_actions import INPUT_TOOLS, _selector_uid, perform, redacted_url
+from .input_actions import INPUT_TOOLS, _match_uid, _selector_uid, perform, redacted_url
 from .protocol import BrowserError
 
 
@@ -143,18 +143,78 @@ def _snapshot_children(node):
     return children
 
 
-async def snapshot_selector_uid(google, page_id, selector):
-    """Resolve the selector from Google's snapshot without changing the task's page refs."""
-    pending = [await _snapshot_root(google, page_id)]
-    uids = []
+_SCOPED_ELEMENT = """(steps) => {
+    const frames = [];
+    const failure = (code, message) => ({error: {code, message}});
+    let root;
+    try { root = window.top.document; }
+    catch { return failure('unsupported_target', 'Cannot access the main document from this frame.'); }
+    for (const [index, step] of steps.entries()) {
+        const final = index === steps.length - 1;
+        const label = final ? 'Target selector' : `Scope step ${index + 1}`;
+        let matches;
+        try { matches = root.querySelectorAll(step.selector); }
+        catch { return failure('invalid_target', `${label} requires a valid CSS selector.`); }
+        if (matches.length !== 1) {
+            return failure('invalid_target', `${label} matched ${matches.length} elements. Expected exactly one.`);
+        }
+        const element = matches[0];
+        if (final) return {element, frames};
+        if (step.kind === 'frame') {
+            const owner = element.ownerDocument.defaultView;
+            if (!(element instanceof owner.HTMLIFrameElement)) {
+                return failure('unsupported_target', `${label} must select an iframe.`);
+            }
+            root = element.contentDocument;
+            if (!root || root.defaultView?.origin !== owner.origin) {
+                return failure('unsupported_target', `${label} requires an accessible same-origin iframe.`);
+            }
+            frames.push(element);
+        } else if (step.kind === 'shadow') {
+            root = element.shadowRoot;
+            if (root?.mode !== 'open') return failure('unsupported_target', `${label} requires an open shadow root.`);
+        } else {
+            return failure('invalid_target', `${label} must have kind frame or shadow.`);
+        }
+    }
+}"""
+
+
+def _document_nodes(roots):
+    pending = list(reversed(roots))
+    nodes = {}
     while pending:
         node = pending.pop()
         uid = node.get("id")
         if isinstance(uid, str) and uid and node.get("role") != "RootWebArea":
-            uids.append(uid)
+            nodes[uid] = node
         if node.get("role") != "Iframe":
             pending.extend(reversed(_snapshot_children(node)))
-    return await _selector_uid(partial(_evaluate, google), page_id, uids, selector)
+    return nodes
+
+
+async def snapshot_selector_uid(google, page_id, selector, scope=None):
+    """Resolve the selector from Google's snapshot without changing the task's page refs."""
+    nodes = _document_nodes([await _snapshot_root(google, page_id)])
+    evaluate = partial(_evaluate, google)
+    if not scope:
+        return await _selector_uid(evaluate, page_id, list(nodes), selector)
+
+    steps = [*scope, {"selector": selector}]
+    lookup = f"({_SCOPED_ELEMENT})({json.dumps(steps)})"
+    error = await evaluate(page_id, f"() => {lookup}.error ?? null")
+    if error is not None:
+        if (not isinstance(error, dict) or error.get("code") not in ("invalid_target", "unsupported_target")
+                or not isinstance(error.get("message"), str)):
+            raise _bad_reply("evaluate_script", "Invalid scoped selector result.")
+        raise BrowserError(error["code"], error["message"])
+
+    # A snapshot embeds each child document below its iframe. Enter only the proven iframe's subtree.
+    for index in range(sum(step["kind"] == "frame" for step in scope)):
+        frames = {uid: node for uid, node in nodes.items() if node.get("role") == "Iframe"}
+        uid = await _match_uid(evaluate, page_id, list(frames), f"{lookup}.frames?.[{index}]")
+        nodes = _document_nodes(_snapshot_children(frames[uid]))
+    return await _match_uid(evaluate, page_id, list(nodes), f"{lookup}.element")
 
 
 def _http_url(value):

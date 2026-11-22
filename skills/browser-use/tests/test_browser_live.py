@@ -73,6 +73,15 @@ form.addEventListener('submit', async event => {
 </script></html>"""
 
 
+LAYOUT = """<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1">
+<style>button { box-sizing: border-box; width: WIDTHpx; height: 30px; }</style>
+<button id="probe">Sample</button><div id="widget"></div><output></output>
+<script>
+const root = document.querySelector('#widget').attachShadow({mode:'open'});
+root.innerHTML = '<style>button { box-sizing: border-box; width: SHADOWpx; height: 30px; }</style><button id="probe">Sample</button>';
+</script>FRAME"""
+
+
 @contextmanager
 def parcel_site():
     desks = []
@@ -89,6 +98,13 @@ def parcel_site():
             self.wfile.write(body)
 
         def do_GET(self):
+            if self.path in ("/layout", "/panel"):
+                inner = self.path == "/panel"
+                frame = "" if inner else """<iframe id="panel" title="Panel" src="/panel"
+                    onload="document.querySelector('output').textContent='Panel ready'"></iframe>"""
+                page = LAYOUT.replace("WIDTH", "90" if inner else "60").replace("SHADOW", "150" if inner else "120")
+                self.reply(page.replace("FRAME", frame).encode(), "text/html")
+                return
             if self.path == "/fixture/items":
                 self.reply(b'{"items":["original"]}', "application/json")
                 return
@@ -267,6 +283,40 @@ class LiveAcceptance(unittest.TestCase):
         finally:
             await browser.tab_close(tabId=temporary)
 
+    async def check_layout(self, browser, url, sibling, directory):
+        tab = (await browser.tab_open(url=url.removesuffix("/parcels") + "/layout"))["tabId"]
+        frame = {"kind": "frame", "selector": "#panel"}
+        shadow = {"kind": "shadow", "selector": "#widget"}
+
+        async def viewport(page):
+            reply = await browser.page_evaluate(tabId=page, expression="[innerWidth, innerHeight, devicePixelRatio]")
+            return reply["result"]["value"]
+
+        try:
+            original, other = await viewport(tab), await viewport(sibling)
+            await browser.debug_viewport(tabId=tab, viewport="390x844x2,mobile,touch")
+            self.assertEqual(await viewport(tab), [390, 844, 2])
+            image = await browser.debug_full_page_screenshot(tabId=tab, filePath=str(directory / "mobile.png"))
+            self.assertEqual(image["structuredContent"]["width"], 780)
+            self.assertEqual(await viewport(sibling), other)
+            await browser.page_wait(tabId=tab, text="Panel ready")
+            for scope, expected in [([frame], 90), ([shadow], 120), ([frame, shadow], 150)]:
+                with self.subTest(scope=scope):
+                    target = {"tabId": tab, "scope": scope, "selector": "#probe"}
+                    styles = await browser.debug_css_styles(**target)
+                    rules = styles["structuredContent"]["matchedStyles"]["rules"]
+                    widths = [p["value"] for r in rules for p in r["properties"]
+                              if p["name"] == "width" and p["status"] == "active"]
+                    self.assertEqual(widths, [f"{expected}px"])
+                    image = await browser.debug_element_screenshot(**target)
+                    data, = [b["data"] for b in image["content"] if b.get("type") == "image"]
+                    width, height = struct.unpack(">II", base64.b64decode(data, validate=True)[16:24])
+                    self.assertEqual((width, height), (expected * 2, 60))
+            await browser.debug_viewport(tabId=tab)
+            self.assertEqual(await viewport(tab), original)
+        finally:
+            await browser.tab_close(tabId=tab)
+
     async def check_session(self, backend, endpoint, cra_argv, google_argv, directory, url, submissions):
         from browser_use import Browser, BrowserError
 
@@ -318,6 +368,7 @@ class LiveAcceptance(unittest.TestCase):
                     await browser.page_fill(tabId=tab, ref=box, text=parcel)
 
                 first, second = tabs
+                await self.check_layout(browser, url, second, directory)
                 await self.check_test_responses(browser, first, second, url)
                 baseline = directory / "before.png"
                 before_image = await browser.debug_full_page_screenshot(tabId=first, filePath=str(baseline))

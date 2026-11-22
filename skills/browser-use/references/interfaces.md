@@ -56,8 +56,9 @@ Chrome 的 `humanize`、带修饰键的点击、右击、中击、三击、坐�
 |---|---|---|
 | `debug_console` | `tabId`，可选 `types`、`pageSize`、`pageIdx` | 当前页的控制台记录 |
 | `debug_console_message` | `tabId`、`msgid` | 用本页 `debug_console` 返回的 `id` 查看参数、源位置和可用调用栈 |
-| `debug_css_styles` | `tabId`、`selector`，可选 `pageSize` 和 `pageIdx` | Google 检查器列出的匹配规则、优先级和可得的来源行号 |
-| `debug_element_screenshot` | `tabId`、`selector` | 指定元素的 PNG 截图 |
+| `debug_viewport` | `tabId`，可选 `viewport` | 在本次新开的测试标签应用指定视口，省略 `viewport` 时恢复默认尺寸 |
+| `debug_css_styles` | `tabId`、`selector`，可选 `scope`、`pageSize` 和 `pageIdx` | Google 检查器列出的匹配规则、优先级和可得的来源行号 |
+| `debug_element_screenshot` | `tabId`、`selector`，可选 `scope` | 指定元素的 PNG 截图 |
 | `debug_full_page_screenshot` | `tabId`、`filePath` | 保存整页原始 PNG，返回路径和实际像素尺寸 |
 | `debug_mock_json` | `tabId`、`url`、`json`，可选 `status`、`resourceType` | 为本次新开的回环开发页设置专用测试响应 |
 | `debug_mock_status`、`debug_mock_clear` | `tabId` | 核对命中及实际送达次数，或撤销规则 |
@@ -67,7 +68,16 @@ Chrome 的 `humanize`、带修饰键的点击、右击、中击、三击、坐�
 | `debug_trace_stop` | `tabId`，可选 `filePath` | 停止记录，返回摘要，可写文件 |
 | `debug_heap_snapshot` | `tabId`、`filePath` | 从目标页采集并保存内存快照 |
 
-元素调试接受主文档内唯一的 CSS 选择器，例如 `form button[type=submit]`。目标还须能对应到 Google 页面的无障碍快照节点。零个匹配、多个匹配或无法确认控件身份时会报错。截图结果的 `content` 中含 PNG 图片块，样式结果可按页读取。
+元素调试默认从主文档查找。可选的 `scope` 从外到内逐层进入同源 iframe 或开放的 Shadow DOM。每一步的选择器和最终元素都须在各自范围内唯一匹配。目标还须能对应到 Google 无障碍快照的节点。控件名称相同也按实际 DOM 节点定位。
+
+```python
+scope = [{"kind": "frame", "selector": "iframe#editor"},
+         {"kind": "shadow", "selector": "format-toolbar"}]
+styles = await browser.debug_css_styles(tabId=tab, scope=scope, selector="button.save")
+image = await browser.debug_element_screenshot(tabId=tab, scope=scope, selector="button.save")
+```
+
+在本次会话用 `tab_open` 新开测试页后，可调用 `await browser.debug_viewport(tabId=tab, viewport="390x844x2,mobile,touch")` 模拟手机尺寸。宽、高以 CSS 像素计，`2` 为设备像素比。需要保留该标签时，在会话结束前用 `await browser.debug_viewport(tabId=tab)` 撤销。Google 切换时可能刷新该页，也会重置该页已有的弱网等其他模拟条件。网页自身的 viewport 声明会影响最终布局。
 
 Cra 模式用两端都能观察的随机文档标记验证同一页。完成或出错时清理标记，页面关闭或导航期间无法确认时停止调用。Chrome 模式复用当前连接的确切页号。不要把另一个标签的请求编号交给 `debug_request`，两个标签的请求编号可以都是 1。性能录制按浏览器实例独占，记录范围可包含该实例中的其他页面。网络详情、快照和性能文件可能包含所访问页面的实际数据，请选择合适的目标页与输出位置。
 

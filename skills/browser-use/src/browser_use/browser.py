@@ -51,12 +51,14 @@ class Browser:
         self._capture_client = None
         self._closed = False
         self._locks = {}
-        self._test_tabs = set()
+        self._opened_tabs = {}
+        self._viewport_tabs = set()
         adapter = _BROWSER_ADAPTERS[browser]
         self._chrome = adapter(self._google, local_files=local_files) if adapter is not None else None
         self._debug = Debugger(self._google, cra=self._cra if self._chrome is None else None,
-                               chrome_page_id=self._chrome.page_id if self._chrome else None, test_tabs=self._test_tabs)
-        self._capture = Debugger(self._google_capture, cra=self._chrome.call if self._chrome else self._cra)
+                               chrome_page_id=self._chrome.page_id if self._chrome else None, opened_tabs=self._opened_tabs)
+        self._capture = Debugger(self._google_capture, cra=self._chrome.call if self._chrome else self._cra,
+                                 opened_tabs=self._opened_tabs)
 
     def __getattr__(self, name):
         if name in SCHEMAS:
@@ -139,7 +141,16 @@ class Browser:
         if name == "compare_screenshots":
             from .visual import compare_screenshots
             return await asyncio.to_thread(compare_screenshots, **arguments)
-        if name == "debug_full_page_screenshot":
+        if name == "debug_viewport":
+            result = await self._capture.call(name, arguments)
+            if "viewport" in arguments:
+                self._viewport_tabs.add(arguments["tabId"])
+            else:
+                self._viewport_tabs.discard(arguments["tabId"])
+            return result
+        # Only the inspector which applied the viewport captures its device pixel ratio.
+        if name == "debug_full_page_screenshot" or (
+                name == "debug_element_screenshot" and arguments["tabId"] in self._viewport_tabs):
             return await self._capture.call(name, arguments)
         if name in DEBUG_SCHEMAS:
             return await self._debug.call(name, arguments)
@@ -152,10 +163,10 @@ class Browser:
             result = await self._chrome.call(name, arguments)
         if name == "tab_open" and isinstance(result, dict) and isinstance(result.get("tabId"), str):
             from .mock_responses import local_origin
-            if local_origin(arguments["url"]) is not None:
-                self._test_tabs.add(result["tabId"])
+            self._opened_tabs[result["tabId"]] = local_origin(arguments["url"])
         elif name == "tab_close":
-            self._test_tabs.discard(arguments["tabId"])
+            self._opened_tabs.pop(arguments["tabId"], None)
+            self._viewport_tabs.discard(arguments["tabId"])
         return result
 
     async def _chrome_batch(self, tab, steps):

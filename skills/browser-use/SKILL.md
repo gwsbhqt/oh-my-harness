@@ -31,7 +31,7 @@ browser-use --browser cra session
 
 ## 调试同一张网页
 
-使用同一张标签的 `tabId`。`debug_css_styles` 查样式来源，`debug_element_screenshot` 截取单个控件。`debug_full_page_screenshot` 把整页原图保存为 PNG，`compare_screenshots` 在本机比较两张图。`debug_console` 配合 `debug_console_message` 展开一条报错，`debug_network` 配合 `debug_request` 展开请求。性能记录和内存快照也使用 Google 官方调试器。Cra 还需允许在当前页运行 JavaScript，以核对目标。
+使用同一张标签的 `tabId`。`debug_css_styles` 查样式来源，`debug_element_screenshot` 截取单个控件。`debug_full_page_screenshot` 把整页原图保存为 PNG，`compare_screenshots` 在本机比较两张图。`debug_console` 配合 `debug_console_message` 展开一条报错，`debug_network` 配合 `debug_request` 展开请求。性能记录和内存快照也使用 Google 官方调试器。Cra 还需允许在当前页运行 JavaScript，以核对目标。 新开测试页可用 `debug_viewport` 切换手机尺寸。查看嵌套控件时，把 `scope` 传给元素截图或 CSS 调试。[用法示例](references/interfaces.md#调试)
 
 测试本机开发页面的空态和错误态时，在同一个 `Browser` 会话内新开测试标签，使用 `debug_mock_json`、`debug_mock_status` 和 `debug_mock_clear`。可用接口和实际命中条件见[测试响应与画面对比](references/interfaces.md#本机开发页的接口测试)。
 
