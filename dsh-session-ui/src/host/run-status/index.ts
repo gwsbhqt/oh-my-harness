@@ -5,7 +5,6 @@
  *
  * 数据来源都是宿主公开的事件：会话日志追加（session/event）、agent 状态（agent/status）、
  * 模型流（agent/assistant-stream），以及给会阻塞对话的事件里每个插件的监听器计时（见 hooks.ts）。
- * 走 magpie 的请求结束后，再按回复编号读 magpie 的请求记录，拆出上传、等首段内容、返回（见 magpie.ts）。
  * 另把整段会话统计登记成宿主的会话投影 `runStatusTotals`（见 totals.ts），网页半的统计卡读它。
  * 只读不改：不拦截、不改写任何事件的结果。
  *
@@ -16,7 +15,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { installHookTiming, realEvents } from './hooks.ts'
-import { gatewayUrl, readGatewayJson, requestRows, requestsUrl, TimingLookup } from './magpie.ts'
+import { gatewayUrl, readGatewayJson } from './magpie.ts'
 import { resolveMagpieGateway, type ResolvedMagpieGateway } from './magpie-gateway.ts'
 import { gatewaySpeeds } from './magpie-speed.ts'
 import { STATE_PATH } from '../../shared/run-status/types.ts'
@@ -67,7 +66,7 @@ function send(res: ServerResponse, status: number, body: unknown): void {
 
 export function applyRunStatus(ctx: Context, config: RunStatusHostConfig): void {
   const logger = ctx.logger('session-ui/run-status')
-  // 现读网关选择：本机装了 Magpie 用本机，否则看 session-ui 显式配置的远程地址；都没有就不记分段用时。
+  // 本机装了 Magpie 就用本机，否则使用 session-ui 显式配置的网关。
   const gateway = () => {
     try {
       return resolveMagpieGateway({ baseUrl: config.magpieBaseUrl(), keyRef: config.magpieKeyRef() })
@@ -75,8 +74,7 @@ export function applyRunStatus(ctx: Context, config: RunStatusHostConfig): void 
       return undefined
     }
   }
-  // 现读网关：远程地址是后来才配上的话，下一次请求就能开始记分段，不必重载插件。
-  const tracker = new RunTracker({ trackRequests: () => gateway() !== undefined })
+  const tracker = new RunTracker()
   const now = () => Date.now()
   const resolveRef = async (name: string) => {
     const found = await ctx.get('credentials')?.resolve(credentialRef(name))
@@ -88,32 +86,6 @@ export function applyRunStatus(ctx: Context, config: RunStatusHostConfig): void 
     return readGatewayJson(url, found?.value ?? process.env[ref])
   }
   const speeds = gatewaySpeeds(resolved => readGateway(resolved, gatewayUrl(resolved.magpieBaseUrl, 'trace')))
-  const lookup = new TimingLookup(async () => {
-    const resolved = gateway()
-    if (resolved === undefined) throw new Error('未配置 magpie 网关')
-    return requestRows(await readGateway(resolved, requestsUrl(resolved.magpieBaseUrl)))
-  }, (item, patch) => tracker.resolveRequest(item.session, item.responseId, patch))
-  let timer: ReturnType<typeof setTimeout> | undefined
-  let polling = false
-  const schedule = () => {
-    if (timer !== undefined) clearTimeout(timer)
-    timer = undefined
-    const at = lookup.nextAt()
-    if (at === undefined) return
-    timer = setTimeout(() => {
-      timer = undefined
-      if (polling) return
-      polling = true
-      void lookup.poll(now()).finally(() => {
-        polling = false
-        schedule()
-      })
-    }, Math.max(0, at - now()))
-  }
-  ctx.effect(() => () => {
-    if (timer !== undefined) clearTimeout(timer)
-    lookup.clear()
-  }, 'run-status: magpie lookup')
   const guard = (what: string, fn: () => void) => {
     try {
       fn()
@@ -125,22 +97,13 @@ export function applyRunStatus(ctx: Context, config: RunStatusHostConfig): void 
   ctx.on('session/event' as never, ((session: unknown, event: SessionEventLike) => {
     const id = rec(session)?.id
     if (typeof id === 'string' && rec(event) !== undefined) {
-      guard('会话事件', () => {
-        const added = tracker.event(id, event)
-        if (added === undefined) return
-        lookup.add({ session: id, responseId: added.responseId }, added.totalMs, now())
-        if (!polling) schedule()
-      })
+      guard('会话事件', () => tracker.event(id, event))
     }
   }) as never, { global: true })
 
   ctx.on('session/disposed' as never, ((session: unknown) => {
     const id = rec(session)?.id
-    if (typeof id === 'string') guard('清理会话', () => {
-      tracker.forget(id)
-      lookup.forget(id)
-      if (!polling) schedule()
-    })
+    if (typeof id === 'string') guard('清理会话', () => tracker.forget(id))
   }) as never, { global: true })
 
   ctx.on('agent/status' as never, ((payload: { agent?: unknown; status?: unknown }) => {

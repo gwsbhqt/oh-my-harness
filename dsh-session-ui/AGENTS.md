@@ -9,11 +9,11 @@
 - `runStatus`（`src/host/run-status/` + `src/client/run-status/` + `src/shared/run-status/`）：宿主只听公开事件和插件钩子计时，开只读路由 `/dsh-run-status/state`，登记会话投影 `runStatusTotals`；浏览器半分状态和统计。
 - `copySessionId`（`src/host/copy-session-id/` + `src/client/copy-session-id/`）：头栏按钮复制本会话编号；机器代号由本包自己的 `/api/session-ui.machine` 给出，不依赖 dsh-session-link。这条只读路由**常驻注册**（输入框粘贴识别会话引用也向它取本机代号），`copySessionId` 开关只决定头栏按钮。
 
-## Magpie 路由速度与分段用时
+## Magpie 路由速度
 
 `src/host/run-status/magpie-gateway.ts` 自己决定用哪台网关：本机装了 Magpie 用本机 `127.0.0.1:3425`，没装才用 `session-ui` 显式配置的 `magpieBaseUrl` / `magpieKeyRef`；都没有时显示 DSH 自己的统计。公开代码不得硬编码远端网关地址或凭据，部署地址和凭据引用由 profile 的 cordis 补丁注入。不要改成「显式配置优先」：那样本机装了 Magpie 的机器会改用远端。
 
-Magpie 实时均速使用 `/v1/magpie/trace`，按路由页最近 60 次的全局窗口、会话编号和有效生成时间统计。`/v1/magpie/usage/requests` 用于按回复编号核对单次请求分段。DSH 的含等待速度来自本地会话投影。
+Magpie 实时均速使用 `/v1/magpie/trace`，按路由页最近 60 次的全局窗口、会话编号和有效生成时间统计，统计卡只展示可实测的输出速度。
 
 ## 配置
 
@@ -31,7 +31,7 @@ Magpie 实时均速使用 `/v1/magpie/trace`，按路由页最近 60 次的全�
 | `pathMention` | `true` | 回复里真实路径可点、可右键打开、可拖入 |
 | `runStatus` | `true` | 状态行与统计卡 |
 | `copySessionId` | `true` | 复制会话编号按钮 |
-| `magpieBaseUrl` | `''` | 路由速度与分段用时的网关地址，留空自动选本机 |
+| `magpieBaseUrl` | `''` | 路由速度的网关地址，留空自动选本机 |
 | `magpieKeyRef` | `''` | 网关钥匙的凭据引用名 |
 
 ## 安装与关闭

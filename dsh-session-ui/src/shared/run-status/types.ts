@@ -40,53 +40,10 @@ export interface Segment {
   readonly count?: number
 }
 
-/**
- * 一次模型请求的分段用时。请求结束时先记下 DSH 这边的总时长（state 为 pending），
- * 再按回复编号去 magpie 的请求记录里找这一次，拆成上传、等首段内容、返回。
- * 请求进行中没法拆：上传完的时刻只有 magpie 知道，它要等请求结束才写进记录。
- */
-export interface RequestTiming {
-  /** 回复编号，DSH 和 magpie 两边都记着它，靠它对上同一次请求。 */
-  readonly responseId: string
-  readonly step?: number
-  readonly model?: string
-  /** DSH 这边从发出请求到收完回复。 */
-  readonly totalMs: number
-  readonly end: number
-  /** pending：还在等 magpie 的记录；ok：已拆好；missing：记录里找不到这一次；error：读不到 magpie。 */
-  readonly state: 'pending' | 'ok' | 'missing' | 'error'
-  /** 上传：magpie 把请求完整交给模型服务商之前用掉的时间，含 magpie 自己处理和失败重试。缺这项说明这条线路 magpie 不记上传完的时刻。 */
-  readonly uploadMs?: number
-  /** 等首段内容：上传完到首段内容；没有上传那项时，是发出到首段内容。 */
-  readonly firstTokenMs?: number
-  /** 返回：首段内容到收完。 */
-  readonly returnMs?: number
-  /** 上传里 magpie 失败重试用掉的部分。 */
-  readonly retriedMs?: number
-  /** magpie 记录之外的时间：DSH 到 magpie 这一来一回，至少 1 秒才记。 */
-  readonly outsideMs?: number
-  readonly note?: string
-}
-
-/** Magpie 路由页最近请求的速率。下限和缺少计时的请求都不参与平均。 */
-export interface GatewayRequestSpeed {
-  readonly time: number | null
-  readonly kind: 'measured' | 'floor' | 'unmeasured' | 'running' | 'unanswered'
-  readonly tps?: number
-}
-
+/** Magpie 路由页的会话平均速度，只有可实测的请求参与平均。 */
 export type GatewaySpeed =
   | { readonly state: 'unconfigured' | 'unavailable' }
-  | {
-    readonly state: 'ready'
-    readonly windowSize: number
-    readonly requests: number
-    readonly completed: number
-    readonly measured: number
-    readonly floors: number
-    readonly tps: number | null
-    readonly recent: readonly GatewayRequestSpeed[]
-  }
+  | { readonly state: 'ready'; readonly tps: number | null }
 
 export interface RunSnapshot {
   readonly sessionId: string
@@ -109,8 +66,6 @@ export interface RunSnapshot {
   readonly recent: readonly Segment[]
   /** 插件开始记录时这一轮已经在跑，开头的信息缺了一截。 */
   readonly partial: boolean
-  /** 最近几次走 magpie 的模型请求，旧的在前；跨轮保留。 */
-  readonly requests?: readonly RequestTiming[]
 }
 
 export const STATE_PATH = '/dsh-run-status/state'

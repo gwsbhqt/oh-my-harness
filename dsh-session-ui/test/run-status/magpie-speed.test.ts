@@ -12,35 +12,32 @@ function stats(routes: ReturnType<typeof route>[]) {
   assert.ok(stats.state === 'ready')
   return stats
 }
-const latest = (fields: Fields) => stats([route(1, fields)]).recent[0]!
+const latest = (fields: Fields) => stats([route(1, fields)]).tps
 
 describe('Magpie 路由页的有效生成时间窗', () => {
   it('采用最早的流式推理信号；隐藏推理起点不明，只算有首段文字计时的答案', () => {
-    assert.equal(latest({ out: 200, reasoning: 100, ttft: 2000, firstReasoning: 1500, firstText: 3000, ms: 4000 }).tps, 80)
-    assert.equal(latest({ usage: [{ reasoning: 10 }, { reasoning: 100 }], firstText: 2000, ms: 4000 }).tps, 50)
-    assert.equal(latest({ reasoningHidden: true, ttft: 1000 }).kind, 'unmeasured')
-    assert.equal(latest({ out: null }).kind, 'unmeasured')
-    assert.equal(latest({ out: '200' }).kind, 'unmeasured')
-    assert.equal(latest({ ttft: null }).kind, 'unmeasured')
+    assert.equal(latest({ out: 200, reasoning: 100, ttft: 2000, firstReasoning: 1500, firstText: 3000, ms: 4000 }), 80)
+    assert.equal(latest({ usage: [{ reasoning: 10 }, { reasoning: 100 }], firstText: 2000, ms: 4000 }), 50)
+    assert.equal(latest({ reasoningHidden: true, ttft: 1000 }), null)
+    assert.equal(latest({ out: null }), null)
+    assert.equal(latest({ out: '200' }), null)
+    assert.equal(latest({ ttft: null }), null)
   })
 
   it('保留门限相等的读数，排除计时太短、速率太高、集中送达和推理后突发的回复', () => {
-    assert.equal(latest({ out: 1000, ttft: 100, ms: 200 }).tps, 10_000)
-    assert.equal(latest({ out: 1001, ttft: 100, ms: 200 }).kind, 'unmeasured')
-    assert.equal(latest({ out: 10, ttft: 100, ms: 199 }).kind, 'unmeasured')
-    assert.equal(latest({ flow: 500 }).tps, 100)
-    assert.equal(latest({ flow: 499 }).kind, 'unmeasured')
-    assert.equal(latest({ ttft: 3996, ms: 4995 }).kind, 'measured')
-    assert.equal(latest({ ttft: 3997, ms: 4996 }).kind, 'unmeasured')
-    assert.equal(latest({ out: 450, reasoning: 2, firstReasoning: 1500, firstText: 2900 }).kind, 'unmeasured')
+    assert.equal(latest({ out: 1000, ttft: 100, ms: 200 }), 10_000)
+    assert.equal(latest({ out: 1001, ttft: 100, ms: 200 }), null)
+    assert.equal(latest({ out: 10, ttft: 100, ms: 199 }), null)
+    assert.equal(latest({ flow: 500 }), 100)
+    assert.equal(latest({ flow: 499 }), null)
+    assert.equal(latest({ ttft: 3996, ms: 4995 }), 200)
+    assert.equal(latest({ ttft: 3997, ms: 4996 }), null)
+    assert.equal(latest({ out: 450, reasoning: 2, firstReasoning: 1500, firstText: 2900 }), null)
   })
 
-  it('答案下限和整次请求下限都保留 ≥，没有可靠下限的请求不给速度', () => {
-    assert.deepEqual(latest({ out: 250, reasoning: 150, ms: 2000, flow: 250 }), { kind: 'floor', time: null, tps: 100 })
-    assert.equal(latest({ out: 250, reasoning: 150, ms: 2000, flow: 249 }).kind, 'unmeasured')
-    assert.deepEqual(latest({ out: 1200, ttft: 0, ms: 2000 }), { kind: 'floor', time: null, tps: 600 })
-    assert.equal(latest({ out: 999, ttft: 0, ms: 2000 }).kind, 'unmeasured')
-    assert.equal(stats([route(1, { ttft: 0, out: 1200 })]).tps, null)
+  it('答案下限和整次请求下限都不参与平均', () => {
+    assert.equal(latest({ out: 250, reasoning: 150, ms: 2000, flow: 250 }), null)
+    assert.equal(latest({ out: 1200, ttft: 0, ms: 2000 }), null)
   })
 })
 
@@ -49,11 +46,10 @@ describe('Magpie 实时会话分组', () => {
     const other = Array.from({ length: 60 }, (_, i) => route(i + 1, { session: 'other' }))
     const rows = [route(0), ...other, route(61, { session: 'child', parentSession: session }), route(62, { agent: 'other' })]
     const result = stats(rows.reverse())
-    assert.deepEqual([result.windowSize, result.requests, result.completed, result.measured, result.tps], [60, 1, 1, 1, 100])
+    assert.equal(result.tps, 100)
     const old = stats(Array.from({ length: 61 }, (_, i) => route(i, { session: i ? 'other' : session })))
-    assert.equal(old.requests, 0)
     assert.equal(old.tps, null)
-    assert.match(gatewaySpeedLines(old)[0]!.value, /网关最近 60 次里没有本会话/)
+    assert.deepEqual(gatewaySpeedLines(old), [])
   })
 
   it('只取同一路由最新状态，按有效生成时长加权，单项下限、取消和仍在途都不计入平均', () => {
@@ -63,10 +59,8 @@ describe('Magpie 实时会话分组', () => {
       route(4, { status: 499, canceled: true }), route(5, { tries: [{ done: true, status: 200, fail: 'incomplete' }] }),
       route(6, { out: 300, reasoning: 150, firstText: 0 }), route(7, { out: 300, ttft: 0 }), route(8, { out: 500, ms: 2000 })]
     const result = stats(rows)
-    assert.deepEqual([result.requests, result.completed, result.measured, result.floors], [8, 7, 3, 1])
     assert.equal(result.tps, Math.round((200 + 100 + 500) * 1000 / (2000 + 1000 + 1000)))
-    assert.deepEqual(result.recent.map(r => r.kind), ['measured', 'unmeasured', 'floor'])
-    assert.match(gatewaySpeedLines(result).at(-1)!.value, /500 tok\/s · 未测速 · ≥75 tok\/s/)
+    assert.deepEqual(gatewaySpeedLines(result).map(({ label, value }) => ({ label, value })), [{ label: '输出速度', value: '200 tok/s' }])
   })
 
   it('快照缺少窗口或窗口中缺行时不能给出部分平均', () => {
@@ -80,11 +74,11 @@ describe('Magpie 实时会话分组', () => {
     const get = gatewaySpeeds(async () => {
       calls++
       if (offline) throw new Error('offline')
-      return snapshot([route(1, { time: '2000-01-01T00:00:00Z' })])
+      return snapshot([route(1)])
     }, () => now)
     const [own, other] = await Promise.all([get(gw, session), get(gw, 'other')])
-    assert.ok(own.state === 'ready' && own.tps === 100 && own.recent[0]?.time === Date.UTC(2000, 0, 1))
-    assert.ok(other.state === 'ready' && other.requests === 0)
+    assert.deepEqual(own, { state: 'ready', tps: 100 })
+    assert.deepEqual(other, { state: 'ready', tps: null })
     assert.equal(calls, 1)
     now += 5000
     offline = true

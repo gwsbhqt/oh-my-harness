@@ -25,7 +25,7 @@ export const Config = z.object({
   pathMention: z.boolean().default(true).volatile().description('回复里本机真实存在的路径可点，右键用应用打开，可拖进输入框'),
   runStatus: z.boolean().default(true).volatile().description('输入框上方说清卡在哪一步、用时多久；输入框下方统计卡'),
   copySessionId: z.boolean().default(true).volatile().description('会话头栏「复制会话编号」按钮'),
-  magpieBaseUrl: z.string().default('').volatile().description('magpie 网关地址：留空时本机装了 Magpie 自动用 127.0.0.1:3425，否则不读分段用时；本机可用 http，别的机器上的网关只能 https'),
+  magpieBaseUrl: z.string().default('').volatile().description('magpie 网关地址：留空时本机装了 Magpie 自动用 127.0.0.1:3425，否则不读网关速度；本机可用 http，别的机器上的网关只能 https'),
   magpieKeyRef: z.string().default('').volatile().description('网关钥匙的凭据引用名，不能填钥匙本身；留空时本机用本机钥匙'),
 })
 

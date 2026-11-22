@@ -4,7 +4,7 @@
  * 同一时刻可能有好几件事同时成立（命令在跑，外面套着 run_code，再外面是这一步），
  * 显示时按优先级取最具体的那件：钩子 > 等你 > 压缩 > 重试 > 工具 > 模型 > 准备 > 衔接。
  */
-import type { Blocker, BlockerKind, RequestTiming, RunSnapshot, Segment } from '../../shared/run-status/types.ts'
+import type { Blocker, BlockerKind, RunSnapshot, Segment } from '../../shared/run-status/types.ts'
 
 const PRIORITY: Record<BlockerKind, number> = {
   hook: 9,
@@ -23,7 +23,6 @@ const PRIORITY: Record<BlockerKind, number> = {
 const RECENT_MIN_MS = 2000
 const RECENT_LIMIT = 8
 const DETAIL_LIMIT = 400
-const REQUEST_LIMIT = 6
 
 interface Activity {
   kind: BlockerKind
@@ -68,8 +67,6 @@ interface SessionState {
   totals: Partial<Record<BlockerKind, number>>
   recent: Segment[]
   /** 这次模型请求开始的时刻（模型流开始）。 */
-  reqStart?: number | undefined
-  requests: RequestTiming[]
   /** 界面上这一刻显示的那件事，从何时开始算。合计就按它切分，同一时刻只记一类。 */
   span?: Span | undefined
 }
@@ -174,25 +171,10 @@ export function describeTool(name: string, rawArgs: unknown, inside?: string): P
 export class RunTracker {
   private readonly sessions = new Map<string, SessionState>()
   private hookSeq = 0
-  /**
-   * 记不记模型请求的分段用时。可以传一个现读函数：网关是后来才配置上的话，
-   * 下一次请求就能开始记，不用重载插件。
-   */
-  private readonly trackRequests: boolean | (() => boolean)
-
-  constructor(options: { trackRequests?: boolean | (() => boolean) } = {}) {
-    this.trackRequests = options.trackRequests ?? true
-  }
-
-  /** 现读是否记录请求分段。 */
-  private tracking(): boolean {
-    return typeof this.trackRequests === 'function' ? this.trackRequests() : this.trackRequests
-  }
-
   private state(id: string): SessionState {
     let s = this.sessions.get(id)
     if (s === undefined) {
-      s = { running: false, partial: false, sawTurnStart: false, side: new Map(), hooks: [], totals: {}, recent: [], requests: [] }
+      s = { running: false, partial: false, sawTurnStart: false, side: new Map(), hooks: [], totals: {}, recent: [] }
       this.sessions.set(id, s)
     }
     return s
@@ -265,18 +247,18 @@ export class RunTracker {
     this.closeSpan(s, now)
   }
 
-  /** session/event：会话日志新追加的一条。走 magpie 的模型回复会记一次请求并返回它，供去 magpie 找分段用时。 */
-  event(id: string, e: SessionEventLike): RequestTiming | undefined {
+  /** 处理会话日志新追加的一条事件。 */
+  event(id: string, e: SessionEventLike): void {
     const s = this.state(id)
     const now = e.time
     try {
-      return this.applyEvent(s, now, e)
+      this.applyEvent(s, now, e)
     } finally {
       this.sync(s, now)
     }
   }
 
-  private applyEvent(s: SessionState, now: number, e: SessionEventLike): RequestTiming | undefined {
+  private applyEvent(s: SessionState, now: number, e: SessionEventLike): void {
     const d = asRecord(e.data) ?? {}
     switch (e.type) {
       case 'turn/start':
@@ -348,35 +330,8 @@ export class RunTracker {
       case 'compaction/end':
         this.endSide(s, `compaction:${String(d.compactionId)}`, now)
         return
-      case 'assistant/message':
-        return this.request(s, d, now)
       default:
     }
-  }
-
-  private request(s: SessionState, d: Record<string, unknown>, now: number): RequestTiming | undefined {
-    if (!this.tracking()) {
-      s.reqStart = undefined
-      return undefined
-    }
-    const source = asRecord(asRecord(d.message)?.source)
-    const responseId = str(asRecord(asRecord(source?.replayState)?.response)?.responseId)
-    const start = s.reqStart
-    s.reqStart = undefined
-    if (!str(source?.provider)?.startsWith('magpie') || responseId === undefined || start === undefined) return undefined
-    const step = typeof d.step === 'number' ? d.step : s.step
-    const model = str(source?.model)
-    const entry: RequestTiming = { responseId, ...step === undefined ? {} : { step }, ...model === undefined ? {} : { model }, totalMs: Math.max(0, now - start), end: now, state: 'pending' }
-    s.requests.push(entry)
-    if (s.requests.length > REQUEST_LIMIT) s.requests.splice(0, s.requests.length - REQUEST_LIMIT)
-    return entry
-  }
-
-  /** magpie 那边找到（或确定找不到）这次请求的记录后，补上分段用时。 */
-  resolveRequest(id: string, responseId: string, patch: Partial<RequestTiming>): void {
-    const list = this.sessions.get(id)?.requests
-    const i = list?.findIndex((r) => r.responseId === responseId) ?? -1
-    if (list !== undefined && i >= 0) list[i] = { ...list[i]!, ...patch, responseId }
   }
 
   /** agent/assistant-stream：模型流的开始、片段、结束。 */
@@ -392,7 +347,6 @@ export class RunTracker {
   private applyStream(s: SessionState, frame: StreamFrameLike, now: number): void {
     if (frame.type === 'start') {
       this.touchRunning(s)
-      s.reqStart = now
       s.stream = { chars: 0, part: undefined }
       this.setPhase(s, { kind: 'model-wait', tag: '等模型', title: '请求已发出，等模型开始响应', since: now })
       return
@@ -512,7 +466,6 @@ export class RunTracker {
       ...s.span === undefined ? {} : { current: { kind: s.span.kind, since: s.span.since } },
       recent: [...s.recent],
       partial: s.partial,
-      ...s.requests.length === 0 ? {} : { requests: [...s.requests] },
     }
   }
 

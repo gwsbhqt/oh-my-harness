@@ -6,7 +6,7 @@ Four small improvements to the DSH session UI, merged into one plugin with one l
 | --- | --- |
 | `hideFinished` | The header "jobs" and "subagents" buttons only show what is still running; when everything finished the button disappears (kept while the team board has content). |
 | `pathMention` | A path written in backticks in an assistant reply that really exists on this machine becomes a clickable mention: files preview in the sidebar, directories open in the system; right-click opens with an app; can be dragged into the composer. |
-| `runStatus` | A line above the composer says exactly what "thinking" is stuck on and for how long; a stats card below the composer replaces the built-in one with more accurate session statistics; the expanded card shows Magpie output speed, DSH speed including waits, and request timing. |
+| `runStatus` | A line above the composer says exactly what "thinking" is stuck on and for how long; a stats card below the composer replaces the built-in one with more accurate session statistics; the expanded card shows session timings and Magpie output speed. |
 | `copySessionId` | A "copy session id" button in the header copies the bare session id; on the web it appends `#machine`. Pasting into the composer turns it into a reference chip via dsh-composer. |
 
 All four default to on. Turning one off registers no slot, route or event listener for it.
@@ -33,7 +33,7 @@ Both the entry id and the settings namespace are `session-ui`. All six fields ar
 | `pathMention` | `true` | Existing paths in replies are clickable, right-click openable, draggable |
 | `runStatus` | `true` | Status line above and stats card below the composer |
 | `copySessionId` | `true` | Copy-session-id button in the header |
-| `magpieBaseUrl` | `''` | Magpie gateway for routing speed and segmented timing. An empty setting uses a locally installed Magpie |
+| `magpieBaseUrl` | `''` | Magpie gateway for routing speed. An empty setting uses a locally installed Magpie |
 | `magpieKeyRef` | `''` | Credential reference name of the gateway key (not the key itself) |
 
 Gateway selection: if a local Magpie is installed (a `magpie` on PATH), use the local address and local key; otherwise use the explicitly configured remote address and reference; with neither, the card displays DSH’s own statistics. No gateway address or key is hard-coded; both come from configuration.

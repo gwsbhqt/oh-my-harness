@@ -5,7 +5,7 @@
  *    那一行不是插槽：本插件在输入框上方的 `conversation.input.dock` 放一个不可见的锚点，找到同一个会话里的
  *    `[data-chat-running]`，用 React portal 挂进它的内容区（`:scope > span:last-of-type`）。
  * 2. 输入框下方的统计卡：用宿主自带「会话统计」卡的 id（`activity`）和 order 注册，按宿主约定顶替它。
- *    点开看整段会话的时间去向、分模型的速度；会话在跑时还有本轮时间花在哪、最近几次请求的分段用时。
+ *    点开看整段会话的时间去向、输出速度；会话在跑时还有本轮时间花在哪。
  *    整段数字来自宿主半登记的会话投影 `runStatusTotals`，本轮数字来自宿主半的只读路由。
  *
  * `test/host-shape.test.ts` 对着宿主核对这两处依赖的结构，宿主一改就在那里失败。
@@ -18,7 +18,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { IconGaugeOutlineRegular, useDismissOnOutsidePointer } from '@deepseek-ai/dsh-client-ui-primitives'
-import { breakdown, formatDuration, formatSpeed, formatStatDuration, gatewaySpeedLines, recentRequestLines } from '../../shared/run-status/format.ts'
+import { breakdown, formatDuration, formatStatDuration, gatewaySpeedLines } from '../../shared/run-status/format.ts'
 import type { BlockerKind, GatewaySpeed, RunSnapshot } from '../../shared/run-status/types.ts'
 import { fetchRunStatus } from './request.ts'
 import type { TotalsView } from '../../host/run-status/totals.ts'
@@ -63,7 +63,6 @@ const STYLE = `
 .dsh-rs-pill[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}
 @media (hover:hover){.dsh-rs-pill:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}}
 .dsh-rs-pill-label{text-overflow:ellipsis;min-width:0;overflow:hidden}
-.dsh-rs-sep{color:var(--dsw-alias-separator-primary);margin:0 6px}
 .dsh-rs-panel{z-index:1100;box-sizing:border-box;width:max-content;min-width:min(300px, calc(100vw - 24px));max-width:min(440px, calc(100vw - 24px));border-radius:var(--dsw-radius-lg);background:var(--dsw-specific-menu);backdrop-filter:var(--dsw-menu-backdrop-filter);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);box-shadow:var(--dsw-elevation-prominent);color:var(--dsw-alias-label-secondary);cursor:default;max-height:calc(100dvh - 24px);border:0;padding:16px;font-size:12px;line-height:18px;position:fixed;position-area:none;margin:0;top:auto;bottom:max(12px, calc(anchor(top) + 8px));left:max(12px, anchor(left));overflow:hidden auto}
 .dsh-rs-panel .dsh-rs-title{color:var(--dsw-alias-label-primary);justify-content:space-between;gap:16px;margin-bottom:8px;font-weight:500;display:flex;overflow:visible}
 .dsh-rs-title-label{align-items:center;gap:6px;min-width:0;display:inline-flex}
@@ -155,7 +154,7 @@ function useGatewaySpeed(session: string | undefined, open: boolean): GatewaySpe
           const response = await fetchRunStatus(document.baseURI, session, 'magpie', controller.signal)
           if (response.ok) {
             const result = await response.json() as GatewaySpeed
-            if (result?.state === 'unconfigured' || (result?.state === 'ready' && Array.isArray(result.recent))) data = result
+            if (result?.state === 'unconfigured' || (result?.state === 'ready' && (result.tps === null || Number.isFinite(result.tps)))) data = result
           }
         } catch { /* 下一次读取会重新连接。 */ }
         if (!controller.signal.aborted) setLatest({ session, data })
@@ -258,8 +257,6 @@ interface Row {
   readonly value: string
   readonly dot?: string
   readonly title?: string
-  /** 说明较长需要折行时置真（分段用时那一栏），其余仍在右边单行显示。 */
-  readonly wrap?: boolean
 }
 
 /** 一组「左说明、右数字」，和宿主自带弹窗同一种排法；几组之间用细线隔开。 */
@@ -269,7 +266,7 @@ function Rows({ rows }: { rows: readonly Row[] }): JSX.Element {
       {rows.map((r) => (
         <div key={r.key} className="dsh-rs-pair" title={r.title}>
           <dt>{r.dot !== undefined && <span className="dsh-rs-dot" style={{ background: r.dot }} />}<span className="dsh-rs-dt-text">{r.label}</span></dt>
-          <dd style={r.wrap === true ? { whiteSpace: 'normal', textAlign: 'left' } : undefined}>{r.value}</dd>
+          <dd>{r.value}</dd>
         </div>
       ))}
     </dl>
@@ -281,7 +278,6 @@ function hostRows(host: HostStats): Row[] {
   const rows: Row[] = []
   if (host.llmMs > 0) rows.push({ key: 'llm', label: '模型用时', value: formatStatDuration(host.llmMs) })
   if (host.toolMs > 0) rows.push({ key: 'tool', label: '工具调用用时', value: formatStatDuration(host.toolMs) })
-  rows.push({ key: 'unavailable', label: '含等待速度', value: '会话统计尚未加载' })
   return rows
 }
 
@@ -299,36 +295,6 @@ function workRows(totals: TotalsView): Row[] {
     { key: 'llm', label: '模型用时', value: formatStatDuration(totals.llmMs) },
     { key: 'tool', label: '工具调用用时', value: formatStatDuration(totals.toolMs) },
   ]
-}
-
-const tps = (s: { outputTokens: number; tokenMs: number }): string => `${formatSpeed(s.outputTokens, s.tokenMs)} tok/s`
-const SPEED_NOTE = '上报的输出 token 总数除以对应请求的总用时，包含等待、思考和接收内容，不含工具执行；只统计已完成且上报输出数的请求。'
-const CONTENT_NOTE = '从每步开始到收到第一段文字、思考文字或工具调用的等待时间，含请求准备；取中位数，一半请求不超过这个时间。'
-
-function speedRows(totals: TotalsView, running: boolean): Row[] {
-  const rows: Row[] = []
-  const value = (s: { outputTokens: number; tokenMs: number; medianTtftMs: number | null }): string =>
-    [tps(s), s.medianTtftMs === null ? null : `等内容 ${formatStatDuration(s.medianTtftMs)}`].filter(Boolean).join(' · ')
-  const scope = running ? '速度截至上次已完成请求，进行中的耗时仍实时更新。' : '只统计已完成请求。'
-  const note = `${SPEED_NOTE}${CONTENT_NOTE}${scope}`
-  const avg = totals.average
-  if (avg != null && avg.tokenMs > 0) {
-    const since = avg.switched ? `第 ${avg.sinceTurn} 轮换模型后` : '本会话'
-    rows.push({ key: 'average', label: avg.switched ? '换模型后含等待' : '会话含等待', value: value(avg), title: `${avg.model}，${since}。${note}` })
-  }
-  const cur = totals.current
-  if (cur != null && cur.tokenMs > 0) {
-    rows.push({ key: 'current', label: `第 ${cur.turn} 轮含等待`, value: value(cur), title: `${cur.model}，第 ${cur.turn} 轮。${note}` })
-  }
-  return rows
-}
-
-/**
- * 最近几次走 magpie 的模型请求各段用时。数据直接来自宿主快照的 requests；
- * 网关没配时宿主根本不记请求，这里就是空的，整区不出现。
- */
-function requestRows(snap: RunSnapshot): Row[] {
-  return recentRequestLines(snap.requests).map((r) => ({ ...r, wrap: true }))
 }
 
 function turnRows(snap: RunSnapshot, hostNow: number): Row[] {
@@ -356,26 +322,21 @@ function StatsPill(props: Props): JSX.Element | null {
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [open])
-  // 面板打开就取快照：会话结束后仍要看得到最近请求的分段，不只是跑着的时候。
-  const { snap, skew } = useSnapshot(props.sessionId, open)
+  const { snap, skew } = useSnapshot(props.sessionId, open && running)
   const gatewaySpeed = useGatewaySpeed(props.sessionId, open)
   const now = useTick(open)
   useEffect(ensureStyle, [])
   const steps = totals?.steps ?? host?.steps ?? 0
   if (steps === 0) return null
 
-  // 每次请求结束后才有完整的 token 数，卡面沿用最近一轮已完成请求的速度。
-  const cur = totals?.current
-  const speed = cur != null && cur.tokenMs > 0 ? `含等待 ${tps(cur)}` : null
   const counts = `${totals?.turns ?? host?.turns ?? 0} 轮 ${steps} 步`
-  const text = speed === null ? counts : `${counts} · ${speed}`
   const hostNow = now - skew
   const icon = <IconGaugeOutlineRegular />
   return (
     <span ref={rootRef} className="dsh-rs-anchor" data-composer-stat={STATS_ENTRY_ID} style={{ anchorName } as CSSProperties}>
-      <button type="button" className="dsh-rs-pill" aria-haspopup="dialog" aria-expanded={open} aria-label={text} onClick={() => setOpen((v) => !v)}>
+      <button type="button" className="dsh-rs-pill" aria-haspopup="dialog" aria-expanded={open} aria-label={counts} onClick={() => setOpen((v) => !v)}>
         {icon}
-        <span className="dsh-rs-pill-label">{counts}{speed !== null && <><span className="dsh-rs-sep" aria-hidden="true">·</span>{speed}</>}</span>
+        <span className="dsh-rs-pill-label">{counts}</span>
       </button>
       {open && createPortal(
         <div ref={panelRef} className="dsh-rs-panel" role="dialog" aria-label="会话统计" style={{ positionAnchor: anchorName } as CSSProperties}>
@@ -384,9 +345,7 @@ function StatsPill(props: Props): JSX.Element | null {
           {[
             ...(totals === undefined ? [host === undefined ? [] : hostRows(host)] : [wallRows(totals, hostNow), workRows(totals)]),
             gatewaySpeedLines(gatewaySpeed),
-            ...(totals === undefined ? [] : [speedRows(totals, running)]),
             ...(running && snap?.running === true ? [turnRows(snap, hostNow)] : []),
-            ...(snap === null ? [] : [requestRows(snap)]),
           ].filter((group) => group.length > 0).map((group, i) => (
             <div key={i}>
               {i > 0 && <div className="dsh-rs-rule dsh-rs-gap-rule" aria-hidden="true" />}
