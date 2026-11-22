@@ -7,7 +7,7 @@ from pathlib import Path
 import struct
 import tempfile
 
-from .chrome import _evaluate
+from ._chrome import _evaluate
 from .protocol import BrowserError
 
 

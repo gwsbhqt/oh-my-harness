@@ -10,7 +10,7 @@ from collections import defaultdict, deque
 from copy import deepcopy
 from unittest.mock import patch
 
-from browser_use.chrome import CHROME_TOOLS, ChromeControl
+from browser_use._chrome import CHROME_TOOLS, ChromeControl
 from browser_use.protocol import BrowserError
 
 
@@ -434,7 +434,7 @@ class PageTests(unittest.IsolatedAsyncioTestCase):
                 seen.set()
                 await release.wait()
             return {"status": "done"}
-        with patch("browser_use.chrome.perform", new=perform):
+        with patch("browser_use._chrome.perform", new=perform):
             first = asyncio.create_task(self.page_call("page_click"))
             await seen.wait()
             second = asyncio.create_task(self.page_call("page_press"))

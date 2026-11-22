@@ -6,7 +6,7 @@ import asyncio
 import json
 import sys
 
-from .browser import Browser
+from .browser import Browser, _BROWSER_ADAPTERS
 from .protocol import BrowserError, mcp_result
 
 
@@ -88,7 +88,7 @@ async def serve(browser, *, mcp):
                 version = params.get("protocolVersion")
                 initialized = True
                 reply["result"] = {"protocolVersion": version if version in PROTOCOLS else PROTOCOLS[0],
-                                   "capabilities": {"tools": {}}, "serverInfo": {"name": "browser-use", "version": "3.2.0"}}
+                                   "capabilities": {"tools": {}}, "serverInfo": {"name": "browser-use", "version": "3.3.0"}}
             elif method == "ping":
                 reply["result"] = {}
             elif not initialized:
@@ -126,7 +126,7 @@ async def run(args):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="browser-use", description="Control or debug a specific Cra or Chrome instance")
-    parser.add_argument("--browser", choices=("cra", "chrome"), default="cra")
+    parser.add_argument("--browser", choices=tuple(_BROWSER_ADAPTERS), default="cra")
     parser.add_argument("--endpoint", help="Debugging endpoint of this browser instance")
     parser.add_argument("--cra-socket", help="Socket for the official Cra app bridge")
     parser.add_argument("--cra-executable", help="Official Cra executable")

@@ -1,6 +1,6 @@
 # 网页控制和调试 API
 
-一次创建一个 `Browser("cra")` 或 `Browser("chrome", endpoint=...)`，在任务内复用。工具名、输入参数和调试返回值在两端共用同一份定义。`Browser.tools()`、CLI 的 `tools` 以及 MCP 的 `tools/list` 都提供实际参数、必填项、枚举和范围。`capabilities` 按所选浏览器报告具有实现的操作。某个工具的个别选项仍可能受浏览器限制。
+`skills.browser_use.cra` 和 `skills.browser_use.chrome` 每次分别创建一个 `Browser("cra")` 和 `Browser("chrome")`。在同一次任务中复用取到的对象。若需连接指定的实例，可用 `Browser("chrome", endpoint=...)`。工具名、输入参数和调试返回值在两端共用同一份定义。`Browser.tools()`、CLI 的 `tools` 以及 MCP 的 `tools/list` 都提供实际参数、必填项、枚举和范围。`capabilities` 按所选浏览器报告具有实现的操作。某个工具的个别选项仍可能受浏览器限制。
 
 ## 网页控制
 

@@ -14,7 +14,7 @@ import sys
 from urllib.parse import urlsplit
 
 from .capture import save_full_page
-from .chrome import _evaluate, snapshot_selector_uid
+from ._chrome import _evaluate, snapshot_selector_uid
 from .protocol import BrowserError, mcp_result, validate
 
 

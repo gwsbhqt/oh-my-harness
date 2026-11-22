@@ -4,6 +4,8 @@
 
 使用同一套指令操作 Cra 和 Chrome。Cra 使用原生 MCP，Chrome 使用 Google 官方 Chrome DevTools MCP。两个浏览器都能查 CSS 来源、展开报错、截取元素和整页，或在本机开发页复现接口的空态和错误态。两张 PNG 还可在本机比较并标出差异。
 
+在 Python 技能内核中，用 `async with skills.browser_use.cra as browser:` 开始一项任务。Chrome 对应 `skills.browser_use.chrome`。每次读取短名都会创建独立会话。
+
 - [Python 使用入口](PYSKILL.md) 与[普通终端入口](SKILL.md)
 - [连接条件与旧版归档](references/common.md)
 - [工具和返回值](references/interfaces.md) 与[命令行](references/cli.md)

@@ -7,11 +7,14 @@ from contextlib import AsyncExitStack
 from copy import deepcopy
 from functools import partial
 
-from .chrome import CHROME_TOOLS, ChromeControl
+from ._chrome import CHROME_TOOLS, ChromeControl
 from .debugging import DEBUG_SCHEMAS, Debugger
 from .mcp_client import StdioMcp, cra_command as make_cra_command, google_command as make_google_command
 from .protocol import BrowserError, CONTROL_SCHEMAS, TOOL_DESCRIPTIONS, checked_reply, mcp_result, native_value, validate
 
+
+# Cra's native MCP already implements the control API directly.
+_BROWSER_ADAPTERS = {"cra": None, "chrome": ChromeControl}
 
 FILE_TOOLS = {
     "compare_screenshots": {
@@ -32,8 +35,8 @@ class Browser:
     def __init__(self, browser="cra", *, endpoint=None, local_files=False,
                  cra_executable=None, cra_socket=None, google_executable=None,
                  cra_command=None, google_command=None):
-        if browser not in ("cra", "chrome"):
-            raise BrowserError("invalid_arguments", "browser must be cra or chrome")
+        if not isinstance(browser, str) or browser not in _BROWSER_ADAPTERS:
+            raise BrowserError("invalid_arguments", f"browser must be {' or '.join(_BROWSER_ADAPTERS)}")
         if type(local_files) is not bool:
             raise BrowserError("invalid_arguments", "local_files must be a boolean")
         self.browser = browser
@@ -49,8 +52,9 @@ class Browser:
         self._closed = False
         self._locks = {}
         self._test_tabs = set()
-        self._chrome = ChromeControl(self._google, local_files=local_files) if browser == "chrome" else None
-        self._debug = Debugger(self._google, cra=self._cra if browser == "cra" else None,
+        adapter = _BROWSER_ADAPTERS[browser]
+        self._chrome = adapter(self._google, local_files=local_files) if adapter is not None else None
+        self._debug = Debugger(self._google, cra=self._cra if self._chrome is None else None,
                                chrome_page_id=self._chrome.page_id if self._chrome else None, test_tabs=self._test_tabs)
         self._capture = Debugger(self._google_capture, cra=self._chrome.call if self._chrome else self._cra)
 

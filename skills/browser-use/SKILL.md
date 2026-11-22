@@ -11,7 +11,7 @@ description: "用同一套 API 操作 Cra 和 Chrome，查样式和报错、截�
 
 Chrome 任务选择 `chrome`，并通过 `endpoint` 或 `BROWSER_USE_CHROME_ENDPOINT` 显式指定已经开放调试接口的浏览器。Cra 深度调试使用 `BROWSER_USE_CRA_ENDPOINT` 或当前对象的 `endpoint`。两个变量分别对应两份浏览器实例。连接所需程序和参数见[使用条件](references/common.md)。
 
-在 Python 技能内核中使用 `skills.browser_use.Browser`。普通终端使用 `browser-use`。一项任务复用同一会话，后续动作始终带回实际的 `tabId`。网页与调试工具的名字、参数在两个入口相同，支持情况和回执见[接口说明](references/interfaces.md)。
+在 Python 技能内核中，用 `skills.browser_use.cra` 或 `skills.browser_use.chrome` 取得会话。每次读取短名都会创建一个新的 `Browser`。用 `dir(skills.browser_use)` 可以查看这些短名。用 `async with` 取得一次，在任务中复用同一个对象和打开标签时返回的 `tabId`。需要指定调试地址等参数时，用 `skills.browser_use.Browser("chrome", endpoint=...)`。普通终端使用 `browser-use`。两种入口的工具名、参数和回执见[接口说明](references/interfaces.md)。
 
 ## 打开、观察和收尾
 

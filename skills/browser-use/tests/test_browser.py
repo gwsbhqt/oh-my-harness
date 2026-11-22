@@ -4,8 +4,42 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+import browser_use
 from browser_use import Browser, BrowserError
 from browser_use.protocol import CONTROL_SCHEMAS, checked_reply, mcp_result, native_value
+
+
+@pytest.mark.parametrize("name", ["cra", "chrome"])
+def test_browser_shorthand_creates_independent_sessions(name, monkeypatch):
+    endpoint = "http://127.0.0.1:9222"
+    monkeypatch.setenv(f"BROWSER_USE_{name.upper()}_ENDPOINT", endpoint)
+
+    async def check():
+        async with Browser(name) as explicit, getattr(browser_use, name) as first:
+            async with getattr(browser_use, name) as second:
+                assert first is not second
+                assert type(first) is type(second) is Browser
+                assert first.endpoint == second.endpoint == explicit.endpoint == endpoint
+                assert first.capabilities() == second.capabilities() == explicit.capabilities()
+            with pytest.raises(BrowserError) as closed:
+                await second.tabs_list()
+            assert closed.value.code == "session_closed"
+            first._dispatch = AsyncMock(return_value=[])
+            assert await first.tabs_list() == []
+            first._dispatch.assert_awaited_once_with("tabs_list", {})
+
+    asyncio.run(check())
+
+
+def test_shorthand_names_are_discoverable_and_unknown_names_are_rejected():
+    assert {"cra", "chrome"} <= set(dir(browser_use))
+    assert {"cra", "chrome"} <= set(browser_use.__all__)
+    with pytest.raises(AttributeError):
+        getattr(browser_use, "unknown_browser")
+    for unknown in ("unknown_browser", []):
+        with pytest.raises(BrowserError) as invalid:
+            Browser(unknown)
+        assert invalid.value.code == "invalid_arguments"
 
 
 def test_two_browsers_offer_identical_control_and_debug_schemas():
