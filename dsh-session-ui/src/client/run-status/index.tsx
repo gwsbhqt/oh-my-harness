@@ -140,15 +140,20 @@ function useSnapshot(sessionId: string | undefined, running: boolean): PollState
 }
 
 /** 网关可以离线或较慢，单独读取以免阻塞运行状态行的一秒刷新。 */
-function useGatewaySpeed(session: string | undefined, open: boolean): GatewaySpeed | undefined {
+function useGatewaySpeed(session: string | undefined, steps: number, open: boolean): GatewaySpeed | undefined {
   const [latest, setLatest] = useState<{ session: string; data: GatewaySpeed }>()
+  const lastRead = useRef<{ session: string; at: number }>()
+  const refreshStep = open && steps > 0 ? 1 : steps
   useEffect(() => {
-    setLatest(undefined)
-    if (!open || !session) return
+    if (!refreshStep || !session) return
     const controller = new AbortController()
     let timeout: ReturnType<typeof setTimeout> | undefined
+    let reading = false
     const refresh = async () => {
+      if (reading || controller.signal.aborted) return
       if (!document.hidden) {
+        reading = true
+        lastRead.current = { session, at: Date.now() }
         let data: GatewaySpeed = { state: 'unavailable' }
         try {
           const response = await fetchRunStatus(document.baseURI, session, 'magpie', controller.signal)
@@ -157,17 +162,31 @@ function useGatewaySpeed(session: string | undefined, open: boolean): GatewaySpe
             if (result?.state === 'unconfigured' || (result?.state === 'ready' && (result.tps === null || Number.isFinite(result.tps)))) data = result
           }
         } catch { /* 下一次读取会重新连接。 */ }
-        if (!controller.signal.aborted) setLatest({ session, data })
+        reading = false
+        if (!controller.signal.aborted) {
+          lastRead.current = { session, at: Date.now() }
+          setLatest({ session, data })
+        }
       }
-      if (!controller.signal.aborted) timeout = setTimeout(refresh, 3000)
+      if (open && !controller.signal.aborted) timeout = setTimeout(refresh, 3000)
     }
-    void refresh()
+    const last = lastRead.current
+    const delay = last?.session === session ? Math.max(0, 3100 - (Date.now() - last.at)) : 0
+    timeout = setTimeout(refresh, delay)
+    const onVisible = () => {
+      if (!document.hidden) {
+        clearTimeout(timeout)
+        void refresh()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisible)
     return () => {
       controller.abort()
       clearTimeout(timeout)
+      document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [open, session])
-  return open && latest?.session === session ? latest?.data : undefined
+  }, [open, session, refreshStep])
+  return latest?.session === session ? latest?.data : undefined
 }
 
 /** 每半秒刷新正在计时的耗时，并跟随宿主运行行的挂载和卸载。 */
@@ -323,20 +342,22 @@ function StatsPill(props: Props): JSX.Element | null {
     return () => document.removeEventListener('keydown', onKey)
   }, [open])
   const { snap, skew } = useSnapshot(props.sessionId, open && running)
-  const gatewaySpeed = useGatewaySpeed(props.sessionId, open)
+  const steps = totals?.steps ?? host?.steps ?? 0
+  const gatewaySpeed = useGatewaySpeed(props.sessionId, steps, open)
   const now = useTick(open)
   useEffect(ensureStyle, [])
-  const steps = totals?.steps ?? host?.steps ?? 0
   if (steps === 0) return null
 
   const counts = `${totals?.turns ?? host?.turns ?? 0} 轮 ${steps} 步`
+  const latestTps = gatewaySpeed?.state === 'ready' ? gatewaySpeed.latestTps : null
+  const text = latestTps == null ? counts : `${counts} · 最近 ${latestTps} tok/s`
   const hostNow = now - skew
   const icon = <IconGaugeOutlineRegular />
   return (
     <span ref={rootRef} className="dsh-rs-anchor" data-composer-stat={STATS_ENTRY_ID} style={{ anchorName } as CSSProperties}>
-      <button type="button" className="dsh-rs-pill" aria-haspopup="dialog" aria-expanded={open} aria-label={counts} onClick={() => setOpen((v) => !v)}>
+      <button type="button" className="dsh-rs-pill" aria-haspopup="dialog" aria-expanded={open} aria-label={text} title={latestTps == null ? undefined : '最近一次可实测的输出速度'} onClick={() => setOpen((v) => !v)}>
         {icon}
-        <span className="dsh-rs-pill-label">{counts}</span>
+        <span className="dsh-rs-pill-label">{text}</span>
       </button>
       {open && createPortal(
         <div ref={panelRef} className="dsh-rs-panel" role="dialog" aria-label="会话统计" style={{ positionAnchor: anchorName } as CSSProperties}>

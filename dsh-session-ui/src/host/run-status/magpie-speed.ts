@@ -49,17 +49,25 @@ function measured(r: Route, reasoning: number): Sample | undefined {
   return { tokens, ms: duration }
 }
 
-function requestSample(r: Route): Sample | undefined {
-  if (!r.done || typeof r.status !== 'number' || r.status >= 400) return
+function answered(r: Route): boolean {
+  if (!r.done || typeof r.status !== 'number' || r.status >= 400) return false
   const tries = r.tries ?? []
-  if (tries.length && !tries.some(t => t.done && typeof t.status === 'number' && t.status < 400 && !t.fail)) return
+  return tries.length === 0 || tries.some(t => t.done && typeof t.status === 'number' && t.status < 400 && !t.fail)
+}
+
+function requestSample(r: Route): Sample | undefined {
   const reasoning = r.reasoning ?? r.usage?.at(-1)?.reasoning ?? 0
   const metrics = [r.out, r.ms, r.ttft, r.firstText, r.firstReasoning, r.flow, reasoning]
   if (metrics.some(n => n != null && (!Number.isSafeInteger(n) || n < 0))) return
   return measured(r, reasoning)
 }
 
-type TraceWindow = Map<string, Sample>
+interface SessionSample extends Sample {
+  latestTps: number | null
+  waits: number[]
+}
+
+type TraceWindow = Map<string, SessionSample>
 
 /** 先圈定全网关最近的路由，再按会话分组。一个路由在重试和流式更新后仍只占一行。 */
 export function traceWindow(value: unknown): TraceWindow {
@@ -79,18 +87,31 @@ export function traceWindow(value: unknown): TraceWindow {
     const r = latest.get(id)
     if (r === undefined) throw new Error('Magpie 路由窗口缺行')
     const session = r.parentSession || r.session
-    if (r.agent !== 'dsh' || !session) continue
+    if (r.agent !== 'dsh' || !session || !answered(r)) continue
+    const total = sessions.get(session) ?? { tokens: 0, ms: 0, latestTps: null, waits: [] }
+    if (r.ttft !== undefined && Number.isSafeInteger(r.ttft) && r.ttft > 0) total.waits.push(r.ttft)
     const sample = requestSample(r)
-    if (!sample) continue
-    const total = sessions.get(session) ?? { tokens: 0, ms: 0 }
-    sessions.set(session, { tokens: total.tokens + sample.tokens, ms: total.ms + sample.ms })
+    if (sample) {
+      total.latestTps ??= Math.round(sample.tokens * 1000 / sample.ms)
+      total.tokens += sample.tokens
+      total.ms += sample.ms
+    }
+    sessions.set(session, total)
   }
   return sessions
 }
 
 export function sessionSpeed(window: TraceWindow, session: string): GatewaySpeed {
   const sample = window.get(session)
-  return { state: 'ready', tps: sample ? Math.round(sample.tokens * 1000 / sample.ms) : null }
+  const waits = sample?.waits.toSorted((a, b) => a - b) ?? []
+  const middle = Math.floor(waits.length / 2)
+  const firstTokenMs = waits.length === 0 ? null : (waits[middle]! + waits[Math.floor((waits.length - 1) / 2)]!) / 2
+  return {
+    state: 'ready',
+    tps: sample?.ms ? Math.round(sample.tokens * 1000 / sample.ms) : null,
+    latestTps: sample?.latestTps ?? null,
+    firstTokenMs,
+  }
 }
 
 /** 同一网关的多个统计卡共用一次读取。缓存里只留各会话的统计，不保留路由原文。 */
@@ -103,9 +124,10 @@ export function gatewaySpeeds(read: (gateway: ResolvedMagpieGateway) => Promise<
     }
     const { magpieBaseUrl: base, magpieKeyRef: ref } = gateway
     if (!cache || cache.base !== base || cache.ref !== ref || now() >= cache.expires) {
+      const expires = now() + REFRESH_MS
       const entry = { base, ref, expires: Infinity, result: read(gateway).then(traceWindow).catch(() => undefined) }
       cache = entry
-      void entry.result.then(() => { entry.expires = now() + REFRESH_MS })
+      void entry.result.then(() => { entry.expires = expires })
     }
     const window = await cache.result
     return window ? sessionSpeed(window, session) : { state: 'unavailable' }

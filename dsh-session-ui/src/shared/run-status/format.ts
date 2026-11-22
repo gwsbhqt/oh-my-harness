@@ -33,13 +33,20 @@ export function formatStatDuration(ms: number): string {
   return `${h > 0 ? `${h}小时` : ''}${total >= 60 ? `${m}分` : ''}${s}秒`
 }
 
-export function gatewaySpeedLines(stats: GatewaySpeed | undefined): { key: string; label: string; value: string; title?: string }[] {
+interface GatewaySpeedLine { key: string; label: string; value: string; title?: string }
+
+export function gatewaySpeedLines(stats: GatewaySpeed | undefined): GatewaySpeedLine[] {
   if (!stats || stats.state === 'unconfigured') return []
-  const label = '输出速度'
+  const label = '平均输出速度'
   if (stats.state === 'unavailable') return [{ key: 'gateway', label, value: '暂时读不到' }]
-  if (stats.state !== 'ready' || stats.tps === null) return []
-  return [{ key: 'gateway', label, value: `${stats.tps} tok/s`,
-    title: '按 Magpie 路由页口径，统计网关最近 60 次路由中本会话可实测的输出 token 和生成用时。' }]
+  if (stats.state !== 'ready') return []
+  const rows: GatewaySpeedLine[] = []
+  if (stats.tps !== null) rows.push({ key: 'gateway', label, value: `${stats.tps} tok/s`,
+    title: '按 Magpie 路由页口径，统计网关最近 60 次路由中本会话可实测的输出 token 和生成用时。' })
+  if (stats.firstTokenMs != null) rows.push({ key: 'first-token', label: '首字等待',
+    value: stats.firstTokenMs >= 60_000 ? formatStatDuration(stats.firstTokenMs) : `${(stats.firstTokenMs / 1000).toFixed(1)} 秒`,
+    title: '同一网关窗口中，本会话成功请求从网关收到请求到首个输出信号的中位数。首个信号也可以是推理或工具调用。' })
+  return rows
 }
 
 export function kindName(kind: BlockerKind): string {

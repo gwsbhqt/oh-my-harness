@@ -60,7 +60,17 @@ describe('Magpie 实时会话分组', () => {
       route(6, { out: 300, reasoning: 150, firstText: 0 }), route(7, { out: 300, ttft: 0 }), route(8, { out: 500, ms: 2000 })]
     const result = stats(rows)
     assert.equal(result.tps, Math.round((200 + 100 + 500) * 1000 / (2000 + 1000 + 1000)))
-    assert.deepEqual(gatewaySpeedLines(result).map(({ label, value }) => ({ label, value })), [{ label: '输出速度', value: '200 tok/s' }])
+    assert.equal(result.latestTps, 500)
+    assert.deepEqual(gatewaySpeedLines(result).map(({ label, value }) => ({ label, value })), [{ label: '平均输出速度', value: '200 tok/s' }, { label: '首字等待', value: '1.0 秒' }])
+  })
+
+  it('首字等待取网关计时中位数，包含测速被排除的成功请求', () => {
+    const result = stats([route(1, { ttft: 1200, flow: 1 }), route(2, { ttft: 2400, flow: 1 }),
+      route(3, { ttft: 9000, status: 499 }), route(4, { ttft: 8000, done: false })])
+    assert.equal(result.tps, null)
+    assert.equal(result.latestTps, null)
+    assert.equal(result.firstTokenMs, 1800)
+    assert.equal(gatewaySpeedLines(result)[0]?.value, '1.8 秒')
   })
 
   it('快照缺少窗口或窗口中缺行时不能给出部分平均', () => {
@@ -77,8 +87,8 @@ describe('Magpie 实时会话分组', () => {
       return snapshot([route(1)])
     }, () => now)
     const [own, other] = await Promise.all([get(gw, session), get(gw, 'other')])
-    assert.deepEqual(own, { state: 'ready', tps: 100 })
-    assert.deepEqual(other, { state: 'ready', tps: null })
+    assert.deepEqual(own, { state: 'ready', tps: 100, latestTps: 100, firstTokenMs: 1000 })
+    assert.deepEqual(other, { state: 'ready', tps: null, latestTps: null, firstTokenMs: null })
     assert.equal(calls, 1)
     now += 5000
     offline = true

@@ -43,7 +43,7 @@ export interface Segment {
 /** Magpie 路由页的会话平均速度，只有可实测的请求参与平均。 */
 export type GatewaySpeed =
   | { readonly state: 'unconfigured' | 'unavailable' }
-  | { readonly state: 'ready'; readonly tps: number | null }
+  | { readonly state: 'ready'; readonly tps: number | null; readonly latestTps: number | null; readonly firstTokenMs: number | null }
 
 export interface RunSnapshot {
   readonly sessionId: string
