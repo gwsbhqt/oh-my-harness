@@ -1,4 +1,4 @@
-"""Real ssh calls shared by remote-host, computer-use, dsh-use and browser-use: options, PATH prelude, payload staging, LAN proxy, failure hints."""
+"""Real ssh calls shared by remote-host, computer-use and dsh-use: options, PATH prelude, payload staging, LAN proxy, failure hints."""
 
 import os
 import re

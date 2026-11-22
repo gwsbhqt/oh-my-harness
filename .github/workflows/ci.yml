@@ -123,7 +123,7 @@ jobs:
               else
                 ci_failures+=("$component:$?")
               fi
-            elif [[ "$component" == "shot-sheet" ]]; then
+            elif [[ "$component" == "shot-sheet" || "$component" == "browser-use" ]]; then
               if uv sync --python 3.12 --project "$component" --extra test && uv run --offline --no-sync --project "$component" python -m pytest "$component/tests" -v; then
                 echo "$component tests passed"
               else

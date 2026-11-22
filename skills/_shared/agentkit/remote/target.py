@@ -1,4 +1,4 @@
-"""Machine selection shared by remote-host, computer-use, dsh-use, browser-use and clash-use, and forwarding computer-use/dsh-use/clash-use commands to the same tool on that machine."""
+"""Machine selection shared by remote-host, computer-use, dsh-use and clash-use, and forwarding computer-use/dsh-use/clash-use commands to the same tool on that machine."""
 
 import argparse
 import contextlib
@@ -10,8 +10,7 @@ import sys
 
 from . import pins, ssh
 
-TOOLS = ("remote-host", "computer-use", "dsh-use", "browser-use", "clash-use")
-BROWSER_USE_VALUE_OPTIONS = {"--session", "--browser", "--socket", "--tab", "--rpc-timeout"}
+TOOLS = ("remote-host", "computer-use", "dsh-use", "clash-use")
 
 
 def resolve_target(tool: str, host: str | None = None) -> str:
@@ -73,7 +72,7 @@ def _extract(argv, tool="remote-host"):
             local = True
         else:
             args.append(word)
-            if (tool == "remote-host" and word in value_options or tool == "browser-use" and word in BROWSER_USE_VALUE_OPTIONS) and i + 1 < len(argv):
+            if tool == "remote-host" and word in value_options and i + 1 < len(argv):
                 i += 1
                 args.append(argv[i])
                 i += 1
@@ -82,8 +81,7 @@ def _extract(argv, tool="remote-host"):
                 command = word
                 if tool != "remote-host":
                     args.extend(argv[i + 1:])
-                    if tool != "browser-use":
-                        _reject_misplaced_route(args, tool)
+                    _reject_misplaced_route(args, tool)
                     break
                 if command in ("job", "proxy-run"):
                     # These parsers own their options and payload; never inspect those words here.
@@ -120,9 +118,8 @@ def _reject_misplaced_route(args, tool):
         i += 1
 
 
-def _control(tool, args, host, *, json_output=False):
-    as_json = json_output or tool != "remote-host" and _wants_json(args, tool)
-    if as_json:
+def _control(tool, args, host):
+    if tool != "remote-host" and _wants_json(args, tool):
         end = args.index("--") if "--" in args else len(args)
         args = [word for i, word in enumerate(args) if i >= end or word != "--json"]
         output = io.StringIO()
@@ -131,7 +128,7 @@ def _control(tool, args, host, *, json_output=False):
         pin = pins.read_pin(tool)
         result = {"ok": code == 0, "tool": tool, "target": pin.get("host") or "local"}
         if args[0] == "hosts":
-            result["hosts"] = (["local"] if tool != "remote-host" else []) + ssh.known_hosts()
+            result["hosts"] = ["local", *ssh.known_hosts()]
         print(json.dumps(result, ensure_ascii=False))
         return code
     action = args[0]
@@ -154,7 +151,12 @@ def _control(tool, args, host, *, json_output=False):
     return pins.cmd_use(parsed)
 
 
-def _route(tool, argv, *, json_output=False):
+def route(tool: str, argv: list[str]) -> tuple[list[str], str | None, int | None]:
+    """Consume -H/--host/--local and run use/pin/hosts; the host is returned unresolved.
+
+    remote-host resolves it itself: it accepts `-H a,b` for several machines at once and
+    has commands that need no machine at all.
+    """
     args = list(argv)
     try:
         if tool not in TOOLS:
@@ -162,67 +164,19 @@ def _route(tool, argv, *, json_output=False):
         args, host, local = _extract(argv, tool)
         if local and host is not None and host != "local":
             raise ValueError(f"{tool}: --local conflicts with -H/--host {host!r}")
-        command_at = 0
-        if tool == "browser-use":
-            while command_at < len(args) and args[command_at].startswith("-"):
-                word = args[command_at]
-                if word == "--":
-                    break
-                command_at += 2 if word in BROWSER_USE_VALUE_OPTIONS else 1
-        controls = args[command_at:]
-        if controls and controls[0] in ("use", "pin", "hosts"):
-            if "--json" in args[:command_at]:
-                controls = [*controls, "--json"]
-            return args, None, False, _control(tool, controls, host, json_output=json_output)
-        if json_output:
-            raise ValueError(f"{tool}: expected use, pin or hosts")
+        if args and args[0] in ("use", "pin", "hosts"):
+            return args, None, _control(tool, args, host)
         if tool == "remote-host" and (local or host == "local"):
             raise ValueError("remote-host: local execution is not supported — choose a remote host")
-        return args, host, local, None
+        return args, host, None
     except SystemExit as exc:
         code = exc.code if isinstance(exc.code, int) else (1 if exc.code is not None else 0)
         if code:
-            _error(tool, "invalid command arguments", code, json_output or _wants_json(args, tool))
-        return args, None, False, code
-    except (ValueError, OSError) as exc:
-        _error(tool, str(exc), 2, json_output or _wants_json(args, tool))
-        return args, None, False, 2
-
-
-def route(tool: str, argv: list[str]) -> tuple[list[str], str | None, int | None]:
-    """Consume -H/--host/--local and run use/pin/hosts; the host is returned unresolved.
-
-    remote-host resolves it itself: it accepts `-H a,b` for several machines at once and
-    has commands that need no machine at all.
-    """
-    args, host, _, code = _route(tool, argv)
-    return args, host, code
-
-
-def select_target(tool: str, argv: list[str]) -> tuple[list[str], str | None, int | None]:
-    """Consume routing controls and return local/alias without executing a business command."""
-    args, host, local, code = _route(tool, argv)
-    if code is not None:
+            _error(tool, "invalid command arguments", code, _wants_json(args, tool))
         return args, None, code
-    try:
-        return args, resolve_target(tool, "local" if local else host), None
     except (ValueError, OSError) as exc:
         _error(tool, str(exc), 2, _wants_json(args, tool))
         return args, None, 2
-
-
-def control_target(tool: str, argv: list[str]) -> dict:
-    """Run only use/pin/hosts and return their structured result without stdout output."""
-    output = io.StringIO()
-    with contextlib.redirect_stdout(output):
-        _, _, _, code = _route(tool, argv, json_output=True)
-    raw = output.getvalue()
-    if not raw.strip() and code == 0:
-        return {"ok": True, "tool": tool, "help": True}
-    result = json.loads(raw)
-    if not isinstance(result, dict) or not isinstance(result.get("ok"), bool):
-        raise ValueError(f"{tool}: invalid target control result")
-    return result
 
 
 def command_script(tool, args, require=()):
@@ -272,7 +226,7 @@ def dispatch(tool: str, argv: list[str]) -> tuple[list[str], int | None]:
     """Consume target controls; None means local, otherwise the completed exit code."""
     args = list(argv)
     try:
-        if tool not in ("computer-use", "dsh-use", "browser-use", "clash-use"):
+        if tool not in ("computer-use", "dsh-use", "clash-use"):
             raise ValueError(f"unsupported tool {tool!r}; remote-host routes through route()")
         args, host, local = _extract(argv, tool)
         if local and host is not None and host != "local":
@@ -294,8 +248,6 @@ def dispatch(tool: str, argv: list[str]) -> tuple[list[str], int | None]:
         target = "local" if local else resolve_target(tool, host)
         if target == "local":
             return args, None
-        if tool == "browser-use":
-            raise ValueError("browser-use business commands require select_target and the browser-use RPC client")
         print(f"{tool}: target {target}", file=sys.stderr, flush=True)
         previous_proxy = ssh.PROXY["on"]
         ssh.PROXY["on"] = False
