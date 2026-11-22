@@ -13,12 +13,15 @@ import secrets
 import sys
 from urllib.parse import urlsplit
 
+from .chrome import snapshot_selector_uid
 from .protocol import BrowserError, validate
 
 
 _PAGE = {"type": "string", "minLength": 1, "description": "The tabId returned by the control backend."}
 _PATH = {"type": "string", "minLength": 1}
 _BOOL = {"type": "boolean"}
+_SELECTOR = {"type": "string", "minLength": 1,
+             "description": "仅支持主文档中由 CSS 唯一匹配、且 Google 无障碍快照可定位的普通元素。"}
 _PAGING = {
     "pageSize": {"type": "integer", "minimum": 1},
     "pageIdx": {"type": "integer", "minimum": 0, "description": "Zero-based index. Requires pageSize."},
@@ -50,6 +53,11 @@ DEBUG_SCHEMAS = {
         **_PAGING, "resourceTypes": {"type": "array", "items": {"type": "string", "enum": _RESOURCE_TYPES}},
         "includePreservedRequests": _BOOL,
     }),
+    "debug_css_styles": _schema("读取普通网页元素匹配的 CSS 规则和样式。", {
+        "selector": _SELECTOR, "pageSize": {**_PAGING["pageSize"], "default": 10},
+        "pageIdx": {"type": "integer", "minimum": 0, "default": 0, "description": "从 0 开始的页码。"},
+    }, "selector"),
+    "debug_element_screenshot": _schema("获取普通网页元素的 PNG 截图。", {"selector": _SELECTOR}, "selector"),
     "debug_request": _schema("Inspect a request listed for this tab.", {
         "reqid": {"type": "integer", "minimum": 1, "description": "requestId from debug_network for the same tab."},
         "requestFilePath": _PATH, "responseFilePath": _PATH,
@@ -66,6 +74,7 @@ DEBUG_SCHEMAS = {
 DEBUG_TOOLS = frozenset(DEBUG_SCHEMAS)
 _GOOGLE = {
     "debug_console": "list_console_messages", "debug_network": "list_network_requests",
+    "debug_css_styles": "get_css_styles", "debug_element_screenshot": "take_screenshot",
     "debug_request": "get_network_request", "debug_trace_start": "performance_start_trace",
     "debug_trace_stop": "performance_stop_trace", "debug_heap_snapshot": "take_heapsnapshot",
 }
@@ -266,13 +275,23 @@ class Debugger:
             raise BrowserError("tab_binding_failed", "The Cra document changed or did not confirm the Google page's challenge.")
         return page_id
 
+    async def _inspect(self, name, arguments):
+        try:
+            reply = await self._google(name, arguments)
+        except BrowserError as exc:
+            if isinstance(exc.data, dict) and isinstance(exc.data.get("content"), list):
+                _check_connection(exc.data, outcome="not_sent")
+            raise
+        _check_connection(reply, outcome="not_sent")
+        return reply
+
     async def call(self, name, arguments):
         if name not in DEBUG_TOOLS:
             raise BrowserError("unknown_tool", f"Unknown debug tool {name}")
         validate(arguments, DEBUG_SCHEMAS[name], name)
         options = dict(arguments)
         tab_id = options.pop("tabId")
-        if "pageIdx" in options and "pageSize" not in options:
+        if name in {"debug_console", "debug_network"} and "pageIdx" in options and "pageSize" not in options:
             raise BrowserError("invalid_arguments", "pageIdx requires pageSize.")
         if name == "debug_trace_start":
             options.setdefault("reload", False)
@@ -292,6 +311,10 @@ class Debugger:
             raise BrowserError("unavailable", "Configure one tab resolver for the requested browser instance.")
         if not _valid_id(page_id):
             raise BrowserError("tab_binding_failed", "The tab resolver returned an invalid Google page ID.")
+        if "selector" in options:
+            options["uid"] = await snapshot_selector_uid(self._inspect, page_id, options.pop("selector"))
+        if name == "debug_element_screenshot":
+            options["format"] = "png"
         result = await self._google(_GOOGLE[name], {"pageId": page_id, **options})
         _check_connection(result)
         if name in {"debug_trace_start", "debug_trace_stop"}:

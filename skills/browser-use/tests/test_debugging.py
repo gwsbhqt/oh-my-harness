@@ -1,9 +1,12 @@
 """Contract tests with the envelopes produced by Cra 0.1.53 and Google 1.13.0."""
 import asyncio
 import json
+import shutil
+import subprocess
 import unittest
 from unittest.mock import AsyncMock, call, patch
 
+from browser_use import Browser
 from browser_use.debugging import DEBUG_SCHEMAS, DEBUG_TOOLS, Debugger
 from browser_use.protocol import BrowserError
 
@@ -30,6 +33,13 @@ def listed(listing, *responses):
 def evaluated(value, structured=True):
     text = f"Script ran on page and returned:\n```json\n{json.dumps(value)}\n```"
     return receipt(text, **({"message": text} if structured else {}))
+
+
+def button_snapshot(*uids):
+    buttons = [{"id": uid, "role": "button", "name": "Look up"} for uid in uids]
+    return receipt('uid=99_9 button "Look up"', snapshot={
+        "id": "3_0", "role": "RootWebArea", "name": "Desk", "children": buttons,
+    })
 
 
 def native(value):
@@ -185,6 +195,128 @@ class CraBindingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cra.await_count, 2)
 
 
+class ElementDebugTests(unittest.IsolatedAsyncioTestCase):
+    async def test_styles_and_png_use_the_bound_page_and_exact_node_on_both_browsers(self):
+        styles = receipt('Styles for #parcel (uid: "3_6"):', pagination={"currentPage": 1, "hasPreviousPage": True},
+                         matchedStyles={"element": {"uid": "3_6", "selector": "#parcel"}, "rules": []})
+        image = receipt('Took a screenshot of node with uid "3_6".')
+        image["content"].append({
+            "type": "image", "mimeType": "image/png",
+            "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGPwCmv6DwAEMgIidIM20AAAAABJRU5ErkJggg==",
+        })
+        routes = [
+            ("debug_css_styles", {"pageIdx": 1, "pageSize": 3}, "get_css_styles", styles),
+            ("debug_element_screenshot", {}, "take_screenshot", image),
+        ]
+        for target in ("chrome", "cra"):
+            for tool, options, upstream, reply in routes:
+                with self.subTest(target=target, tool=tool), tokens("neighbor", "requested"):
+                    listing = pages(6, 23)
+                    probes = [evaluated(None), evaluated("owner-proof")] if target == "cra" else []
+                    google = listed(listing, *probes, button_snapshot("3_1", "3_6"), evaluated(1), evaluated(1), reply)
+                    cra = AsyncMock(side_effect=[native(True), native("requested")])
+                    with patch.object(Browser, "_google", google), patch.object(Browser, "_cra", cra):
+                        async with Browser(target) as browser:
+                            tab = "task-b" if target == "cra" else (await browser.tabs_list())[1]["id"]
+                            result = await browser.call(tool, tabId=tab, selector="#parcel", **options)
+                    self.assertIs(result, reply)
+                    snapshot, count, match, dispatch = google.await_args_list[-4:]
+                    self.assertEqual(snapshot, call("take_snapshot", {"pageId": 23}))
+                    for probe in (count, match):
+                        self.assertEqual(probe.args[0], "evaluate_script")
+                        self.assertEqual(probe.args[1]["pageId"], 23)
+                        self.assertIn('document.querySelectorAll("#parcel")', probe.args[1]["function"])
+                    self.assertEqual(match.args[1]["args"], ["3_1", "3_6"])
+                    expected = options if tool == "debug_css_styles" else {"format": "png"}
+                    self.assertEqual(dispatch, call(upstream, {"pageId": 23, "uid": "3_6", **expected}))
+                    if target == "cra":
+                        self.assertEqual([c.args[1]["tabId"] for c in cra.await_args_list], [tab, tab])
+
+    @unittest.skipUnless(shutil.which("node"), "Requires Node.js to exercise the DOM identity probe")
+    async def test_probe_checks_identity_attachment_and_main_document(self):
+        google = AsyncMock(side_effect=[button_snapshot("3_1", "3_6"), evaluated(1), evaluated(1), receipt("Styles")])
+        debug = Debugger(google, chrome_page_id=AsyncMock(return_value=23))
+        await debug.call("debug_css_styles", {"tabId": "task-b", "selector": "#parcel"})
+        functions = [c.args[1]["function"] for c in google.await_args_list if c.args[0] == "evaluate_script"]
+        script = """
+          const [count, match] = JSON.parse(require('node:fs').readFileSync(0, 'utf8')).map(source => eval(`(${source})`));
+          const original = {name: 'Look up', isConnected: true}, neighbor = {...original};
+          let selected = [original];
+          global.document = {querySelectorAll: selector => selector === '#parcel' ? selected : []};
+          global.window = {top: null};
+          window.top = window;
+          const results = [count(), match(neighbor, original), match(original, neighbor), match(neighbor)];
+          selected = [original, neighbor];
+          results.push(count(), match(original, neighbor));
+          selected = [{...original}];
+          results.push(match(original, neighbor));
+          selected = [original];
+          original.isConnected = false;
+          results.push(match(original));
+          original.isConnected = true;
+          window.top = {};
+          results.push(match(original));
+          process.stdout.write(JSON.stringify(results));
+        """
+        result = subprocess.run(["node", "-e", script], input=json.dumps(functions), capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(result.stdout), [1, 1, 0, -1, 2, -1, -1, -1, -1])
+
+    async def test_unproven_element_never_sends_a_style_or_screenshot_request(self):
+        snapshot = button_snapshot("3_1")
+        cases = [
+            ("invalid_target", [snapshot, evaluated(-1)]),
+            ("invalid_target", [snapshot, evaluated(0)]),
+            ("invalid_target", [snapshot, evaluated(2)]),
+            ("protocol_error", [snapshot, evaluated(1), evaluated(9)]),
+            ("unsupported_target", [snapshot, evaluated(1), evaluated(-1)]),
+            ("unsupported_target", [snapshot, evaluated(1), BrowserError("tool_error", "Element with uid 3_1 no longer exists on the page.")]),
+            ("unsupported", [receipt('uid=3_1 button "Look up"')]),
+            ("connection_changed", [snapshot, evaluated(1), {**evaluated(0), "structuredContent": {"reconnected": True}}]),
+            ("connection_changed", [snapshot, evaluated(1), BrowserError("tool_error", "Element uid not found on page 23",
+                                                                     data=receipt("new connection", reconnected=True))]),
+        ]
+        for tool in ("debug_css_styles", "debug_element_screenshot"):
+            for error_code, replies in cases:
+                with self.subTest(tool=tool, error=error_code, replies=len(replies)):
+                    google = AsyncMock(side_effect=replies)
+                    debug = Debugger(google, chrome_page_id=AsyncMock(return_value=23))
+                    with self.assertRaises(BrowserError) as error:
+                        await debug.call(tool, {"tabId": "task-b", "selector": ".parcel"})
+                    self.assertEqual((error.exception.code, error.exception.outcome), (error_code, "not_sent"))
+                    self.assertTrue(all(c.args[0] in {"take_snapshot", "evaluate_script"} for c in google.await_args_list))
+
+    async def test_native_refusal_is_preserved_without_another_capture(self):
+        raw = {**receipt("Element is no longer available."), "isError": True}
+        for tool in ("debug_css_styles", "debug_element_screenshot"):
+            with self.subTest(tool=tool):
+                failure = BrowserError("tool_error", raw["content"][0]["text"], outcome="unknown", data=raw)
+                google = AsyncMock(side_effect=[button_snapshot("3_6"), evaluated(1), evaluated(0), failure])
+                debug = Debugger(google, chrome_page_id=AsyncMock(return_value=23))
+                with self.assertRaises(BrowserError) as error:
+                    await debug.call(tool, {"tabId": "task-b", "selector": "#parcel"})
+                self.assertIs(error.exception.data, raw)
+                self.assertEqual(google.await_count, 4)
+
+    async def test_old_chrome_ref_still_dispatches_after_debug_snapshot(self):
+        listing = pages(23)
+        snapshot = button_snapshot("3_1", "3_6")
+        google = AsyncMock(side_effect=[
+            listing, listing, snapshot, listing, snapshot, evaluated(1), evaluated(1), receipt("Styles"),
+            listing, evaluated({"timeOrigin": 7}), receipt("Hovered"),
+            evaluated({"counts": {"mousemove": 1}, "target": "button", "hovered": True}), evaluated(True),
+        ])
+        with patch.object(Browser, "_google", google):
+            async with Browser("chrome") as browser:
+                tab = (await browser.tabs_list())[0]["id"]
+                original = await browser.page_snapshot(tabId=tab, interactive=True)
+                ref = original["elements"][0]["ref"]
+                await browser.debug_css_styles(tabId=tab, selector="#parcel", pageIdx=2)
+                result = await browser.page_hover(tabId=tab, ref=ref)
+        self.assertEqual(result["status"], "completed")
+        self.assertIn(call("get_css_styles", {"pageId": 23, "uid": "3_6", "pageIdx": 2}), google.await_args_list)
+        self.assertIn(call("hover", {"pageId": 23, "uid": "3_1"}), google.await_args_list)
+
+
 class DebugToolTests(unittest.IsolatedAsyncioTestCase):
     async def test_concurrent_requests_with_identical_request_numbers_use_their_own_tabs(self):
         async def resolve(tab_id):
@@ -258,6 +390,10 @@ class DebugToolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_arguments_never_touch_browser(self):
         cases = [
+            ("debug_css_styles", {"tabId": "a"}), ("debug_css_styles", {"tabId": "a", "selector": "", "uid": "1_4"}),
+            ("debug_css_styles", {"tabId": "a", "selector": "p", "pageSize": 0}),
+            ("debug_css_styles", {"tabId": "a", "selector": "p", "pageIdx": -1}),
+            ("debug_element_screenshot", {"tabId": "a", "selector": "p", "filePath": "fixture.png"}),
             ("debug_unknown", {}), ("debug_console", {"tabId": "a", "clear": True}),
             ("debug_console", {"tabId": "a", "pageIdx": 1}), ("debug_console", {"tabId": "a", "pageSize": False}),
             ("debug_network", {"tabId": "a", "resourceTypes": ["websocket"]}),

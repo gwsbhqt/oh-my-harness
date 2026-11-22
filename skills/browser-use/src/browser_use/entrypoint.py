@@ -88,7 +88,7 @@ async def serve(browser, *, mcp):
                 version = params.get("protocolVersion")
                 initialized = True
                 reply["result"] = {"protocolVersion": version if version in PROTOCOLS else PROTOCOLS[0],
-                                   "capabilities": {"tools": {}}, "serverInfo": {"name": "browser-use", "version": "3.0.0"}}
+                                   "capabilities": {"tools": {}}, "serverInfo": {"name": "browser-use", "version": "3.1.0"}}
             elif method == "ping":
                 reply["result"] = {}
             elif not initialized:

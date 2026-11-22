@@ -44,6 +44,8 @@ TOOL_DESCRIPTIONS = {
     'download_cancel': '取消指定的下载任务。',
     'page_batch': '在同一标签顺序执行一组网页操作。',
     'debug_console': '查看这张页面的控制台记录。',
+    'debug_css_styles': '查看主文档中唯一匹配、可由 Google 快照定位的元素的 CSS 规则、优先级和来源。',
+    'debug_element_screenshot': '按唯一 CSS 选择器截取主文档元素的 PNG 图片。目标须能在 Google 快照中定位。',
     'debug_network': '列出这张页面捕获的网络请求。',
     'debug_request': '查看指定请求的详细信息。',
     'debug_trace_start': '从这张页面开始记录性能。',

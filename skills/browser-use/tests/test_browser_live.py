@@ -11,6 +11,7 @@ leaving both browser variables unset skips these tests. From the skill root:
 from __future__ import annotations
 
 import asyncio
+import base64
 from contextlib import AsyncExitStack, contextmanager
 import errno
 import gzip
@@ -21,6 +22,7 @@ from pathlib import Path
 import plistlib
 import re
 import socket
+import struct
 import subprocess
 import tempfile
 import threading
@@ -31,6 +33,10 @@ from urllib.parse import urlsplit
 
 HTML = """<!doctype html>
 <html lang="en"><meta charset="utf-8"><title>Parcel lookup</title>
+<style>
+button { width: 90px; }
+form button { box-sizing: border-box; width: __WIDTH__px; height: 36px; }
+</style>
 <h1>Parcel lookup</h1><p>Desk __DESK__</p>
 <form><label>Parcel name <input name="parcel" autocomplete="off"></label>
 <button>Look up</button></form><output aria-live="polite"></output>
@@ -75,7 +81,8 @@ def parcel_site():
             with lock:
                 desk = str(len(desks) + 1)
                 desks.append(desk)
-            self.reply(HTML.replace("__DESK__", desk).encode(), "text/html")
+            page = HTML.replace("__DESK__", desk).replace("__WIDTH__", str(120 + int(desk)))
+            self.reply(page.encode(), "text/html")
 
         def do_POST(self):
             match = re.fullmatch(r"/lookup/([a-z-]+)", self.path)
@@ -228,9 +235,26 @@ class LiveAcceptance(unittest.TestCase):
                 self.assertEqual([rows[t]["title"] for t in tabs], ["Parcel lookup"] * 2)
 
                 for tab, parcel in zip(tabs, parcels):
+                    box = await self.element_ref(browser, tab, "textbox", "Parcel name")
                     await browser.debug_network(tabId=tab)
                     await browser.debug_console(tabId=tab)
-                    box = await self.element_ref(browser, tab, "textbox", "Parcel name")
+                    expected_width = 120 + int(desks[tab])
+                    styles = await browser.debug_css_styles(tabId=tab, selector="form button")
+                    rules = styles["structuredContent"]["matchedStyles"]["rules"]
+                    widths = {(rule["source"], prop["value"], prop["status"])
+                              for rule in rules if rule.get("source", "").startswith("parcels:")
+                              for prop in rule["properties"] if prop["name"] == "width"}
+                    self.assertEqual(widths, {("parcels:4", "90px", "overloaded"),
+                                              ("parcels:5", f"{expected_width}px", "active")})
+                    image = await browser.debug_element_screenshot(tabId=tab, selector="form button")
+                    blocks = [b for b in image["content"] if b.get("type") == "image"]
+                    self.assertEqual(len(blocks), 1)
+                    self.assertEqual(blocks[0]["mimeType"], "image/png")
+                    png = base64.b64decode(blocks[0]["data"], validate=True)
+                    self.assertEqual(png[:8], b"\x89PNG\r\n\x1a\n")
+                    width, height = struct.unpack(">II", png[16:24])
+                    self.assertGreater(height, 0)
+                    self.assertAlmostEqual(width / height, expected_width / 36, places=2)
                     await browser.page_fill(tabId=tab, ref=box, text=parcel)
 
                 first, second = tabs

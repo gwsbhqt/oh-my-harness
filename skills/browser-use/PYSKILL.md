@@ -1,6 +1,6 @@
 ---
 name: browser-use
-description: "用同一套 API 操作 Cra 或 Chrome 网页，并用官方 Chrome DevTools MCP 调试同一标签的请求、性能和内存。"
+description: "用同一套 API 操作 Cra 或 Chrome 网页，运行页面脚本，并用官方 Chrome DevTools MCP 检查同一标签的元素样式、截图、请求、性能和内存。"
 ---
 
 # browser-use
@@ -30,9 +30,11 @@ async with skills.browser_use.Browser("cra") as browser:
 
 `page_fill` 替换内容，`page_click` 点击一次。`page_wait` 可以同时要求指定网址、文字和控件状态。提交后，读取正文或具体业务结果核对。发生超时、断线、输入部分生效时先查看原标签。回执和错误的 `outcome` 说明见[接口说明](references/interfaces.md)。
 
+要查文字、尺寸或最终样式，可在当前标签调用 `page_evaluate`。[页面脚本示例](references/interfaces.md#用当前网页中的-javascript-读界面)包含可直接运行的表达式。
+
 ## 调试同一张网页
 
-使用上面拿到的 `tabId`。`debug_network` 读取网络请求，`debug_console` 读取控制台，`debug_trace_start` 和 `debug_trace_stop` 成对记录性能，`debug_heap_snapshot` 获取内存快照。两种浏览器都调用 Google 的官方工具。Cra 的调试需要两套官方工具能访问同一实例，并允许在页面执行 JavaScript 以核对身份。
+使用上面拿到的 `tabId`。`debug_css_styles` 按唯一 CSS 选择器查样式来源，`debug_element_screenshot` 截取指定控件。`debug_network` 读取网络请求，`debug_console` 读取控制台，`debug_trace_start` 和 `debug_trace_stop` 成对记录性能，`debug_heap_snapshot` 获取内存快照。两种浏览器都调用 Google 的官方工具。Cra 的调试需要两套官方工具能访问同一实例，并允许在页面执行 JavaScript 以核对身份。
 
 ```python
 async with skills.browser_use.Browser("chrome") as browser:

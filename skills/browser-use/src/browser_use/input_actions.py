@@ -223,38 +223,42 @@ async def _changes(control, page_id, before, previous, errors):
     return changes
 
 
-async def _match_uid(control, page_id, uids, expression):
+async def _match_uid(evaluate, page_id, uids, expression):
     """Match a DOM node to an upstream handle by identity, never by its text or index."""
-    function = f"(...nodes) => {{ const wanted = {expression}; return nodes.indexOf(wanted); }}"
+    function = f"(...nodes) => {{ const wanted = {expression}; return wanted?.isConnected ? nodes.indexOf(wanted) : -1; }}"
 
     async def check(uids):
         try:
-            index = await control.evaluate(page_id, function, uid=uids)
+            index = await evaluate(page_id, function, uid=uids)
         except BrowserError as exc:
             # Google evaluates handles from one frame at a time. Split only documented node/frame failures.
             message = str(exc)
-            if not any(s in message for s in ("different frames", "no longer exists", "not found on page", "Cannot find context")):
+            if exc.code != "tool_error" or not any(s in message for s in (
+                "different frames", "no longer exists", "not found on page", "Cannot find context",
+            )):
                 raise
             if len(uids) == 1:
                 return None
             middle = len(uids) // 2
             return await check(uids[:middle]) or await check(uids[middle:])
-        return uids[index] if type(index) is int and 0 <= index < len(uids) else None
+        if type(index) is not int or not -1 <= index < len(uids):
+            raise BrowserError("protocol_error", "Google returned an invalid node identity comparison.")
+        return None if index == -1 else uids[index]
 
     for start in range(0, len(uids), 40):
         found = await check(uids[start:start + 40])
         if found is not None:
             return found
-    raise BrowserError("unsupported_target", "The exact node has no usable handle in this Chrome snapshot. Take a fresh snapshot.")
+    raise BrowserError("unsupported_target", "The node is detached or has no matching handle in this Google snapshot.")
 
 
-async def _selector_uid(control, page_id, uids, selector):
+async def _selector_uid(evaluate, page_id, uids, selector):
     selector = json.dumps(selector)
     query = f"document.querySelectorAll({selector})"
-    count = await control.evaluate(page_id, f"() => {{ try {{ return {query}.length; }} catch {{ return -1; }} }}")
-    if count != 1:
+    count = await evaluate(page_id, f"() => {{ try {{ return {query}.length; }} catch {{ return -1; }} }}")
+    if type(count) is not int or count != 1:
         raise BrowserError("invalid_target", "The selector must be valid and match exactly one element in the main document.")
-    return await _match_uid(control, page_id, uids,
+    return await _match_uid(evaluate, page_id, uids,
                             f"window === window.top && {query}.length === 1 ? {query}[0] : null")
 
 
@@ -488,7 +492,10 @@ class _Input:
                     if node.get("role") == "option" and node.get("id"):
                         options.append(node["id"])
                     pending.extend(node.get("children", ()))
-                option = await _match_uid(self.control, self.page_id, options, f"(() => {{ try {{ return window.top[{self.token}]?.('option'); }} catch {{ return null; }} }})()")
+                option = await _match_uid(
+                    self.control.evaluate, self.page_id, options,
+                    f"(() => {{ try {{ return window.top[{self.token}]?.('option'); }} catch {{ return null; }} }})()",
+                )
                 await self.send("click", uid=option)
         elif name == "page_click":
             double = a.get("clickCount", 1) == 2
@@ -580,13 +587,13 @@ async def perform(control, name, arguments):
         if "ref" in a and (report or "targetSelector" in a):
             uid = await control.uid_for(page_id, a["ref"])
         if "selector" in a:
-            uid = await _selector_uid(control, page_id, uids, a["selector"])
+            uid = await _selector_uid(control.evaluate, page_id, uids, a["selector"])
         if "targetSelector" in a:
-            destination = await _selector_uid(control, page_id, uids, a["targetSelector"])
+            destination = await _selector_uid(control.evaluate, page_id, uids, a["targetSelector"])
         if "x" in a:
             point = await control.screenshot_point(page_id, a["x"], a["y"])
             if name == "page_upload":
-                uid = await _match_uid(control, page_id, uids,
+                uid = await _match_uid(control.evaluate, page_id, uids,
                                       f"window === window.top ? document.elementFromPoint(...{json.dumps(point)}) : null")
         if report:
             previous = await _observe(control, page_id, errors, "network")

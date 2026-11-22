@@ -7,10 +7,11 @@ import binascii
 import json
 import math
 from dataclasses import dataclass, field
+from functools import partial
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from .input_actions import INPUT_TOOLS, perform, redacted_url
+from .input_actions import INPUT_TOOLS, _selector_uid, perform, redacted_url
 from .protocol import BrowserError
 
 
@@ -117,6 +118,43 @@ def _evaluation_value(reply):
         return json.loads(payload)
     except ValueError as exc:
         raise _bad_reply("evaluate_script", "Invalid JSON in the JavaScript result.") from exc
+
+
+async def _evaluate(google, page_id, function, uid=None):
+    # An empty dialogAction interrupts evaluation and leaves a newly opened dialog pending.
+    params = {"pageId": page_id, "function": function, "waitForStableDom": False, "dialogAction": ""}
+    if uid is not None:
+        params["args"] = [uid] if isinstance(uid, str) else list(uid)
+    return _evaluation_value(await google("evaluate_script", params))
+
+
+async def _snapshot_root(google, page_id):
+    reply = await google("take_snapshot", {"pageId": page_id})
+    root = _structured("take_snapshot", reply).get("snapshot")
+    if not isinstance(root, dict) or not root.get("role"):
+        raise _bad_reply("take_snapshot", "Missing accessibility tree.")
+    return root
+
+
+def _snapshot_children(node):
+    children = node.get("children", [])
+    if not isinstance(children, list) or any(not isinstance(child, dict) for child in children):
+        raise _bad_reply("take_snapshot", "Invalid accessibility children.")
+    return children
+
+
+async def snapshot_selector_uid(google, page_id, selector):
+    """Resolve the selector from Google's snapshot without changing the task's page refs."""
+    pending = [await _snapshot_root(google, page_id)]
+    uids = []
+    while pending:
+        node = pending.pop()
+        uid = node.get("id")
+        if isinstance(uid, str) and uid and node.get("role") != "RootWebArea":
+            uids.append(uid)
+        if node.get("role") != "Iframe":
+            pending.extend(reversed(_snapshot_children(node)))
+    return await _selector_uid(partial(_evaluate, google), page_id, uids, selector)
 
 
 def _http_url(value):
@@ -289,11 +327,7 @@ class ChromeControl:
 
     async def evaluate(self, page_id: int, function: str, uid: str | list[str] | None = None):
         self._tab(page_id, web=True)
-        # An empty dialogAction interrupts evaluation and leaves a newly opened dialog pending.
-        params = {"pageId": page_id, "function": function, "waitForStableDom": False, "dialogAction": ""}
-        if uid is not None:
-            params["args"] = [uid] if isinstance(uid, str) else list(uid)
-        return _evaluation_value(await self.google("evaluate_script", params))
+        return await _evaluate(self.google, page_id, function, uid)
 
     async def uid_for(self, page_id: int, ref: str) -> str:
         uid = self._tab(page_id, web=True).refs.get(ref)
@@ -306,10 +340,7 @@ class ChromeControl:
         extra = options.keys() - {"interactive", "query"}
         if extra:
             raise _unsupported("Unsupported snapshot option: " + ", ".join(sorted(extra)))
-        reply = await self.google("take_snapshot", {"pageId": page_id})
-        root = _structured("take_snapshot", reply).get("snapshot")
-        if not isinstance(root, dict) or not root.get("role"):
-            raise _bad_reply("take_snapshot", "Missing accessibility tree.")
+        root = await _snapshot_root(self.google, page_id)
         elements, current_refs = [], {}
         truncated = False
         size = frames = 0
@@ -320,9 +351,7 @@ class ChromeControl:
             role, name, uid = node.get("role", ""), node.get("name", ""), node.get("id")
             if not isinstance(name, str) or not isinstance(role, str):
                 raise _bad_reply("take_snapshot", "Invalid accessibility node.")
-            children = node.get("children", [])
-            if not isinstance(children, list) or any(not isinstance(child, dict) for child in children):
-                raise _bad_reply("take_snapshot", "Invalid accessibility children.")
+            children = _snapshot_children(node)
             if role == "Iframe" and children:
                 frames += 1
             if role not in _EDITABLE and not node.get("editable"):

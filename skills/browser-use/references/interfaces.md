@@ -19,6 +19,27 @@
 
 Chrome 控制使用官方 [Chrome DevTools MCP 1.13.0](https://github.com/ChromeDevTools/chrome-devtools-mcp/blob/chrome-devtools-mcp-v1.13.0/docs/tool-reference.md)。Google 的页号和控件编号属于该连接。BU 保留会话内的对应关系，网页重绘或连接更换后无法确认原节点时会报错。Chrome 的普通标签页不具备 Cra 空间、独立无窗口标签或手动接管的原生语义。Google 读取正文和等待 DOM 时使用页面的执行环境，Cra 原生读取可以使用隔离的执行环境。
 
+### 用当前网页中的 JavaScript 读界面
+
+Cra 设置中打开「允许代理在页面运行 JavaScript」后，`page_evaluate` 可以读取当前文档中的文字、控件状态、最终样式和布局。普通 Cra 操作使用原生 MCP。下面的表达式在表单按钮唯一时返回读数，调用方能看到实际匹配数量。
+
+```javascript
+(() => {
+    const matches = document.querySelectorAll("form button");
+    if (matches.length !== 1) return {count: matches.length};
+    const button = matches[0];
+    const {width, height} = button.getBoundingClientRect();
+    return {count: 1, text: button.textContent.trim(), width, height,
+            color: getComputedStyle(button).color};
+})()
+```
+
+把表达式交给 `page_evaluate(tabId=tab, expression=...)`。成功时从 `result.value` 读取这个对象。复杂的异步状态可以用有超时的 `Promise` 观察并返回，普通文字或元素状态可直接用 `page_wait`。点击、填写和键盘输入使用 `page_click`、`page_fill` 和 `page_press`。
+
+网页刷新或导航到新文档会清除旧文档上的观察器。跨来源的 iframe 和样式表受浏览器同源规则限制。`getComputedStyle` 能读到生效的颜色，定位覆盖它的规则和来源行号可用 `debug_css_styles`。页面脚本运行时，载入当前文档的请求已经发出。脚本可以给随后由它发起的请求加测试标记。
+
+在隔离测试页上，Google 调试器给已绑定标签预设的请求头，可以随下一次导航的首个文档请求发出。另一来源的图片和后续导航也收到该标记，显式清除后才消失。这个验证使用无敏感信息的标记。设置请求头仅在独立的 Google 调试连接上验证，尚未作为 BU 接口发布。
+
 ### Chrome 输入的具体范围
 
 Chrome 支持能对应 Google 无障碍控件的 `ref` 或唯一 CSS，左键单击和双击，也支持用当前截图的坐标点击。元素悬停、填写普通输入框和可编辑区域、发送按键、按值或文字选择原生单选下拉框、在两个控件间拖放，均使用 Google 的输入工具。覆盖目标的浮层、焦点被别的输入框抢走或引用失效时，先核对状态再操作。
@@ -34,10 +55,14 @@ Chrome 的 `humanize`、带修饰键的点击、右击、中击、三击、坐�
 | 动作 | 主要参数 | 结果 |
 |---|---|---|
 | `debug_console` | `tabId`，可选 `types`、`pageSize`、`pageIdx` | 当前页的控制台记录 |
+| `debug_css_styles` | `tabId`、`selector`，可选 `pageSize` 和 `pageIdx` | Google 检查器列出的匹配规则、优先级和可得的来源行号 |
+| `debug_element_screenshot` | `tabId`、`selector` | 指定元素的 PNG 截图 |
 | `debug_network` | `tabId`，可选 `resourceTypes`、`pageSize`、`pageIdx` | 当前页的请求与请求编号 |
 | `debug_request` | `tabId`、`reqid` | 同一页里该请求的详情。可选保存请求、响应文件 |
 | `debug_trace_start` | `tabId`，可选 `reload`、`autoStop` | 启动性能记录。自动停止时可同时传入 `filePath` |
 | `debug_trace_stop` | `tabId`，可选 `filePath` | 停止记录，返回摘要，可写文件 |
 | `debug_heap_snapshot` | `tabId`、`filePath` | 从目标页采集并保存内存快照 |
+
+元素调试接受主文档内唯一的 CSS 选择器，例如 `form button[type=submit]`。目标还须能对应到 Google 页面的无障碍快照节点。零个匹配、多个匹配或无法确认控件身份时会报错。截图结果的 `content` 中含 PNG 图片块，样式结果可按页读取。
 
 Cra 模式用两端都能观察的随机文档标记验证同一页。完成或出错时清理标记，页面关闭或导航期间无法确认时停止调用。Chrome 模式复用当前连接的确切页号。不要把另一个标签的请求编号交给 `debug_request`，两个标签的请求编号可以都是 1。性能录制按浏览器实例独占，记录范围可包含该实例中的其他页面。网络详情、快照和性能文件可能包含所访问页面的实际数据，请选择合适的目标页与输出位置。
