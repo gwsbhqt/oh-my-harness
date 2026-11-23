@@ -90,6 +90,22 @@ test('真实App正常与旧peer停用fixture',{skip:!available},async()=>{const 
 test('真实App缺包与缺lib fixture',{skip:!available},async()=>{assert((await probe('missing',{missing:true})).bundles[0].error);assert.equal((await probe('missing-lib',{main:false})).bundles[0].mainExists,false);assert.equal((await probe('present-lib')).bundles[0].mainExists,true);});
 test('真实App duplicate与不同scope fixture',{skip:!available},async()=>{assert.match((await probe('duplicate',{duplicate:true})).errors.compose,/duplicate/);assert.equal((await probe('scope-good',{scopes:true})).errors.compose,undefined);});
 
+test('配置组合失败时不执行缺少隔离补丁的试启动',{skip:!available},async()=>{
+ const home=path.join(root,'compose-startup'),profile=path.join(home,'profiles/probe');
+ await fs.mkdir(profile,{recursive:true});
+ await fs.writeFile(path.join(profile,'package.json'),JSON.stringify({name:'fixture-profile',dsh:{profile:{bundles:['@deepseek-ai/dsh-base','@deepseek-ai/dsh-web-app']}}}));
+ const patch=path.join(profile,'cordis.patch.yml');
+ await fs.writeFile(patch,'- id: webserver\n  config:\n    host: 127.0.0.1\n    port: 3080\n');
+ const inspect=async()=> (await doctor({app,home,profile:'probe',sanitizeEnv:true})).checks;
+ const good=await inspect();
+ assert.equal(good.find(c=>c.id==='profile-compose')?.ok,true);
+ assert.equal(good.find(c=>c.id==='isolated-startup')?.ok,true);
+ await fs.appendFile(patch,'- insert:\n    - id: duplicate-fixture\n      name: fixture\n    - id: duplicate-fixture\n      name: fixture\n');
+ const bad=await inspect();
+ assert.equal(bad.find(c=>c.id==='profile-compose')?.ok,false);
+ assert.match(bad.find(c=>c.id==='isolated-startup').message,/配置组合失败，无法生成隔离启动补丁/);
+});
+
 test('实际App启动审计：正常、apply抛错、依赖服务缺失',{skip:!available},async()=>{
  const good=await startupFixture('healthy','export function apply(){}');assert.equal(good.ok,true,good.stderr);assert.match(good.stdout,/DSH_DOCTOR_READY:/);
  for(const [label,source] of [['throw','export function apply(){throw Error("fixture apply failed")}'],['inject','export const inject=["fixtureMissingService"];export function apply(){}']]){const bad=await startupFixture(label,source);assert.equal(bad.ok,false,bad.stdout+bad.stderr);assert.match(bad.stdout,/"ready":false/);}

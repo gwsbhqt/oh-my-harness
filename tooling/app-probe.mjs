@@ -99,7 +99,7 @@ try {
       result.presetDrift = {problems: presetDrift(officialPlugins(parse(path.join(web, 'presets/ptc.patch.yml')), 'preset-ptc'), officialPlugins(parse(path.join(web, 'presets/cordis.patch.yml')), 'preset-cordis'))};
     } catch (e) { result.presetDrift = {problems: [`对照官方模式清单失败：${e.message}`]}; }
   }
-  const context = {dir:profile,home:path.dirname(path.dirname(profile)),patchPath:loaded.patchPath,installAnchor:anchor,overlays:[],telemetryDisabledEnv:'1'};
+  const context = {dir:profile,home:path.dirname(path.dirname(profile)),patchPath:loaded.patchPath,installAnchor:anchor,overlays:[],overlayPaths:[],telemetryDisabledEnv:'1'};
   const all = [];
   const walk = entries => { for(const e of entries ?? []) { all.push({id:e.id,name:e.name,disabled:typeof e.disabled==='boolean'?e.disabled:null,...(STARTUP_PINNED.has(e.name)?{config:e.config??{}}:{})}); if(Array.isArray(e.config))walk(e.config); }};
   // Preserve nested IDs for individual diagnostics while host composition validates them.

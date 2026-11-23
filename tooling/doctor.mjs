@@ -205,6 +205,10 @@ export async function doctor(options={}) {
         const verify=await execute(process.execPath,[pnpm,'install','--lockfile-only','--frozen-lockfile','--ignore-scripts','--fetch-retries=0','--fetch-timeout=15000'],{cwd:frozen,env:{...dockEnv,ELECTRON_RUN_AS_NODE:'1',...Object.fromEntries(Object.entries(process.env).filter(([k])=>/^(https?_proxy|all_proxy|no_proxy)$/i.test(k)))}});
         checks.push(check('pnpm-frozen-lockfile',verify.ok,verify.ok?'App pnpm 冻结及真实供应链政策验证通过':failureText(verify,timeoutMs,'冻结安装'),'在具体 profile 修复锁文件或供应链策略；供应链拒绝时等待满足政策或由用户另行授权，不自动放宽',{exitCode:verify.code,timedOut:verify.timedOut}));
       }
+      if(data.errors.compose){
+        checks.push(check('isolated-startup',false,'配置组合失败，无法生成隔离启动补丁','先修复 profile-compose，再重跑试启动'));
+        return done();
+      }
       const overlay=path.join(temp,'startup.patch.yml');
       const patch=startupOverlay(data.entries,path.join(here,'ready-probe.mjs'));
       await fs.writeFile(overlay,patch);
