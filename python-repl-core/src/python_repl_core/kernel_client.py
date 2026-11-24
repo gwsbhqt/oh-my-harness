@@ -215,7 +215,7 @@ class KernelClient:
                     done_frame = await asyncio.wait_for(asyncio.shield(fut), timeout=timeout_s)
                 except asyncio.TimeoutError:
                     timed_out = True
-                    await self.interrupt()
+                    await self.interrupt(req_id)
                     try:
                         done_frame = await asyncio.wait_for(asyncio.shield(fut), timeout=5.0)
                     except asyncio.TimeoutError:
@@ -261,10 +261,13 @@ class KernelClient:
                 timed_out=timed_out,
             )
 
-    async def interrupt(self) -> None:
+    async def interrupt(self, cell_id: str | None = None) -> None:
         if self._proc and self._proc.returncode is None:
+            payload: dict[str, Any] = {"type": "interrupt"}
+            if cell_id is not None:
+                payload["id"] = cell_id
             try:
-                await self._send({"type": "interrupt", "id": uuid.uuid4().hex})
+                await self._send(payload)
             except Exception:
                 pass
             try:

@@ -70,8 +70,10 @@ async def run_code(
 async def kernel_state(
     action: Literal["list", "vars", "snapshot", "restore", "reset"],
     kernel: str = "default",
+    cwd: str | None = None,
 ) -> dict[str, Any]:
-    return await _manager.kernel_state(action, kernel=kernel)
+    work_dir = Path(cwd).expanduser() if cwd else None
+    return await _manager.kernel_state(action, kernel=kernel, cwd=work_dir)
 
 
 @mcp.tool(

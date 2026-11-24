@@ -104,8 +104,31 @@ class AgyPythonReplTests(unittest.IsolatedAsyncioTestCase):
             await fresh_manager.shutdown_all()
 
     async def test_timeout_returns_timeout_result_without_cancelled_error(self) -> None:
-        r = await self.manager.run_code("import asyncio\nawait asyncio.sleep(2)", timeout_seconds=0.05)
+        import time
+        started = time.monotonic()
+        r = await self.manager.run_code("import asyncio\nawait asyncio.sleep(10)", timeout_seconds=0.05)
+        elapsed = time.monotonic() - started
         self.assertEqual(r["status"], "timeout")
+        self.assertLess(elapsed, 2.0)
+
+    async def test_concurrent_first_cells_preserve_both_variables(self) -> None:
+        import asyncio
+        r1, r2 = await asyncio.gather(
+            self.manager.run_code("x = 1", kernel="conv-race"),
+            self.manager.run_code("y = 2", kernel="conv-race"),
+        )
+        self.assertEqual(r1["status"], "ok")
+        self.assertEqual(r2["status"], "ok")
+        r3 = await self.manager.run_code("x + y", kernel="conv-race")
+        self.assertEqual(r3["result"], "3")
+
+    async def test_kernel_state_list_is_scoped_to_session(self) -> None:
+        await self.manager.run_code("a = 1", kernel="conv-a")
+        await self.manager.run_code("b = 2", kernel="conv-b")
+        listed = await self.manager.kernel_state("list", kernel="conv-a")
+        active_names = [k["name"] for k in listed["active_kernels"]]
+        self.assertEqual(active_names, ["conv-a"])
+        self.assertEqual(listed["saved_snapshots"], ["conv-a"])
 
     def test_pretooluse_hook_scopes_kernel_by_conversation_id(self) -> None:
         import json

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import os
 import sys
 import time
@@ -91,6 +92,7 @@ class KernelManager:
         self.auto_snapshot = auto_snapshot
 
         self._kernels: dict[str, ManagedKernel] = {}
+        self._start_locks: dict[str, asyncio.Lock] = {}
         self._history: list[CellHistoryEntry] = []
 
     def _sanitize_kernel_name(self, kernel: str) -> str:
@@ -104,65 +106,72 @@ class KernelManager:
             existing.last_used_at = time.time()
             return existing
 
-        work_dir = cwd or Path.cwd()
-        agy_src = Path(__file__).resolve().parents[1]
-        core_src = Path(python_repl_core.__file__).resolve().parents[1]
+        lock = self._start_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            existing = self._kernels.get(key)
+            if existing and existing.client.alive:
+                existing.last_used_at = time.time()
+                return existing
 
-        client = KernelClient(
-            python_exe=self.python_exe,
-            vendor_dir=self.vendor_dir,
-            compat_dir=self.compat_dir,
-            cwd=work_dir,
-            extra_pythonpath=[agy_src, core_src],
-        )
-        await client.start()
+            work_dir = cwd or Path.cwd()
+            agy_src = Path(__file__).resolve().parents[1]
+            core_src = Path(python_repl_core.__file__).resolve().parents[1]
 
-        entries = discover_python_skills(
-            skill_roots=self.skill_roots,
-            project_roots=self.project_skill_roots,
-            cwd=work_dir,
-        )
-        payload = [
-            {
-                "name": e.name,
-                "import_name": e.import_name,
-                "directory": e.directory,
-                "source_root": e.source_root,
-                "description": e.description,
-                "doc_path": e.doc_path,
-                "is_project": e.is_project,
-            }
-            for e in entries
-        ]
-        bootstrap_code = (
-            "from agy_python_repl.bootstrap import install_antigravity_surface as _install\n"
-            f"_install({payload!r})"
-        )
-        boot_res = await client.execute(bootstrap_code, timeout_s=30.0)
-        report: dict[str, Any] = {}
-        if boot_res.status == "ok" and boot_res.result:
-            try:
-                import ast
-                parsed = ast.literal_eval(boot_res.result)
-                if isinstance(parsed, dict):
-                    report = parsed
-            except Exception:
-                pass
+            client = KernelClient(
+                python_exe=self.python_exe,
+                vendor_dir=self.vendor_dir,
+                compat_dir=self.compat_dir,
+                cwd=work_dir,
+                extra_pythonpath=[agy_src, core_src],
+            )
+            await client.start()
 
-        restore_notice: dict[str, Any] | None = None
-        if self.auto_snapshot:
-            snap_path, manifest_path = self._snapshot_paths(key)
-            restore_notice = await client.restore_if_present(snap_path, manifest_path)
+            entries = discover_python_skills(
+                skill_roots=self.skill_roots,
+                project_roots=self.project_skill_roots,
+                cwd=work_dir,
+            )
+            payload = [
+                {
+                    "name": e.name,
+                    "import_name": e.import_name,
+                    "directory": e.directory,
+                    "source_root": e.source_root,
+                    "description": e.description,
+                    "doc_path": e.doc_path,
+                    "is_project": e.is_project,
+                }
+                for e in entries
+            ]
+            bootstrap_code = (
+                "from agy_python_repl.bootstrap import install_antigravity_surface as _install\n"
+                f"_install({payload!r})"
+            )
+            boot_res = await client.execute(bootstrap_code, timeout_s=30.0)
+            report: dict[str, Any] = {}
+            if boot_res.status == "ok" and boot_res.result:
+                try:
+                    import ast
+                    parsed = ast.literal_eval(boot_res.result)
+                    if isinstance(parsed, dict):
+                        report = parsed
+                except Exception:
+                    pass
 
-        managed = ManagedKernel(
-            name=key,
-            client=client,
-            cwd=work_dir,
-            skill_report=report,
-            pending_restore_notice=restore_notice,
-        )
-        self._kernels[key] = managed
-        return managed
+            restore_notice: dict[str, Any] | None = None
+            if self.auto_snapshot:
+                snap_path, manifest_path = self._snapshot_paths(key)
+                restore_notice = await client.restore_if_present(snap_path, manifest_path)
+
+            managed = ManagedKernel(
+                name=key,
+                client=client,
+                cwd=work_dir,
+                skill_report=report,
+                pending_restore_notice=restore_notice,
+            )
+            self._kernels[key] = managed
+            return managed
 
     async def run_code(
         self,
@@ -256,12 +265,25 @@ class KernelManager:
         snap_dir = self.data_dir / "snapshots"
         return snap_dir / f"{key}.dill", snap_dir / f"{key}.manifest.json"
 
-    async def kernel_state(self, action: str, *, kernel: str = "default") -> dict[str, Any]:
+    async def kernel_state(
+        self,
+        action: str,
+        *,
+        kernel: str = "default",
+        cwd: Path | None = None,
+    ) -> dict[str, Any]:
         key = self._sanitize_kernel_name(kernel)
 
         if action == "list":
             snap_dir = self.data_dir / "snapshots"
-            saved = sorted(p.stem for p in snap_dir.glob("*.dill")) if snap_dir.is_dir() else []
+            def _belongs(name: str) -> bool:
+                return key == "default" or name == key or name.startswith(f"{key}__")
+
+            saved = (
+                sorted(p.stem for p in snap_dir.glob("*.dill") if _belongs(p.stem))
+                if snap_dir.is_dir()
+                else []
+            )
             return {
                 "active_kernels": [
                     {
@@ -272,6 +294,7 @@ class KernelManager:
                         **({"skills_failed": k.skill_report["failed"]} if k.skill_report.get("failed") else {}),
                     }
                     for k in self._kernels.values()
+                    if _belongs(k.name)
                 ],
                 "saved_snapshots": saved,
             }
@@ -285,7 +308,7 @@ class KernelManager:
                     path.unlink()
             return {"kernel": key, "status": "reset"}
 
-        managed = await self._ensure_kernel(key)
+        managed = await self._ensure_kernel(key, cwd=cwd)
 
         if action == "vars":
             info = await managed.client.list_names()

@@ -51,13 +51,13 @@ def main() -> None:
             return
         inner = dict(args.get("Arguments") or {})
         inner["kernel"] = _scope_kernel(inner.get("kernel"), conv_id)
-        if target_tool == "run_code" and work_dir and not inner.get("cwd"):
+        if work_dir and not inner.get("cwd"):
             inner["cwd"] = work_dir
         print(json.dumps({"decision": "allow", "overwrite": {"Arguments": inner}}))
         return
 
     overwrite: dict[str, str] = {"kernel": _scope_kernel(args.get("kernel"), conv_id)}
-    if tool_name.endswith("run_code") and work_dir and not args.get("cwd"):
+    if work_dir and not args.get("cwd"):
         overwrite["cwd"] = work_dir
 
     print(json.dumps({"decision": "allow", "overwrite": overwrite}))
