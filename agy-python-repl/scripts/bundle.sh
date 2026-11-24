@@ -10,7 +10,7 @@ REPO_ROOT="$(cd "$PLUGIN_ROOT/.." && pwd)"
 rm -rf "$DEST"
 mkdir -p "$DEST"
 
-for item in plugin.json mcp_config.json pyproject.toml uv.lock README.md hooks.json rules src ui hooks; do
+for item in plugin.json mcp_config.json pyproject.toml uv.lock README.md hooks.json rules src ui hooks scripts; do
   if [ -e "$PLUGIN_ROOT/$item" ]; then
     cp -R "$PLUGIN_ROOT/$item" "$DEST/$item"
   fi

@@ -78,7 +78,21 @@
         "tooling/runtime/workflow-guard.mjs",
         "tooling/runtime/workflow-guard.d.mts",
         "tooling/runtime/notice.mjs",
-        "tooling/runtime/notice.d.mts"
+        "tooling/runtime/notice.d.mts",
+        "python-repl-core/src/python_repl_core/__init__.py",
+        "python-repl-core/src/python_repl_core/compat/rlm/bash.py",
+        "python-repl-core/src/python_repl_core/compat/rlm/factory.py",
+        "python-repl-core/src/python_repl_core/figures.py",
+        "python-repl-core/src/python_repl_core/idle.py",
+        "python-repl-core/src/python_repl_core/kernel_client.py",
+        "python-repl-core/src/python_repl_core/output_budget.py",
+        "python-repl-core/src/python_repl_core/packages.py",
+        "python-repl-core/src/python_repl_core/panel_preview.py",
+        "python-repl-core/src/python_repl_core/panel_state.py",
+        "python-repl-core/src/python_repl_core/prelude.py",
+        "python-repl-core/src/python_repl_core/preview.py",
+        "python-repl-core/src/python_repl_core/skill_discovery.py",
+        "python-repl-core/src/python_repl_core/skills_runtime.py"
       ]
     },
     "client": {

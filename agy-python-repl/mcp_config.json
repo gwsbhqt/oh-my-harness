@@ -3,8 +3,7 @@
     "agy-python-repl": {
       "command": "sh",
       "args": [
-        "-c",
-        "VENV=\"${PLUGIN_DATA:-${TMPDIR:-/tmp}/agy-python-repl}/venv\"; UV_PROJECT_ENVIRONMENT=\"$VENV\" uv sync --frozen --no-install-project --project \"$PLUGIN_ROOT\" --python 3.14 >/dev/null 2>&1; PYTHONPATH=\"$PLUGIN_ROOT/src\" exec \"$VENV/bin/python\" -m agy_python_repl.server"
+        "scripts/start_mcp.sh"
       ]
     }
   }

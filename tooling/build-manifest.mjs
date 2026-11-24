@@ -14,7 +14,7 @@ function relative(value) {
 function repositoryFile(value) {
   const name=relative(value);
   if(/[?*\[\]]/.test(name))throw new Error('repositoryInputs 不允许通配符: '+value);
-  if(name!==value||!(name.startsWith('tooling/')||name.startsWith('shared/')))throw new Error('repositoryInputs only accepts tooling files or shared files: '+value);
+  if(name!==value||!(name.startsWith('tooling/')||name.startsWith('shared/')||name.startsWith('python-repl-core/')))throw new Error('repositoryInputs only accepts tooling, shared, or python-repl-core files: '+value);
   return name;
 }
 function declarationOf(value) {
