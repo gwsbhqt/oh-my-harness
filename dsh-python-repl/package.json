@@ -25,6 +25,7 @@
   "files": [
     "lib/*.js",
     "lib/dsh-build.json",
+    "lib/python_repl_core/**/*.py",
     "python/**/*.py",
     "python/compat/README.md",
     "vendor/**/*.py",

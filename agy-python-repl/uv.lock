@@ -14,14 +14,12 @@ source = { editable = "." }
 dependencies = [
     { name = "dill" },
     { name = "mcp" },
-    { name = "python-repl-core" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "dill", specifier = ">=0.3.8" },
     { name = "mcp", specifier = ">=1.2.0,<2" },
-    { name = "python-repl-core", editable = "../python-repl-core" },
 ]
 
 [[package]]
@@ -508,11 +506,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/7e/c0/c753d487a83d873f6
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f5/0e/090c52b122d8ec5fa37942c1410fea9cf04ce98bca0c84dde7f0aa11594d/python_multipart-0.0.34-py3-none-any.whl", hash = "sha256:ebacd224bd686eee2f9aa1066a657affe07435a185834e05e5235e2e59173e91", size = 32585, upload-time = "2026-11-16T10:40:37.119Z" },
 ]
-
-[[package]]
-name = "python-repl-core"
-version = "0.1.0"
-source = { editable = "../python-repl-core" }
 
 [[package]]
 name = "pywin32"

@@ -8,7 +8,6 @@ license = { text = "MIT" }
 dependencies = [
     "mcp>=1.2.0,<2",
     "dill>=0.3.8",
-    "python-repl-core",
 ]
 
 [project.scripts]
@@ -20,6 +19,3 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.uv.sources]
-python-repl-core = { path = "../python-repl-core", editable = true }

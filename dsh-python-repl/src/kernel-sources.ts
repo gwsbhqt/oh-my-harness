@@ -32,8 +32,12 @@ function listFiles(root: string, dir: string, out: string[]): void {
 }
 
 function listSharedCoreFiles(packageRoot: string): { rel: string; abs: string }[] {
-  const corePkg = join(packageRoot, '..', 'python-repl-core', 'src', 'python_repl_core')
-  if (!existsSync(corePkg)) return []
+  const candidates = [
+    join(packageRoot, '..', 'python-repl-core', 'src', 'python_repl_core'),
+    join(packageRoot, 'lib', 'python_repl_core'),
+  ]
+  const corePkg = candidates.find((p) => existsSync(p))
+  if (!corePkg) return []
   const out: { rel: string; abs: string }[] = []
   const walk = (dir: string, relBase: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {

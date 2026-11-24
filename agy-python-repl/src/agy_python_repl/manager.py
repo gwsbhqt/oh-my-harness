@@ -17,15 +17,16 @@ from python_repl_core.skill_discovery import discover_python_skills
 
 
 def _default_vendor_dir() -> Path:
-    repo_root = Path(__file__).resolve().parents[3]
-    for rel in (
-        ("python-repl-core", "vendor", "prime"),
-        ("dsh-python-repl", "vendor", "prime"),
+    plugin_root = Path(__file__).resolve().parents[2]
+    repo_root = plugin_root.parent
+    for candidate in (
+        plugin_root / "_bundled" / "vendor" / "prime",
+        repo_root / "python-repl-core" / "vendor" / "prime",
+        repo_root / "dsh-python-repl" / "vendor" / "prime",
     ):
-        candidate = repo_root.joinpath(*rel)
         if (candidate / "rlm" / "repl.py").is_file():
             return candidate
-    raise FileNotFoundError(f"Could not locate vendored Prime kernel under {repo_root}")
+    raise FileNotFoundError(f"Could not locate vendored Prime kernel under {plugin_root} or {repo_root}")
 
 
 def _default_compat_dir() -> Path:

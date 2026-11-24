@@ -103,19 +103,18 @@ class AgyPythonReplTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await fresh_manager.shutdown_all()
 
+    async def test_timeout_returns_timeout_result_without_cancelled_error(self) -> None:
+        r = await self.manager.run_code("import asyncio\nawait asyncio.sleep(2)", timeout_seconds=0.05)
+        self.assertEqual(r["status"], "timeout")
+
     def test_pretooluse_hook_scopes_kernel_by_conversation_id(self) -> None:
         import json
-        import os
         import subprocess
 
-        data_dir = self.tmp_dir / "route_data"
         hook_script = Path(__file__).resolve().parents[1] / "hooks" / "inject_session.py"
-        env = os.environ.copy()
-        env["PLUGIN_DATA"] = str(data_dir)
-
         lazy_payload = {
             "conversationId": "conv-abc",
-            "cwd": "/tmp/ws",
+            "workspacePaths": ["/tmp/ws-from-paths"],
             "toolCall": {
                 "name": "call_mcp_tool",
                 "args": {
@@ -130,17 +129,12 @@ class AgyPythonReplTests(unittest.IsolatedAsyncioTestCase):
             input=json.dumps(lazy_payload),
             text=True,
             capture_output=True,
-            env=env,
             check=True,
         )
         out = json.loads(proc.stdout)
-        self.assertEqual(out, {"decision": "allow"})
-
-        route_files = list((data_dir / "routing").glob("run_*.json"))
-        self.assertEqual(len(route_files), 1)
-        route_data = json.loads(route_files[0].read_text(encoding="utf-8"))
-        self.assertEqual(route_data["conversationId"], "conv-abc")
-        self.assertEqual(route_data["cwd"], "/tmp/ws")
+        self.assertEqual(out["decision"], "allow")
+        self.assertEqual(out["overwrite"]["Arguments"]["kernel"], "conv-abc")
+        self.assertEqual(out["overwrite"]["Arguments"]["cwd"], "/tmp/ws-from-paths")
 
     def test_session_start_hook_reports_snapshot_only_when_present(self) -> None:
         import json

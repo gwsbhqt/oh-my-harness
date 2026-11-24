@@ -212,12 +212,12 @@ class KernelClient:
             try:
                 await self._send({"type": "execute", "id": req_id, "code": code})
                 try:
-                    done_frame = await asyncio.wait_for(fut, timeout=timeout_s)
+                    done_frame = await asyncio.wait_for(asyncio.shield(fut), timeout=timeout_s)
                 except asyncio.TimeoutError:
                     timed_out = True
                     await self.interrupt()
                     try:
-                        done_frame = await asyncio.wait_for(fut, timeout=5.0)
+                        done_frame = await asyncio.wait_for(asyncio.shield(fut), timeout=5.0)
                     except asyncio.TimeoutError:
                         await self.shutdown()
                         raise KernelProtocolError(f"Cell timed out after {timeout_s}s and failed to interrupt")

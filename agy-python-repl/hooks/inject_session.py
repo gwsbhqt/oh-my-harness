@@ -1,30 +1,29 @@
 #!/usr/bin/env python3
-"""PreToolUse hook: record conversationId and cwd out-of-band without rewriting tool args."""
+"""PreToolUse hook: concurrency-safe injection of conversationId and workspace path."""
 
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 import sys
-import time
-from pathlib import Path
 
 
-def _data_dir() -> Path:
-    env_dir = os.environ.get("PLUGIN_DATA") or os.environ.get("AGY_PYTHON_REPL_DATA")
-    if env_dir:
-        return Path(env_dir).expanduser()
-    return Path.home() / ".gemini" / "antigravity" / "plugin_data" / "agy-python-repl"
+def _scope_kernel(raw_kernel: object, conv_id: str) -> str:
+    kernel = raw_kernel if isinstance(raw_kernel, str) and raw_kernel.strip() else "default"
+    if kernel == "default":
+        return conv_id
+    if kernel.startswith(f"{conv_id}:") or kernel.startswith(f"{conv_id}__"):
+        return kernel
+    return f"{conv_id}:{kernel}"
 
 
-def _route_key(tool_name: str, inner_args: dict) -> str:
-    if tool_name == "run_code":
-        code = str(inner_args.get("code", ""))
-        digest = hashlib.sha256(code.encode("utf-8")).hexdigest()[:16]
-        return f"run_{digest}"
-    action = str(inner_args.get("action", "list"))
-    return f"state_{action}"
+def _resolve_workspace(payload: dict) -> str | None:
+    paths = payload.get("workspacePaths")
+    if isinstance(paths, list) and paths and isinstance(paths[0], str) and paths[0]:
+        return paths[0]
+    cwd = payload.get("cwd")
+    if isinstance(cwd, str) and cwd:
+        return cwd
+    return None
 
 
 def main() -> None:
@@ -42,6 +41,7 @@ def main() -> None:
     tool_call = payload.get("toolCall") or {}
     tool_name = str(tool_call.get("name", ""))
     args = tool_call.get("args") or {}
+    work_dir = _resolve_workspace(payload)
 
     if tool_name == "call_mcp_tool":
         server_name = str(args.get("ServerName", ""))
@@ -50,32 +50,17 @@ def main() -> None:
             print(json.dumps({"decision": "allow"}))
             return
         inner = dict(args.get("Arguments") or {})
-    elif tool_name.endswith("run_code"):
-        target_tool = "run_code"
-        inner = dict(args)
-    elif tool_name.endswith("kernel_state"):
-        target_tool = "kernel_state"
-        inner = dict(args)
-    else:
-        print(json.dumps({"decision": "allow"}))
+        inner["kernel"] = _scope_kernel(inner.get("kernel"), conv_id)
+        if target_tool == "run_code" and work_dir and not inner.get("cwd"):
+            inner["cwd"] = work_dir
+        print(json.dumps({"decision": "allow", "overwrite": {"Arguments": inner}}))
         return
 
-    routing_dir = _data_dir() / "routing"
-    routing_dir.mkdir(parents=True, exist_ok=True)
-    key = _route_key(target_tool, inner)
-    route_file = routing_dir / f"{key}.json"
-    route_file.write_text(
-        json.dumps(
-            {
-                "conversationId": conv_id,
-                "cwd": payload.get("cwd") or "",
-                "ts": time.time(),
-            }
-        ),
-        encoding="utf-8",
-    )
+    overwrite: dict[str, str] = {"kernel": _scope_kernel(args.get("kernel"), conv_id)}
+    if tool_name.endswith("run_code") and work_dir and not args.get("cwd"):
+        overwrite["cwd"] = work_dir
 
-    print(json.dumps({"decision": "allow"}))
+    print(json.dumps({"decision": "allow", "overwrite": overwrite}))
 
 
 if __name__ == "__main__":

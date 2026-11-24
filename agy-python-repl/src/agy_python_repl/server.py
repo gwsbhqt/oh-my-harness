@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
-import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
@@ -31,27 +28,6 @@ APP_ONLY_META = {
 _manager = KernelManager()
 
 
-def _data_dir() -> Path:
-    env_dir = os.environ.get("PLUGIN_DATA") or os.environ.get("AGY_PYTHON_REPL_DATA")
-    if env_dir:
-        return Path(env_dir).expanduser()
-    return Path.home() / ".gemini" / "antigravity" / "plugin_data" / "agy-python-repl"
-
-
-def _consume_session_route(route_key: str) -> tuple[str | None, Path | None]:
-    route_file = _data_dir() / "routing" / f"{route_key}.json"
-    if not route_file.is_file():
-        return None, None
-    try:
-        data = json.loads(route_file.read_text(encoding="utf-8"))
-        route_file.unlink(missing_ok=True)
-        conv_id = data.get("conversationId") or None
-        cwd_str = data.get("cwd") or ""
-        return conv_id, (Path(cwd_str).expanduser() if cwd_str else None)
-    except Exception:
-        return None, None
-
-
 @asynccontextmanager
 async def _lifespan(_app: FastMCP):
     try:
@@ -75,12 +51,13 @@ mcp = FastMCP("agy-python-repl", lifespan=_lifespan)
 async def run_code(
     code: str,
     timeout_seconds: float = 60.0,
+    kernel: str = "default",
+    cwd: str | None = None,
 ) -> dict[str, Any]:
-    digest = hashlib.sha256(code.encode("utf-8")).hexdigest()[:16]
-    conv_id, work_dir = _consume_session_route(f"run_{digest}")
+    work_dir = Path(cwd).expanduser() if cwd else None
     return await _manager.run_code(
         code,
-        kernel=conv_id or "default",
+        kernel=kernel,
         timeout_seconds=timeout_seconds,
         cwd=work_dir,
     )
@@ -92,15 +69,15 @@ async def run_code(
 )
 async def kernel_state(
     action: Literal["list", "vars", "snapshot", "restore", "reset"],
+    kernel: str = "default",
 ) -> dict[str, Any]:
-    conv_id, _ = _consume_session_route(f"state_{action}")
-    return await _manager.kernel_state(action, kernel=conv_id or "default")
+    return await _manager.kernel_state(action, kernel=kernel)
 
 
 @mcp.tool(
     name="open_kernel_panel",
     title="Python REPL",
-    description="Open the Python REPL Kernel Inspector panel.",
+    description="Open the Python REPL panel.",
     meta=PANE_META,
 )
 async def open_kernel_panel() -> dict[str, Any]:
