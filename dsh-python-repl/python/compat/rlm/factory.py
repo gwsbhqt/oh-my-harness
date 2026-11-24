@@ -1,24 +1,22 @@
 """`rlm.factory` — OUR compatibility shim, not upstream code.
 
-Upstream's real `rlm/factory.py` (~220KB) runs Prime's "factory machines" and
-answers the out-of-band `factory_activity` request. DSH has no factory and never
-sends that request, so it is not vendored. `repl.py` imports this module at the
-top and reads exactly three names from it.
-
-`ACTIVITY_ACTIONS` is empty on purpose: `repl.py` checks every incoming
-`factory_activity` action against it before scheduling anything, so a request
-that does arrive is refused as an unknown action instead of half-handled.
+Delegates to shared `python_repl_core.compat.rlm.factory` while preserving
+the namespace package file location under `python/compat/rlm/`.
 """
 
 from __future__ import annotations
 
-from typing import Any
+import sys
+from pathlib import Path
+
+_CORE_SRC = Path(__file__).resolve().parents[4] / "python-repl-core" / "src"
+if _CORE_SRC.is_dir() and str(_CORE_SRC) not in sys.path:
+    sys.path.insert(0, str(_CORE_SRC))
+
+from python_repl_core.compat.rlm.factory import (  # noqa: E402, F401
+    ACTIVITY_ACTIONS,
+    ACTIVITY_TIMEOUT_MS_CAP,
+    schedule_activity,
+)
 
 __all__ = ["ACTIVITY_ACTIONS", "ACTIVITY_TIMEOUT_MS_CAP", "schedule_activity"]
-
-ACTIVITY_ACTIONS: tuple[str, ...] = ()
-ACTIVITY_TIMEOUT_MS_CAP = 0
-
-
-def schedule_activity(request: dict[str, Any]) -> None:
-    raise RuntimeError("factory_activity is not supported in DSH")

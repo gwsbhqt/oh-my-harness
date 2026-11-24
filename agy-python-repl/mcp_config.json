@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "agy-python-repl": {
+      "command": "sh",
+      "args": [
+        "-c",
+        "exec uv run --directory \"$PLUGIN_ROOT\" --python 3.14 agy-python-repl"
+      ]
+    }
+  }
+}

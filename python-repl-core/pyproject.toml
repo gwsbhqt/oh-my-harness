@@ -1,0 +1,15 @@
+[project]
+name = "python-repl-core"
+version = "0.1.0"
+description = "Shared Prime REPL kernel client, bounded preview, output budget, and Python skill runtime."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

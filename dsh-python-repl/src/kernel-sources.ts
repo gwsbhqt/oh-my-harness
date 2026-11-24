@@ -31,6 +31,23 @@ function listFiles(root: string, dir: string, out: string[]): void {
   }
 }
 
+function listSharedCoreFiles(packageRoot: string): { rel: string; abs: string }[] {
+  const corePkg = join(packageRoot, '..', 'python-repl-core', 'src', 'python_repl_core')
+  if (!existsSync(corePkg)) return []
+  const out: { rel: string; abs: string }[] = []
+  const walk = (dir: string, relBase: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === '__pycache__') continue
+      const abs = join(dir, entry.name)
+      const rel = join(relBase, entry.name)
+      if (entry.isDirectory()) walk(abs, rel)
+      else if (entry.isFile()) out.push({ rel, abs })
+    }
+  }
+  walk(corePkg, join('python', 'python_repl_core'))
+  return out
+}
+
 /**
  * Copy `python/` and `vendor/` from `packageRoot` into `copiesDir/<content hash>`
  * unless that copy already exists, and return the copy's root. Throws when the
@@ -40,18 +57,22 @@ export function copyKernelSources(packageRoot: string, copiesDir: string): strin
   const files: string[] = []
   for (const dir of KERNEL_SOURCE_DIRS) listFiles(packageRoot, dir, files)
   files.sort()
+  const shared = listSharedCoreFiles(packageRoot).sort((a, b) => a.rel.localeCompare(b.rel))
+  const entries = [
+    ...files.map((rel) => ({ rel, content: readFileSync(join(packageRoot, rel)) })),
+    ...shared.map((item) => ({ rel: item.rel, content: readFileSync(item.abs) })),
+  ]
   const hash = createHash('sha256')
-  const contents = files.map((rel) => readFileSync(join(packageRoot, rel)))
-  files.forEach((rel, index) => hash.update(rel).update('\0').update(contents[index]!).update('\0'))
+  entries.forEach(({ rel, content }) => hash.update(rel).update('\0').update(content).update('\0'))
   const id = hash.digest('hex').slice(0, 16)
   const target = join(copiesDir, id)
   if (!existsSync(join(target, COMPLETE))) {
     mkdirSync(copiesDir, { recursive: true })
     const staging = join(copiesDir, `.staging-${id}-${process.pid}-${Date.now()}`)
     try {
-      files.forEach((rel, index) => {
+      entries.forEach(({ rel, content }) => {
         mkdirSync(dirname(join(staging, rel)), { recursive: true })
-        writeFileSync(join(staging, rel), contents[index]!)
+        writeFileSync(join(staging, rel), content)
       })
       writeFileSync(join(staging, COMPLETE), '')
       rmSync(target, { recursive: true, force: true })

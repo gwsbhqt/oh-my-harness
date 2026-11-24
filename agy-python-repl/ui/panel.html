@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Python REPL</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: var(--vscode-editor-background, #18181b);
+      --fg: var(--vscode-editor-foreground, #e4e4e7);
+      --muted: var(--vscode-descriptionForeground, #a1a1aa);
+      --border: var(--vscode-panel-border, rgba(161, 161, 170, 0.25));
+      --card: var(--vscode-sideBar-background, rgba(255, 255, 255, 0.04));
+      --accent: var(--vscode-button-background, #3b82f6);
+      --accent-fg: var(--vscode-button-foreground, #ffffff);
+      --ok: #22c55e;
+      --err: #ef4444;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #ffffff;
+        --fg: #18181b;
+        --muted: #52525b;
+        --border: rgba(24, 24, 27, 0.14);
+        --card: #f4f4f5;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 12px;
+      font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    h1 { font-size: 14px; margin: 0; font-weight: 600; }
+    button {
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--fg);
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    button.primary {
+      background: var(--accent);
+      color: var(--accent-fg);
+      border-color: transparent;
+    }
+    .section { margin-bottom: 14px; }
+    .section-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      margin-bottom: 8px;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 999px;
+      font-size: 11px;
+      border: 1px solid var(--border);
+    }
+    .ok { color: var(--ok); }
+    .err { color: var(--err); }
+    .muted { color: var(--muted); font-size: 12px; }
+    .actions { display: flex; gap: 6px; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Python REPL Workbench</h1>
+    <button id="refreshBtn" class="primary">Refresh</button>
+  </header>
+
+  <div class="section">
+    <div class="section-title">Active Kernels</div>
+    <div id="kernels"><div class="muted">No active kernels yet.</div></div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Recent Cells</div>
+    <div id="history"><div class="muted">No cells executed yet.</div></div>
+  </div>
+
+  <script>
+    let rpcId = 1;
+    const pending = new Map();
+
+    window.addEventListener("message", (event) => {
+      const msg = event.data;
+      if (!msg || typeof msg !== "object") return;
+      if (msg.id && pending.has(msg.id)) {
+        const { resolve, reject } = pending.get(msg.id);
+        pending.delete(msg.id);
+        if (msg.error) reject(new Error(msg.error.message || JSON.stringify(msg.error)));
+        else resolve(msg.result);
+      }
+    });
+
+    function callHost(method, params) {
+      const id = rpcId++;
+      return new Promise((resolve, reject) => {
+        pending.set(id, { resolve, reject });
+        window.parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+      });
+    }
+
+    async function callTool(name, args = {}) {
+      const res = await callHost("tools/call", { name, arguments: args });
+      if (res && res.structuredContent) return res.structuredContent;
+      if (res && Array.isArray(res.content) && res.content[0]?.text) {
+        try { return JSON.parse(res.content[0].text); } catch { return { text: res.content[0].text }; }
+      }
+      return res || {};
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
+
+    async function refresh() {
+      const data = await callTool("app_kernel_overview");
+      const kernelsEl = document.getElementById("kernels");
+      const historyEl = document.getElementById("history");
+
+      const kernels = data.kernels || [];
+      if (!kernels.length) {
+        kernelsEl.innerHTML = '<div class="muted">No active kernels yet.</div>';
+      } else {
+        kernelsEl.innerHTML = kernels.map((k) => `
+          <div class="card">
+            <div class="row">
+              <span class="mono"><strong>${escapeHtml(k.name)}</strong></span>
+              <span class="badge ${k.alive ? "ok" : "err"}">${k.alive ? "alive" : "stopped"} · Py ${escapeHtml(k.python || "?")}</span>
+            </div>
+            <div class="muted" style="margin-top:4px">Skills: ${(k.skills_loaded || []).map(escapeHtml).join(", ") || "none"}</div>
+            <div class="actions">
+              <button onclick="doAction('vars', '${escapeHtml(k.name)}')">Vars</button>
+              <button onclick="doAction('snapshot', '${escapeHtml(k.name)}')">Snapshot</button>
+              <button onclick="doAction('restore', '${escapeHtml(k.name)}')">Restore</button>
+              <button onclick="doAction('reset', '${escapeHtml(k.name)}')">Reset</button>
+            </div>
+            <div id="vars-${escapeHtml(k.name)}" class="muted mono" style="margin-top:6px"></div>
+          </div>
+        `).join("");
+      }
+
+      const history = data.history || [];
+      if (!history.length) {
+        historyEl.innerHTML = '<div class="muted">No cells executed yet.</div>';
+      } else {
+        historyEl.innerHTML = history.map((h) => `
+          <div class="card">
+            <div class="row">
+              <span class="mono">${escapeHtml(h.kernel)} · ${escapeHtml(h.code_preview || "(empty)")}</span>
+              <span class="badge ${h.status === "ok" ? "ok" : "err"}">${escapeHtml(h.status)} · ${h.duration_ms}ms</span>
+            </div>
+          </div>
+        `).join("");
+      }
+    }
+
+    window.doAction = async (action, kernel) => {
+      const res = await callTool("app_kernel_action", { action, kernel });
+      if (action === "vars") {
+        const el = document.getElementById(`vars-${kernel}`);
+        if (el) el.textContent = "Vars: " + ((res.names || []).join(", ") || "(empty)");
+      } else {
+        await refresh();
+      }
+    };
+
+    document.getElementById("refreshBtn").addEventListener("click", refresh);
+    refresh().catch(() => {});
+  </script>
+</body>
+</html>

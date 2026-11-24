@@ -12,7 +12,7 @@ import { strict as assert } from 'node:assert'
 import { after, describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { ReplSession } from '../src/session.ts'
 import { CELL_INSTRUCTIONS } from '../src/prompt.ts'
@@ -44,7 +44,8 @@ after(async () => {
 
 /** The names python/prelude.py binds, read from its source so the prompt cannot drift. */
 function preludeNames(): string[] {
-  const source = readFileSync(join(root, 'python', 'prelude.py'), 'utf8')
+  const shared = join(root, '..', 'python-repl-core', 'src', 'python_repl_core', 'prelude.py')
+  const source = readFileSync(existsSync(shared) ? shared : join(root, 'python', 'prelude.py'), 'utf8')
   const block = source.slice(source.indexOf('NAMES: dict'), source.indexOf('\n}\n'))
   return [...block.matchAll(/^\s+"(\w+)": \(/gm)].map((m) => m[1]!)
 }

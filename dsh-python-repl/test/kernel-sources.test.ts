@@ -20,6 +20,8 @@ test('a kernel still starts after the checkout it was copied from is moved away'
   const root = await mkdtemp(join(tmpdir(), 'kernel-sources-'))
   try {
     const checkout = join(root, 'checkout')
+    const sharedCore = join(root, 'python-repl-core')
+    await cp(join(packageRoot, '..', 'python-repl-core'), sharedCore, { recursive: true })
     for (const dir of ['python', 'vendor']) await cp(join(packageRoot, dir), join(checkout, dir), { recursive: true })
     const copy = copyKernelSources(checkout, join(root, 'copies'))
     await rm(checkout, { recursive: true })

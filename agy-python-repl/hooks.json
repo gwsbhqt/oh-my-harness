@@ -1,0 +1,23 @@
+{
+  "agy-python-repl-session": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "python3 ./hooks/session_start.py",
+        "timeout": 5
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "(mcp_agy-python-repl_.*)?(run_code|kernel_state)|call_mcp_tool",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ./hooks/inject_session.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

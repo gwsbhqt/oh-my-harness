@@ -1,0 +1,12 @@
+{
+  "name": "agy-python-repl",
+  "displayName": "Python REPL Workbench",
+  "version": "0.1.0",
+  "description": "Persistent Prime Python kernel for stateful data analysis, snapshot recovery, and trusted Python skill execution.",
+  "license": "MIT",
+  "suggestedPrompts": [
+    "Analyze a large log or JSON file in Python and keep only the summary in chat",
+    "List available Python skills with await skills.list() and inspect their docs",
+    "Check active Python kernels and their in-memory variables"
+  ]
+}
