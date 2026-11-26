@@ -73,6 +73,10 @@ export interface PanelSkillReport {
   failed: Array<{ skill: string; reason: string }>
 }
 
+export type AutoSaveIssue =
+  | { kind: 'skipped'; count: number; names: string[] }
+  | { kind: 'failed'; reason: string }
+
 export interface PanelSnapshot {
   status: 'available' | 'missing' | 'error' | 'disabled'
   /** ISO timestamp, exactly as persisted by the kernel manifest. */
@@ -141,6 +145,7 @@ export interface PanelState {
   started: boolean
   busy: boolean
   snapshotProtected: boolean
+  autoSaveIssue?: AutoSaveIssue
   epoch: number
   python: string | null
   executable: string | null

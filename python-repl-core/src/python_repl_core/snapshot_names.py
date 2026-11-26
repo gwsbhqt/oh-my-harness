@@ -201,6 +201,46 @@ class _SnapshotNames:
         return self.ns.pop(name, default)
 
 
+def read_snapshot_values(stream, saved_names: list[str]) -> tuple[dict, list[dict]]:
+    """Load a new framed snapshot without rebinding its functions or classes to the live main module."""
+    import io
+    import types
+
+    import dill
+    import rlm.repl as repl
+
+    if stream.read(len(repl._SNAPSHOT_MAGIC)) != repl._SNAPSHOT_MAGIC:
+        raise ValueError("invalid recovery copy payload")
+    token = _restoring.set(_RestoreReferences(legacy_underscore_aliases=False))
+    try:
+        records = repl._read_snapshot_records(
+            stream, repl.DEFAULT_SNAPSHOT_MAX_BYTES, repl.DEFAULT_SNAPSHOT_MAX_VARIABLE_BYTES,
+        )
+        if set(records) != set(saved_names):
+            raise ValueError("recovery copy records do not match its manifest")
+        detached_main = types.ModuleType("__main__")
+
+        class CopyUnpickler(repl._snapshot_unpickler(dill)):
+            def find_class(self, module, name):
+                if module == "__main__" or (module, name) == ("__builtin__", "__main__"):
+                    raise pickle.UnpicklingError("copy contains a reference to the live __main__ namespace")
+                return super().find_class(module, name)
+
+        values = {}
+        failed = []
+        for name in saved_names:
+            try:
+                # dill otherwise reconnects an instance to a same-named class in the running __main__.
+                reader = CopyUnpickler(io.BytesIO(records[name]), ignore=True)
+                reader._main = detached_main
+                values[name] = reader.load()
+            except Exception as exc:
+                failed.append({"name": name, "reason": f"{type(exc).__name__}: {repl._safe_str(exc)[:200]}"})
+        return values, failed
+    finally:
+        _restoring.reset(token)
+
+
 def install_snapshot_names(dill_impl: Any, *, legacy_underscore_aliases: bool) -> None:
     """Keep user underscore names and cross-record identities in Prime's framed snapshot."""
     import rlm.repl as repl

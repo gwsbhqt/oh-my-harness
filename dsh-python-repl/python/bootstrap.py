@@ -260,7 +260,7 @@ class _Repl:
         self._epoch = epoch
 
     def __repr__(self):
-        return "<repl: kernel awareness and control (info/list/describe/helpers/restore_binding/install/background/restart/keep/unkeep/unarchive)>"
+        return "<repl: kernel awareness and control (info/list/describe/helpers/restore_binding/install/background/restart/keep/unkeep/unarchive/save_copy/list_copies/read_copy)>"
 
     async def info(self):
         return self._info.info(self._epoch)
@@ -322,6 +322,24 @@ class _Repl:
     async def unarchive(self, *names):
         """Bring archived names back now (a cell that names one directly does this by itself)."""
         return _lifecycle_ops("unarchive", names)
+
+    async def save_copy(self, *names):
+        """Save named live user values separately. Function dependencies can travel with them."""
+        import recovery_copies
+
+        return recovery_copies.save(names)
+
+    async def list_copies(self):
+        """List the IDs of explicitly saved copies in this session."""
+        import recovery_copies
+
+        return recovery_copies.list_copies()
+
+    async def read_copy(self, copy_id):
+        """Read a session copy into a values dictionary, with failed and skipped names."""
+        import recovery_copies
+
+        return recovery_copies.read(copy_id)
 
     async def background(self, work, label=None):
         """Run long work after this cell ends, as a DSH background job; DSH wakes you when it finishes."""  # replaced by _background_doc at bootstrap

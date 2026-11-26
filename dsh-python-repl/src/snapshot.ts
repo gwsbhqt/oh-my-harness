@@ -4,8 +4,10 @@
  * model is told. Scheduling and the kernel requests stay in the session.
  */
 
+import { createHash } from 'node:crypto'
 import { open, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
+import type { AutoSaveIssue } from './panel-types.ts'
 import type { CellOutcome, SnapshotTarget } from './kernel.ts'
 
 /** Read persisted metadata only; never deserialize a dill payload or start a kernel. */
@@ -148,20 +150,24 @@ export interface RestoreSummary {
   archiveAfter: number
 }
 
-export const INCOMPLETE_RESTORE_NOTICE = 'Saving is paused after an incomplete restore. New or changed values, including pinned names, are in memory only. Export needed values before closing or restarting the host.'
+export const INCOMPLETE_RESTORE_NOTICE = 'Saving is paused after an incomplete restore. New or changed values, including pinned names, are in memory only. Before closing or restarting the host, use await repl.save_copy("name") for values you need. After restarting, use await repl.list_copies() and await repl.read_copy(copy_id).'
 const LIST_LIMIT = 10
 const MODULE_LIMIT = 5
 const LOST_LIMIT = 50
 const NAME_CHARS = 60
 
+function shortName(name: string): string {
+  return name.length > NAME_CHARS ? `${name.slice(0, NAME_CHARS - 1)}…` : name
+}
+
 function nameList(names: readonly string[], limit: number): string {
-  const shown = names.slice(0, limit).map((name) => name.length > NAME_CHARS ? `${name.slice(0, NAME_CHARS - 1)}…` : name).join(', ')
+  const shown = names.slice(0, limit).map(shortName).join(', ')
   return names.length > limit ? `${shown} (+${names.length - limit} more)` : shown
 }
 
 /** The kernel acknowledges a snapshot only after writing the payload and manifest. */
 export type SnapshotResult =
-  | { status: 'saved'; skipped: string }
+  | { status: 'saved'; skipped: string; skippedNames: string[] }
   | { status: 'disabled' }
   | { status: 'failed'; reason: string; panelReason?: string }
 
@@ -175,7 +181,51 @@ export function snapshotResult(outcome: CellOutcome): SnapshotResult {
     || !skipped.every((item: unknown) => typeof (item as { name?: unknown } | null)?.name === 'string')) {
     return { status: 'failed', reason: 'the kernel did not confirm which names were saved' }
   }
-  return { status: 'saved', skipped: nameList(skipped.map((item: { name: string }) => item.name), LOST_LIMIT) }
+  const skippedNames = skipped.map((item: { name: string }) => item.name)
+  return { status: 'saved', skipped: nameList(skippedNames, LOST_LIMIT), skippedNames }
+}
+
+/** One debounced write can finish after the cell that changed the namespace returned. */
+export class AutoSaveFeedback {
+  issue: AutoSaveIssue | undefined
+  #key: string | undefined
+  #reported: string | undefined
+  #reportedFailure = false
+
+  record(result: SnapshotResult): void {
+    if (result.status === 'disabled') return
+    let issue: AutoSaveIssue | undefined
+    let key: string | undefined
+    if (result.status === 'failed') {
+      // Python stages each write in a uniquely named temp. That suffix is not a different failure.
+      const reason = result.reason.replace(/(kernel-state\.(?:dill|json))\.[\w-]+\.tmp/g, '$1.tmp')
+        .replace(/\s+/g, ' ').trim()
+      key = `failed:${createHash('sha256').update(reason).digest('hex')}`
+      issue = { kind: 'failed', reason: reason.length > 240 ? `${reason.slice(0, 239)}…` : reason }
+    } else if (result.skippedNames.length) {
+      const names = result.skippedNames.toSorted()
+      key = `skipped:${createHash('sha256').update(JSON.stringify(names)).digest('hex')}`
+      issue = { kind: 'skipped', count: names.length, names: names.slice(0, 3).map(name => shortName(name.replace(/\s+/g, ' '))) }
+    }
+    this.issue = issue
+    this.#key = key
+  }
+
+  takeNotice(): string | undefined {
+    const recovered = this.#reportedFailure && this.issue?.kind !== 'failed'
+    const changed = this.#key !== this.#reported
+    this.#reported = this.#key
+    this.#reportedFailure = this.issue?.kind === 'failed'
+    const messages = []
+    if (recovered) messages.push('Automatic saving has resumed.')
+    if (changed && this.issue) messages.push(autoSaveMessage(this.issue))
+    return messages.length ? messages.join(' ') : undefined
+  }
+}
+
+export function autoSaveMessage(issue: AutoSaveIssue): string {
+  if (issue.kind === 'failed') return `Automatic save failed. The latest changes have not been confirmed on disk. ${issue.reason}`
+  return `Automatic save skipped ${issue.count} ${issue.count === 1 ? 'name' : 'names'} in this snapshot (${issue.names.join(', ')}${issue.count > issue.names.length ? ', …' : ''}).`
 }
 
 /**

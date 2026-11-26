@@ -42,6 +42,7 @@ class KernelClient:
         compat_dir: Path,
         cwd: Path | None = None,
         extra_pythonpath: list[Path] | None = None,
+        pass_fds: tuple[int, ...] = (),
         startup_timeout_s: float = 30.0,
         max_frame_bytes: int = DEFAULT_MAX_FRAME_BYTES,
     ) -> None:
@@ -50,6 +51,7 @@ class KernelClient:
         self.compat_dir = compat_dir
         self.cwd = cwd or Path.cwd()
         self.extra_pythonpath = extra_pythonpath or []
+        self.pass_fds = pass_fds
         self.startup_timeout_s = startup_timeout_s
         self.max_frame_bytes = max_frame_bytes
 
@@ -92,6 +94,7 @@ class KernelClient:
             cwd=str(self.cwd),
             env=env,
             start_new_session=True,
+            pass_fds=self.pass_fds,
             limit=self.max_frame_bytes,
         )
         self._reader_task = asyncio.create_task(self._read_loop())

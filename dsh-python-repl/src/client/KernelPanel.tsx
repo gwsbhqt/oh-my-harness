@@ -668,7 +668,13 @@ export function KernelPanel({ sessionId }: KernelPanelProps) {
     </header>
     {stateError && <div role="alert" className="kb-error">{stateError}{state ? '，下面保留上次读取的状态。' : ''}</div>}
     {state?.snapshotProtected && <div className="kb-notice" data-tone="warn" role="status">
-      上次快照只恢复了一部分，保存已暂停。新增或修改的变量只在当前内核中。关闭或重启前，请先导出要保留的值。
+      上次快照只恢复了一部分，保存已暂停。新增或修改的变量只在当前内核中。
+      关闭或重启前，可在代码格运行 <code>await repl.save_copy("变量名")</code> 另存要保留的值。
+    </div>}
+    {state?.autoSaveIssue && !state.snapshotProtected && <div className="kb-notice" data-tone="warn" role="status">
+      {state.autoSaveIssue.kind === 'failed'
+        ? <>最近一次自动保存失败，本次改动尚未确认写入磁盘。{state.autoSaveIssue.reason}</>
+        : <>最近一次自动保存未把 {state.autoSaveIssue.count} 个名字写入快照（{state.autoSaveIssue.names.join('、')}{state.autoSaveIssue.count > state.autoSaveIssue.names.length ? ' 等' : ''}）。</>}
     </div>}
     <section className="kb-metrics" aria-label="内核概况">
       <div className="kb-metric"><div className="kb-metric-label">名字</div><div className="kb-metric-value">{state?.total ?? '—'}<small>个</small></div>

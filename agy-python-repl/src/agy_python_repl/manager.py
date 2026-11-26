@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import fcntl
 import hashlib
 import json
 import os
@@ -13,7 +14,7 @@ import tempfile
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 import python_repl_core
 from python_repl_core.kernel_client import CellResult, KernelClient, KernelProtocolError
@@ -178,6 +179,7 @@ class CellHistoryEntry:
 class ManagedKernel:
     name: str
     storage: Path
+    ownership: BinaryIO
     client: KernelClient
     cwd: Path | None
     created_at: float = field(default_factory=time.time)
@@ -281,10 +283,42 @@ class KernelManager:
             existing.last_used_at = time.time()
             return existing
         if existing:
-            del self._kernels[key]
             await existing.client.shutdown()
+            del self._kernels[key]
+            ownership = existing.ownership
+        else:
+            ownership = self._acquire_ownership(key, storage)
+        try:
+            work_dir = requested or (existing.cwd if existing else None) or Path.cwd()
+            managed = await self._start_kernel(key, storage, ownership, work_dir)
+        except BaseException:
+            ownership.close()
+            raise
+        self._kernels[key] = managed
+        return managed
 
-        work_dir = requested or (existing.cwd if existing else None) or Path.cwd()
+    def _acquire_ownership(self, key: str, storage: Path) -> BinaryIO:
+        path = self.data_dir / "locks" / storage.with_suffix(".lock")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Never unlink this inode: independent opens must continue to contend on the same file.
+        ownership = path.open("a+b")
+        try:
+            fcntl.flock(ownership.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            ownership.close()
+            raise KernelProtocolError(
+                f"Kernel {key!r} is in use by another AGY service. "
+                "Use kernel_state('list') or the panel overview to inspect it. "
+                "Retry after that service releases the kernel, or use another kernel name."
+            ) from None
+        except BaseException:
+            ownership.close()
+            raise
+        return ownership
+
+    async def _start_kernel(
+        self, key: str, storage: Path, ownership: BinaryIO, work_dir: Path,
+    ) -> ManagedKernel:
         entries = discover_python_skills(
             skill_roots=self.skill_roots, project_roots=self.project_skill_roots, cwd=work_dir
         )
@@ -293,7 +327,12 @@ class KernelManager:
             entry for entry in discover_python_skills(skill_roots=[_BUILTIN_SKILLS_DIR])
             if entry.import_name not in configured
         )
+        ownership_fd = ownership.fileno()
         bootstrap_code = (
+            # Prime retains the lock through its EOF snapshot. FileIO.close stays idempotent on nested forks.
+            f"__import__('os').set_inheritable({ownership_fd}, False)\n"
+            "__import__('os').register_at_fork("
+            f"after_in_child=__import__('io').FileIO({ownership_fd}, 'r+').close)\n"
             # A -m process pins its initial directory in sys.path. An interactive REPL follows cwd.
             "if __import__('sys').path[:1] == [__import__('os').getcwd()]:\n"
             "    __import__('sys').path[0] = ''\n"
@@ -305,6 +344,7 @@ class KernelManager:
             vendor_dir=self.vendor_dir,
             compat_dir=self.compat_dir,
             cwd=work_dir,
+            pass_fds=(ownership_fd,),
             extra_pythonpath=[
                 Path(__file__).resolve().parents[1],
                 Path(python_repl_core.__file__).resolve().parents[1],
@@ -333,17 +373,16 @@ class KernelManager:
             await client.shutdown()
             raise
 
-        managed = ManagedKernel(
+        return ManagedKernel(
             name=key,
             storage=storage,
+            ownership=ownership,
             client=client,
             cwd=work_dir,
             skill_report=report,
             pending_restore_notice=restored,
             snapshot_protected=restored is not None and not restored["restored"],
         )
-        self._kernels[key] = managed
-        return managed
 
     async def run_code(
         self,
@@ -456,16 +495,21 @@ class KernelManager:
 
         async with self._locks.setdefault(key, asyncio.Lock()):
             if action == "reset":
-                existing = self._kernels.pop(key, None)
+                existing = self._kernels.get(key)
                 if existing:
                     await existing.client.shutdown()
-                snapshot, manifest = self._snapshot_paths(storage)
-                paths = [snapshot, manifest]
-                if storage.parent != Path("."):
-                    paths.append(snapshot.with_suffix(".name"))
-                for path in paths:
-                    if path.is_file():
-                        path.unlink()
+                    del self._kernels[key]
+                    ownership = existing.ownership
+                else:
+                    ownership = self._acquire_ownership(key, storage)
+                with ownership:
+                    snapshot, manifest = self._snapshot_paths(storage)
+                    paths = [snapshot, manifest]
+                    if storage.parent != Path("."):
+                        paths.append(snapshot.with_suffix(".name"))
+                    for path in paths:
+                        if path.is_file():
+                            path.unlink(missing_ok=True)
                 return {"kernel": key, "status": "reset"}
 
             managed = await self._ensure_kernel(key, storage, cwd=cwd)
@@ -526,6 +570,11 @@ class KernelManager:
         }
 
     async def shutdown_all(self) -> None:
-        for managed in list(self._kernels.values()):
-            await managed.client.shutdown()
-        self._kernels.clear()
+        # Include in-flight starts and serialize each close with its final execution/save.
+        for key, lock in list(self._locks.items()):
+            async with lock:
+                managed = self._kernels.get(key)
+                if managed:
+                    await managed.client.shutdown()
+                    managed.ownership.close()
+                    del self._kernels[key]

@@ -31,7 +31,7 @@ import { describeDenial, LeaseRegistry, type BoundTool } from './lease.ts'
 import { BackgroundGrant, ToolLane, type PipelineLike } from './background-tools.ts'
 import { argumentFix, catalogBindings, isCatalogBinding, TOP_LEVEL_TOOLS, type ToolSchemaLike } from './catalog.ts'
 import { failedTasksNotice, foreignLanguageHint, missingModuleHint, usageHint } from './hints.ts'
-import { INCOMPLETE_RESTORE_NOTICE, RESTORE_TIMEOUT_MS, SNAPSHOT_DEBOUNCE_MS, SNAPSHOT_SUPPORT_TIMEOUT_MS, SNAPSHOT_TIMEOUT_MS, readRestoreReport, restoreNotice, snapshotFiles, snapshotResult, type SnapshotResult, type RestoreSummary, type RestoreReport } from './snapshot.ts'
+import { AutoSaveFeedback, INCOMPLETE_RESTORE_NOTICE, RESTORE_TIMEOUT_MS, SNAPSHOT_DEBOUNCE_MS, SNAPSHOT_SUPPORT_TIMEOUT_MS, SNAPSHOT_TIMEOUT_MS, readRestoreReport, restoreNotice, snapshotFiles, snapshotResult, type SnapshotResult, type RestoreSummary, type RestoreReport } from './snapshot.ts'
 
 export interface SessionOptions {
   python: string
@@ -349,7 +349,7 @@ export class ReplSession {
     this.#controlPending = work
     try {
       const result = await work
-      const reason = result.ok && this.#restoreIncomplete ? '保存已暂停。此操作仅在当前内核生效，关闭前请导出需要的值。' : result.reason
+      const reason = result.ok && this.#restoreIncomplete ? '保存已暂停。此操作仅在当前内核生效，关闭前可运行 await repl.save_copy("变量名") 另存需要的值。' : result.reason
       return { action, name, ok: result.ok, ...(reason === undefined ? {} : { reason }) }
     } catch (error) {
       return refuse(errorMessage(error))
@@ -375,7 +375,7 @@ export class ReplSession {
     const kernel = this.#kernel
     if (action === 'start') {
       if (kernel?.ready !== true) await this.#ensureStarted(new Map())
-      if (this.#restoreIncomplete) return done('上次快照仅部分恢复，保存已暂停。新改的变量只在内存中，关闭前请先导出。')
+      if (this.#restoreIncomplete) return done('上次快照仅部分恢复，保存已暂停。新改的变量只在内存中，关闭前可运行 await repl.save_copy("变量名") 另存需要的值。')
       return done(kernel?.ready === true ? '内核已经在运行' : undefined)
     }
     if (action === 'stop' || action === 'restart') {
@@ -449,10 +449,11 @@ export class ReplSession {
   #snapshotUnavailable: string | undefined
   /** User code may have changed the namespace since the last confirmed save. */
   #dirty = false
+  #autoSave = new AutoSaveFeedback()
   #snapshotTimer: NodeJS.Timeout | undefined
   #snapshotCounter = 0
   /** Shared through the kernel's actual reply, even if the host has already reported a timeout. */
-  #snapshotInFlight: { kernel: PythonKernel; id: string; result: Promise<SnapshotResult> } | undefined
+  #snapshotInFlight: { kernel: PythonKernel; id: string; result: Promise<SnapshotResult>; completed: Promise<SnapshotResult> } | undefined
   /**
    * The restore failed or left names out: the file on disk is the fuller copy,
    * so closing the session must not overwrite it (Prime's restore_incomplete).
@@ -538,6 +539,7 @@ export class ReplSession {
   }
 
   get snapshotProtected(): boolean { return this.started && this.#restoreIncomplete }
+  get autoSaveIssue() { return this.started ? this.#autoSave.issue : undefined }
 
   get epoch(): number {
     return this.#epoch
@@ -932,6 +934,10 @@ export class ReplSession {
       } else if (ok && result.error === undefined && !this.#disposed) {
         this.#scheduleSnapshot()
       }
+      if (teardown.restart === undefined && this.#kernel === kernel) {
+        const notice = this.#autoSave.takeNotice()
+        if (notice) result.logs.push(`[dsh-python-repl] ${notice}`)
+      }
       return result
     } finally {
       this.#revoke(runId)
@@ -1025,7 +1031,14 @@ export class ReplSession {
         if (this.#snapshotTimer !== timer) return
         this.#snapshotTimer = undefined
         const kernel = this.#kernel
-        if (this.#dirty && kernel !== undefined && !this.#disposed) return this.#captureSnapshot(kernel)
+        if (!this.#dirty || !kernel || this.#disposed || this.#restoreIncomplete) return
+        const attempt = this.#captureSnapshot(kernel)
+        // A timeout ends the queue's wait. The kernel's later reply decides what reached disk.
+        const completed = this.#snapshotInFlight?.kernel === kernel ? this.#snapshotInFlight.completed : attempt
+        void completed.then(result => {
+          if (kernel === this.#kernel && !this.#disposed) this.#autoSave.record(result)
+        })
+        return attempt
       })
       this.#queue = task.catch(() => undefined)
     }, SNAPSHOT_DEBOUNCE_MS)
@@ -1041,7 +1054,7 @@ export class ReplSession {
     if (this.#snapshotUnavailable !== undefined) return { status: 'failed', reason: this.#snapshotUnavailable }
     if (this.#restoreIncomplete) return {
       status: 'failed', reason: 'the previous restore was incomplete and the existing snapshot is protected',
-      panelReason: '上次恢复时有数据未能读回，保存已暂停，原快照已保留。关闭宿主前请导出新增或修改的值。',
+      panelReason: '上次恢复时有数据未能读回，保存已暂停，原快照已保留。关闭宿主前可运行 await repl.save_copy("变量名") 另存新增或修改的值。',
     }
     if (!kernel.ready) return { status: 'failed', reason: 'the kernel is no longer running' }
     this.#dirty = true
@@ -1057,7 +1070,7 @@ export class ReplSession {
       return { status: 'failed', reason: `snapshot timed out after ${SNAPSHOT_TIMEOUT_MS}ms`,
         panelReason: `快照保存超时，等待 ${SNAPSHOT_TIMEOUT_MS / 1000} 秒后仍未收到完成确认。` }
     })
-    this.#snapshotInFlight = { kernel, id, result }
+    this.#snapshotInFlight = { kernel, id, result, completed }
     void completed.then(() => {
       if (this.#snapshotInFlight?.id === id) this.#snapshotInFlight = undefined
     })
@@ -1113,6 +1126,7 @@ export class ReplSession {
     // the same kernel: a newer one must not hide behind an older shutdown.
     if (this.#retiring !== undefined && (kernel === undefined || kernel === this.#retiringKernel)) return this.#retiring
     this.#kernel = undefined
+    this.#autoSave = new AutoSaveFeedback()
     this.#installedTools.clear()
     if (reason !== undefined) {
       // One-shot: consumed by the next cell, which runs on a NEW kernel.
