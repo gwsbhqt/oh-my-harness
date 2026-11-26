@@ -340,16 +340,19 @@ class _SkillsNamespace(_Namespace):
             targets = [targets]
         if type(targets) is not list or any(type(t) is not str for t in targets):
             raise TypeError("targets must be a string or list of strings")
+        catalog = self._records()
         items = []
         for target in targets:
-            # Exact ids win, including docs-only names containing dots. Otherwise
-            # accept exactly one public module member, never arbitrary traversal.
-            records = [r for r in self._records() if (r.get("import_name") or r["skill"]) == target]
+            # Exact ids (including dotted document names) win over a formal name.
+            # Only an unmatched target can refer to a single public module member.
+            records = [r for r in catalog if (r.get("import_name") or r["skill"]) == target]
+            if not records:
+                records = [r for r in catalog if r["skill"] == target]
             member = None
             if not records and target.count(".") == 1:
                 name, member = target.split(".")
                 if member.isidentifier() and not keyword.iskeyword(member) and not member.startswith("_"):
-                    records = [r for r in self._records() if r.get("import_name") == name]
+                    records = [r for r in catalog if r.get("import_name") == name]
             if len(records) != 1:
                 items.append({"id": target, "status": "unknown" if not records else "unavailable",
                               "reason": "no unique loaded skill or public member matches this target" if not records else "; ".join(r.get("reason", "ambiguous skill id") for r in records)})

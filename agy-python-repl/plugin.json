@@ -1,7 +1,7 @@
 {
   "name": "agy-python-repl",
   "displayName": "Python REPL Workbench",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Persistent Prime Python kernel for stateful data analysis, snapshot recovery, and trusted Python skill execution.",
   "license": "MIT",
   "suggestedPrompts": [

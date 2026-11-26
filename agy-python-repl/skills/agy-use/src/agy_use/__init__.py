@@ -144,7 +144,7 @@ async def run(prompt: str, workspace: str | Path, *, conversation_id: str | None
     events = []
     receipt["events"] = events
     try:
-        for line in receipt["stdout"].splitlines():
+        for line in receipt["stdout"].split("\n"):
             if not line.strip():
                 continue
             event = json.loads(line)
@@ -156,17 +156,21 @@ async def run(prompt: str, workspace: str | Path, *, conversation_id: str | None
             raise ValueError("AGY 未以唯一的 result 事件结束")
         result = results[0]
         receipt["result"] = result
-        if result.get("denied_actions"):
+        native_error = result.get("error")
+        if isinstance(native_error, str) and native_error.strip():
             receipt["ok"] = False
-            receipt["error"] = "AGY 拒绝了操作，详情见 result.denied_actions"
+            receipt.setdefault("error", native_error)
+        elif result.get("denied_actions"):
+            receipt["ok"] = False
+            receipt.setdefault("error", "AGY 拒绝了操作，详情见 result.denied_actions")
         elif result.get("status") != "SUCCESS":
             receipt["ok"] = False
         elif conversation_id is not None and result.get("conversation_id") != conversation_id:
             receipt["ok"] = False
-            receipt["error"] = "AGY 返回的会话编号与指定编号不一致"
+            receipt.setdefault("error", "AGY 返回的会话编号与指定编号不一致")
         elif not isinstance(result.get("response"), str) or not result["response"].strip():
             receipt["ok"] = False
-            receipt["error"] = "AGY 结束了本轮，但没有返回答复"
+            receipt.setdefault("error", "AGY 结束了本轮，但没有返回答复")
     except ValueError as error:
         receipt["ok"] = False
         receipt["output_error"] = str(error)

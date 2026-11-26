@@ -35,7 +35,12 @@ elif args[:2] == ["plugin", "install"]:
 else:
     prompt = next(a.removeprefix("--print=") for a in args if a.startswith("--print="))
     def event(name, **parts):
-        print(json.dumps({"event": name, **parts}), flush=True)
+        ending = "\r\n" if prompt == "crlf" else "\n"
+        if name == "result" and prompt == "no-final-lf":
+            ending = ""
+        payload = json.dumps({"event": name, **parts}, ensure_ascii=False)
+        sys.stdout.buffer.write((payload + ending).encode("utf-8"))
+        sys.stdout.buffer.flush()
     event("init", conversation_id="sample-thread", init={"tools": ["run_command", "call_mcp_tool"]})
     if prompt == "pause":
         print("waiting", file=sys.stderr, flush=True)
@@ -45,6 +50,11 @@ else:
         print("incomplete-json")
         sys.exit(0)
     result = {"conversation_id": "sample-thread", "status": "SUCCESS", "response": "READY"}
+    if prompt in ("u0085", "u2028", "u2029"):
+        text = "前" + chr(int(prompt[1:], 16)) + "后"
+        event("step_update", step_update={"conversation_id": "sample-thread", "step_index": 1,
+              "step_type": "agent_response", "state": "DONE", "text_delta": text})
+        result.update(response=text)
     if prompt == "denied":
         event("step_update", step_update={"conversation_id": "sample-thread", "step_index": 2,
               "step_type": "tool", "state": "ERROR", "tool_name": "call_mcp_tool",
@@ -54,6 +64,12 @@ else:
         result.update(response="")
     elif prompt == "interrupted":
         result.update(status="INTERRUPTED", response="partial")
+    elif prompt in ("quota", "quota-and-wait"):
+        result.update(status="ERROR", response="", error="Individual quota reached for this example.")
+        event("result", result=result)
+        if prompt == "quota-and-wait":
+            time.sleep(30)
+        sys.exit(3)
     event("result", result=result)
 '''
 
@@ -111,6 +127,26 @@ class AgyUseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second["args"], ["--output-format=stream-json", "--print-timeout=2250ms",
                          "--conversation=sample-thread", "--model=example model", "--print=more"])
 
+    async def test_unicode_separators_remain_in_text_events(self):
+        for prompt, separator in (("u0085", "\u0085"), ("u2028", "\u2028"), ("u2029", "\u2029")):
+            with self.subTest(prompt=prompt):
+                reply = await agy_use.run(prompt, self.workspace)
+                expected = "前" + separator + "后"
+                self.assertIn(expected, reply["stdout"])
+                self.assertTrue(reply["ok"], reply.get("output_error"))
+                self.assertEqual([e["event"] for e in reply["events"]], ["init", "step_update", "result"])
+                self.assertEqual(reply["events"][1]["step_update"]["text_delta"], expected)
+                self.assertEqual(reply["result"]["response"], expected)
+
+    async def test_jsonl_accepts_crlf_and_final_record_without_lf(self):
+        for prompt, ending in (("crlf", "\r\n"), ("no-final-lf", "}")):
+            with self.subTest(prompt=prompt):
+                reply = await agy_use.run(prompt, self.workspace)
+                self.assertTrue(reply["stdout"].endswith(ending))
+                self.assertTrue(reply["ok"], reply.get("output_error"))
+                self.assertEqual([e["event"] for e in reply["events"]], ["init", "result"])
+                self.assertEqual(reply["result"]["response"], "READY")
+
     async def test_repl_permission_requires_an_explicit_boolean(self):
         with self.assertRaises(ValueError):
             await agy_use.run("sample", self.workspace, allow_repl="true")
@@ -145,6 +181,20 @@ class AgyUseTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("output_error", broken)
         self.assertIn("incomplete-json", broken["stdout"])
         self.assertEqual(len(self.calls()), 4)
+
+    async def test_native_error_in_receipt_and_local_timeout_precedence(self):
+        expected = "Individual quota reached for this example."
+        failed = await agy_use.run("quota", self.workspace)
+        self.assertFalse(failed["ok"])
+        self.assertEqual(failed["exit_code"], 3)
+        self.assertEqual(failed["result"]["status"], "ERROR")
+        self.assertEqual(failed["events"][-1]["result"]["error"], expected)
+        self.assertEqual(failed.get("error"), expected)
+        timed_out = await agy_use.run("quota-and-wait", self.workspace, timeout=0.05)
+        self.assertTrue(timed_out["timed_out"])
+        self.assertIn("等待 AGY 超过", timed_out["error"])
+        self.assertEqual(timed_out["result"]["error"], expected)
+        self.assertEqual(len(self.calls()), 2)
 
     async def test_wrong_resumed_session_does_not_report_success_or_retry(self):
         reply = await agy_use.run("more", self.workspace, conversation_id="other-thread")

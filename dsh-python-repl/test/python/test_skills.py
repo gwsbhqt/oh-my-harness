@@ -253,18 +253,52 @@ run.__wrapped__ = trap
         self.assertEqual(empty["status"], "ready")
         self.assertIn("No Python skills", empty["reason"])
         self.assertIn("tools.skill", empty["note"])
-        write_skill(self.root, "broken", import_name="broken", body="raise RuntimeError('boom')")
+        write_skill(self.root, "broken-guide", import_name="broken", body="raise RuntimeError('boom')")
         write_skill(self.root, "docs.with.dot")
-        skills_mod.load(found(self.root), self.namespace)
-        result = asyncio.run(self.namespace.describe(["broken", "docs.with.dot"]))["items"]
+        skills_mod.load(found(self.root), self.namespace, ["disabled-guide"])
+        result = asyncio.run(self.namespace.describe(["broken-guide", "docs.with.dot", "disabled-guide"]))["items"]
         self.assertEqual(result[0]["status"], "unavailable")
         self.assertIn("boom", result[0]["reason"])
         self.assertIsNone(result[0]["access"])
         self.assertEqual(result[1]["status"], "docs-only")
         self.assertIn("# docs.with.dot", result[1]["instructions"])
         self.assertIsNone(result[1]["access"])
+        self.assertEqual(result[2]["status"], "disabled")
+        self.assertIsNone(result[2]["access"])
+        self.assertIsNone(result[2]["instructions"])
         self.assertEqual(asyncio.run(self.namespace.list(query="absent"))["items"], [])
         self.assertEqual(asyncio.run(self.namespace.list())["status"], "ready")
+
+    def test_formal_name_resolves_to_the_record_without_replacing_exact_ids(self):
+        write_skill(self.root, "fixture-reader", import_name="good_skill", body="def run(): return 42\n")
+        write_skill(self.root, "good_skill", import_name="uses_bridge")
+        write_skill(self.root, "good_skill.run")
+        skills_mod.load(found(self.root), self.namespace)
+        formal, exact, dotted, guessed, member = asyncio.run(self.namespace.describe([
+            "fixture-reader", "good_skill", "good_skill.run", "fixture_reader", "good_skill.missing",
+        ]))["items"]
+        self.assertEqual(formal["name"], "fixture-reader")
+        self.assertEqual(formal["access"], "skills.good_skill")
+        self.assertEqual(formal["instructions"], exact["instructions"])
+        self.assertEqual(exact["name"], "fixture-reader")
+        self.assertEqual(dotted["status"], "docs-only")
+        self.assertIn("# good_skill.run", dotted["instructions"])
+        self.assertEqual(guessed["status"], "unknown")
+        self.assertEqual(member["status"], "unknown")
+        with self.assertRaises(AttributeError):
+            getattr(self.namespace, "fixture-reader")
+
+    def test_duplicate_formal_names_do_not_select_or_read_a_document(self):
+        write_skill(self.root / "a", "fixture-reader", import_name="good_skill", python_description="First guide.")
+        write_skill(self.root / "b", "fixture-reader", import_name="uses_bridge", python_description="Second guide.")
+        entries = found(self.root / "a", self.root / "b")
+        skills_mod.load(entries, self.namespace)
+        for entry in entries:
+            (Path(entry["path"]) / "PYSKILL.md").unlink()
+        result = asyncio.run(self.namespace.describe("fixture-reader"))["items"][0]
+        self.assertEqual(result["status"], "unavailable")
+        self.assertIn("ambiguous", result["reason"])
+        self.assertNotIn("instructions", result)
 
     def test_pagination_query_and_collision_access(self):
         for name in ("list", "read", "class"):

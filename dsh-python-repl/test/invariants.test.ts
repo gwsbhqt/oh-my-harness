@@ -395,7 +395,10 @@ for (const withPythonDocument of [true, false]) {
     }
     const selectedFile = withPythonDocument ? 'PYSKILL.md' : 'SKILL.md'
     const result = await session.runCell([
-      'selected = (await skills.describe("document_skill"))["items"][0]',
+      'entry = (await skills.list("document-skill"))["items"][0]',
+      'formal, selected = (await skills.describe([entry["name"], entry["id"]]))["items"]',
+      'assert formal["status"] == selected["status"] == "available", (formal["status"], selected["status"])',
+      'assert formal == {**selected, "id": entry["name"]}',
       'loaded = await tools.skill({"name": "document-skill"})',
       'assert loaded["content"].endswith("<skill_instructions>\\n" + selected["instructions"] + "\\n</skill_instructions>\\n</skill_content>")',
       `assert ${JSON.stringify('Base directory for this skill: ' + directory)} in loaded["content"]`,

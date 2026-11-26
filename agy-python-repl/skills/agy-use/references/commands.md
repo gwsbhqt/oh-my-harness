@@ -24,7 +24,7 @@
 
 ## 结果、超时和取消
 
-Python 返回字典，命令将同一回执作为 JSON 写到标准输出。`executable` 是选中的 AGY 入口，`exit_code` 保留子进程的实际退出码，`stdout` 和 `stderr` 分别保留宿主输出。`error` 是启动失败、技能等待超时、拒绝操作或缺少答复等情况的说明。JSON 缺失、损坏或缺少结束事件时，`output_error` 给出解析原因，原文可供核对。参数或本地路径错误发生在发起请求之前，Python 抛 `ValueError` 或 `OSError`，命令退出 2。
+Python 返回字典，命令将同一回执作为 JSON 写到标准输出。`executable` 是选中的 AGY 入口，`exit_code` 保留子进程的实际退出码，`stdout` 和 `stderr` 分别保留宿主输出。`error` 给出本地启动或等待失败的说明，也会保留 AGY 返回的错误原文，例如额度用尽。被拒绝的操作和缺少答复也会注明原因。JSON 缺失、损坏或缺少结束事件时，`output_error` 给出解析原因，原文可供核对。参数或本地路径错误发生在发起请求之前，Python 抛 `ValueError` 或 `OSError`，命令退出 2。
 
 `plugins` 和 `validate_plugin` 把原生 JSON 放在 `data`，校验失败的报告也保留。`install_plugin` 的 `ok` 表示安装命令成功退出；确认插件可用还需核对清单并检查新会话里的实际操作。`run` 的 `events` 保留按顺序读到的事件，完整的结束事件存为 `result`。成功需要进程正常退出、本轮得到 `SUCCESS` 和非空答复，且宿主没有报告被拒绝的动作。续接时还核对结果中的会话编号。工具失败的详情见对应步骤的 `state` 和 `tool_info.error`。[官方非交互模式与事件字段](https://antigravity.google/docs/cli/headless)
 
