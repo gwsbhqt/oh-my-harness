@@ -111,7 +111,7 @@
     "watch": "tsdown --watch",
     "typecheck": "tsc --noEmit",
     "test": "node --import ./test/fixtures/isolated-home.mjs --test 'test/*.test.ts'",
-    "test:py": "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s test/python -p 'test_*.py' -v",
+    "test:py": "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s test/python -p 'test_*.py' -v && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=../python-repl-core/src python3 -m unittest discover -s ../python-repl-core/tests -p 'test_*.py' -v",
     "smoke": "node --test 'test/smoke.test.ts'",
     "check": "pnpm run typecheck && pnpm run build && pnpm run test && pnpm run test:py"
   },

@@ -5,6 +5,7 @@ import pickle
 import sys
 from contextvars import ContextVar
 from itertools import chain
+from pathlib import Path
 from typing import Any
 
 _installed = False
@@ -262,17 +263,41 @@ def install_snapshot_names(dill_impl: Any, *, legacy_underscore_aliases: bool) -
     def list_names(ns: dict[str, Any]) -> list[str]:
         return sorted(name for name in ns if user_name(name))
 
-    def snapshot(ns: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+    def snapshot(ns, path, manifest_path, max_bytes, max_variable_bytes, prune_oversized, committed=None):
+        from . import snapshot_store
+
+        pair = snapshot_store.managed_pair(path)
+        managed = pair is not None
+        if managed and pair.manifest != Path(manifest_path).absolute():
+            return {"error": "write failed: incorrect manifest for this session snapshot"}
         roots = {name: value for name, value in ns.copy().items() if user_name(name)}
         names, refs = shared_references(roots, ns)
-        result = original_snapshot(_SnapshotNames(ns, roots, names, refs), *args, **kwargs)
-        if "saved" in result:
-            # The same dictionary is returned to a caller observing an already-committed interrupt.
-            for field in ("saved", "pruned"):
-                result[field] = list(map(str, result[field]))
-            for item in result["skipped"]:
-                item["name"] = str(item["name"])
-        return result
+        # Prime may remove pruned names once its *private* files are ready. Defer those removals to publication.
+        view = _SnapshotNames(ns.copy() if managed and prune_oversized else ns, roots, names, refs)
+
+        def write_pair(data, manifest):
+            result = original_snapshot(view, str(data), str(manifest), max_bytes, max_variable_bytes,
+                                       prune_oversized, None if managed else committed)
+            if "saved" in result:
+                for field in ("saved", "pruned"):
+                    result[field] = list(map(str, result[field]))
+                for item in result["skipped"]:
+                    item["name"] = str(item["name"])
+            return result
+
+        if not managed:
+            return write_pair(path, manifest_path)
+
+        def finish(result):
+            for name in result["pruned"]:
+                ns.pop(name, None)
+            if committed is not None:
+                committed.append(result)
+
+        try:
+            return snapshot_store.publish_snapshot(pair, write_pair, finish)
+        except OSError as exc:
+            return {"error": f"write failed: {exc}"}
 
     def read_records(*args, **kwargs):
         records = original_read_records(*args, **kwargs)
@@ -328,12 +353,43 @@ def install_snapshot_names(dill_impl: Any, *, legacy_underscore_aliases: bool) -
             backfill[:] = [(name, dep) for name, dep in backfill if name not in state.legacy_names]
         return result
 
-    def restore(ns: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+    def restore(ns, path, committed=None, max_bytes=None, max_variable_bytes=None):
+        from . import snapshot_store
+
         token = _restoring.set(_RestoreReferences(legacy_underscore_aliases))
+        pair = snapshot_store.managed_pair(path)
+        result = {}
         try:
-            return original_restore(ns, *args, **kwargs)
+            if pair is None:
+                return original_restore(ns, path, committed, max_bytes, max_variable_bytes)
+            with snapshot_store.open_snapshot(pair.payload, pair.manifest) as selected:
+                if selected is None:
+                    result = {"restored": [], "failed": [], "reason": "snapshot not found"}
+                else:
+                    metadata = snapshot_store.read_manifest(selected)
+                    items = metadata.get("skipped")
+                    skipped = ([item["name"] for item in items
+                                if isinstance(item, dict) and isinstance(item.get("name"), str)]
+                               if isinstance(items, list) else [])
+                    applied = []
+                    try:
+                        result = original_restore(ns, str(selected.payload), applied, max_bytes, max_variable_bytes)
+                    finally:
+                        if applied:
+                            applied[0].update(snapshot_manifest=metadata, snapshot_skipped=skipped)
+                            if committed is not None:
+                                committed.append(applied[0])
+                    result.update(snapshot_manifest=metadata, snapshot_skipped=skipped)
+            return result
+        except OSError as exc:
+            result = {"error": f"could not read saved snapshot: {exc}"}
+            return result
         finally:
             _restoring.reset(token)
+            if pair is not None and ("restored" not in result or result.get("failed") or result.get("reason")):
+                target = repl._last_snapshot_target
+                if target is not None and snapshot_store.managed_pair(target["path"]) == pair:
+                    repl._last_snapshot_target = None
 
     repl._read_snapshot_records = read_records
     repl._snapshot_state = snapshot

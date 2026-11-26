@@ -5,7 +5,6 @@ from __future__ import annotations
 import ast
 import asyncio
 import fcntl
-import hashlib
 import json
 import os
 import re
@@ -20,27 +19,21 @@ import python_repl_core
 from python_repl_core.kernel_client import CellResult, KernelClient, KernelProtocolError
 from python_repl_core.output_budget import bound_text
 from python_repl_core.skill_discovery import discover_python_skills
+from python_repl_core.snapshot_store import reset_snapshot
+
+from .snapshot_paths import NAMED_DIR, flat_names, has_snapshot, kernel_identity, named_storage, snapshot_paths
 
 
-_NAMED_DIR = "named-v2"
 _UUID = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
 _LEGACY_NAME_WARNING = (
     "This flat snapshot was opened by its exact disk spelling. Its original kernel name was not recorded."
 )
 
 
-def _named_storage(name: str) -> Path:
-    return Path(_NAMED_DIR) / hashlib.sha256(name.encode("utf-8")).hexdigest()
-
-
 def _name_warning(name: str, storage: Path) -> dict[str, str]:
     if storage.parent == Path(".") and name != "default" and not _UUID.fullmatch(name):
         return {"legacy_name_warning": _LEGACY_NAME_WARNING}
     return {}
-
-
-def _flat_root(name: str) -> bool:
-    return "__" not in name and len(name) + len(".manifest.json") <= 255 and bool(re.fullmatch(r"[a-z0-9_-]+", name))
 
 
 _BUILTIN_SKILLS_DIR = Path(__file__).resolve().parents[2] / "skills"
@@ -204,7 +197,7 @@ class KernelManager:
         max_output_chars: int = 24_000,
         auto_snapshot: bool = True,
     ) -> None:
-        self.data_dir = data_dir or _default_data_dir()
+        self.data_dir = (data_dir or _default_data_dir()).absolute()
         self.vendor_dir = vendor_dir or _default_vendor_dir()
         self.compat_dir = compat_dir or _default_compat_dir()
         self.python_exe = python_exe or sys.executable
@@ -221,47 +214,21 @@ class KernelManager:
         self._locks: dict[str, asyncio.Lock] = {}
         self._history: list[CellHistoryEntry] = []
 
-    def _flat_names(self) -> set[str]:
-        return {
-            p.stem for p in (self.data_dir / "snapshots").glob("*.dill")
-            if p.is_file() and all(ch.isalnum() or ch in "-_" for ch in p.stem)
-        }
-
     def _kernel_identity(self, kernel: str) -> tuple[str, Path]:
         name = kernel or "default"
         if name in self._kernels:
             return name, self._kernels[name].storage
-        storage = _named_storage(name)
-        snapshot, _ = self._snapshot_paths(storage)
-        marker = snapshot.with_suffix(".name")
-        if snapshot.is_file() or marker.is_file():
-            if marker.read_bytes() != name.encode("utf-8"):
-                raise ValueError("Snapshot name record does not match the requested kernel")
-            return name, storage
-
-        # Only the first colon is the hook's scope separator. All other characters are literal.
-        old = name.replace(":", "__", 1)
-        if old in self._flat_names():
-            return old, Path(old)
-        # Keep ordinary unscoped conversation roots in the layout used by the session-start hook.
-        if _flat_root(name):
-            plain = Path(name)
-            plain_snapshot, manifest = self._snapshot_paths(plain)
-            # A different spelling may exist on a case- or normalization-insensitive volume.
-            if not plain_snapshot.exists() and (
-                not manifest.exists() or any(p.name == manifest.name for p in manifest.parent.glob("*.manifest.json"))
-            ):
-                return name, plain
-        return name, storage
+        return kernel_identity(self.data_dir, name)
 
     def _saved_names(self) -> set[str]:
-        names = self._flat_names()
-        for snapshot in (self.data_dir / "snapshots" / _NAMED_DIR).glob("*.dill"):
+        names = flat_names(self.data_dir)
+        for marker in (self.data_dir / "snapshots" / NAMED_DIR).glob("*.name"):
             try:
-                name = snapshot.with_suffix(".name").read_bytes().decode("utf-8")
+                name = marker.read_bytes().decode("utf-8")
             except (OSError, UnicodeError):
                 continue
-            if snapshot.is_file() and _named_storage(name).name == snapshot.stem:
+            storage = named_storage(name)
+            if storage.name == marker.stem and has_snapshot(*snapshot_paths(self.data_dir, storage)):
                 names.add(name)
         return names
 
@@ -328,6 +295,7 @@ class KernelManager:
             if entry.import_name not in configured
         )
         ownership_fd = ownership.fileno()
+        snapshot, manifest = snapshot_paths(self.data_dir, storage)
         bootstrap_code = (
             # Prime retains the lock through its EOF snapshot. FileIO.close stays idempotent on nested forks.
             f"__import__('os').set_inheritable({ownership_fd}, False)\n"
@@ -336,6 +304,8 @@ class KernelManager:
             # A -m process pins its initial directory in sys.path. An interactive REPL follows cwd.
             "if __import__('sys').path[:1] == [__import__('os').getcwd()]:\n"
             "    __import__('sys').path[0] = ''\n"
+            "__import__('python_repl_core.snapshot_store', fromlist=['register_snapshot'])"
+            f".register_snapshot({str(snapshot)!r}, {str(manifest)!r})\n"
             "__import__('agy_python_repl.bootstrap', fromlist=['install_antigravity_surface'])"
             f".install_antigravity_surface({[asdict(entry) for entry in entries]!r})"
         )
@@ -366,7 +336,7 @@ class KernelManager:
 
             restored = None
             if self.auto_snapshot:
-                restored = await client.restore_if_present(*self._snapshot_paths(storage))
+                restored = await client.restore_if_present(snapshot, manifest)
                 if restored is not None:
                     restored.update(_name_warning(key, storage))
         except BaseException:
@@ -405,7 +375,7 @@ class KernelManager:
             if managed.snapshot_protected:
                 out["snapshot_warning"] = _SNAPSHOT_PROTECTION_MESSAGE
             elif self.auto_snapshot and not res.timed_out:
-                snapshot, manifest = self._snapshot_paths(storage)
+                snapshot, manifest = snapshot_paths(self.data_dir, storage)
                 try:
                     saved = await self._save_snapshot(managed, snapshot, manifest)
                 except Exception as exc:
@@ -440,10 +410,6 @@ class KernelManager:
         if len(self._history) > 100:
             self._history = self._history[-100:]
         return out
-
-    def _snapshot_paths(self, storage: Path) -> tuple[Path, Path]:
-        stem = self.data_dir / "snapshots" / storage
-        return stem.with_name(stem.name + ".dill"), stem.with_name(stem.name + ".manifest.json")
 
     async def _save_snapshot(self, managed: ManagedKernel, snapshot: Path, manifest: Path) -> dict[str, Any]:
         if managed.storage.parent != Path("."):
@@ -502,14 +468,16 @@ class KernelManager:
                     ownership = existing.ownership
                 else:
                     ownership = self._acquire_ownership(key, storage)
-                with ownership:
-                    snapshot, manifest = self._snapshot_paths(storage)
-                    paths = [snapshot, manifest]
-                    if storage.parent != Path("."):
-                        paths.append(snapshot.with_suffix(".name"))
-                    for path in paths:
-                        if path.is_file():
-                            path.unlink(missing_ok=True)
+                def clear_snapshot() -> None:
+                    with ownership:
+                        snapshot, manifest = snapshot_paths(self.data_dir, storage)
+                        reset_snapshot(snapshot, manifest)
+                        if storage.parent != Path("."):
+                            snapshot.with_suffix(".name").unlink(missing_ok=True)
+
+                # Cancellation may release the asyncio lock while another process still has a read open.
+                # The worker retains ownership until it has removed this kernel's files.
+                await asyncio.shield(asyncio.to_thread(clear_snapshot))
                 return {"kernel": key, "status": "reset"}
 
             managed = await self._ensure_kernel(key, storage, cwd=cwd)
@@ -517,7 +485,7 @@ class KernelManager:
                 info = await managed.client.list_names()
                 return {"kernel": key, "names": info.get("names", [])}
 
-            snap_path, manifest_path = self._snapshot_paths(storage)
+            snap_path, manifest_path = snapshot_paths(self.data_dir, storage)
             if action == "snapshot":
                 if managed.snapshot_protected:
                     return {"kernel": key, "status": "error", "error": _SNAPSHOT_PROTECTION_MESSAGE}
@@ -525,10 +493,12 @@ class KernelManager:
                 return {"kernel": key, "snapshot_path": str(snap_path), **done}
 
             if action == "restore":
-                if not snap_path.is_file():
-                    return {"kernel": key, "status": "error", "error": f"No snapshot found at {snap_path}"}
+                was_protected = managed.snapshot_protected
                 managed.snapshot_protected = True
                 done = await managed.client.restore(snap_path)
+                if done.get("reason") == "snapshot not found":
+                    managed.snapshot_protected = was_protected
+                    return {"kernel": key, "status": "error", "error": f"No snapshot found at {snap_path}"}
                 if done.get("status") != "ok" or done.get("reason"):
                     status = "error"
                 elif done.get("failed"):
@@ -537,7 +507,11 @@ class KernelManager:
                     status = "ok"
                     managed.snapshot_protected = False
                 managed.pending_restore_notice = None
-                return {"kernel": key, "snapshot_path": str(snap_path), **done, "status": status, **_name_warning(key, storage)}
+                manifest = done.pop("snapshot_manifest", {})
+                done.pop("snapshot_skipped", None)
+                return {"kernel": key, "snapshot_path": str(snap_path), **done, "status": status,
+                        "saved_names": manifest.get("savedNames", []), "skipped": manifest.get("skipped", []),
+                        **_name_warning(key, storage)}
 
             raise ValueError(f"Unknown kernel_state action: {action!r}")
 

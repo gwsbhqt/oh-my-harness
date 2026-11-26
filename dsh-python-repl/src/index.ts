@@ -24,7 +24,7 @@ import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 
 import { discoverSkills, findProjectRoot, resolveSkillRoots, withDisabled, withProjectSkills, type SkillDiscovery, type SkillSummary } from './skill-discovery.ts'
 import { createHash } from 'node:crypto'
 import { ReplSession } from './session.ts'
-import { autoSaveMessage, INCOMPLETE_RESTORE_NOTICE, readPanelLifecycle, readPanelSnapshot } from './snapshot.ts'
+import { autoSaveMessage, INCOMPLETE_RESTORE_NOTICE, readPanelLifecycle, readPanelSnapshot, snapshotFiles, snapshotPresence } from './snapshot.ts'
 import { controlRoute, nameRoute, panelRoute, previewRoute, type PanelWebServer } from './panel-route.ts'
 import type { PanelControlAction, PanelControlResult, PanelNameAction, PanelNameResult, PanelState } from './panel-types.ts'
 import type { BoundTool } from './lease.ts'
@@ -611,13 +611,14 @@ export class PythonReplRuntime extends PtcRuntime {
     if (key === undefined) return { state: '', skills: [] }
     const session = this.sessions.get(key)
     const discovery = this.discoveryFor(key, cwd)
-    const saved = existsSync(join(statePath(key), 'kernel-state.dill'))
+    const saved = await snapshotPresence(snapshotFiles(statePath(key)))
     const state = session?.started && session.kernelAlive ? `running (epoch ${session.epoch})`
       : session?.epoch ? `not running (last epoch ${session.epoch})`
         : 'not started in this process'
     const issue = session?.autoSaveIssue
     const saveNotice = session?.snapshotProtected ? INCOMPLETE_RESTORE_NOTICE
       : issue ? autoSaveMessage(issue)
+      : saved === 'error' ? 'The saved Python state could not be read.'
       : 'Variables are saved shortly after each successful cell and restored when a new kernel starts; the first cell on a new kernel reports what came back.'
     const parts = [`Python kernel for this session: ${state}. ${saveNotice}`,
       `Trusted Python skillRoots resolved: ${JSON.stringify(discovery.roots)}. Relative configured roots are resolved against the host configuration base ${JSON.stringify(this.skillRootBase)}, not the session workspace. Static discovery does not execute modules or prove availability.`]
@@ -631,7 +632,7 @@ export class PythonReplRuntime extends PtcRuntime {
     if (unterminated.length) parts.push(`Earlier kernel processes not confirmed stopped (pids ${unterminated.join(', ')}); they may still use memory or CPU and are never reused. Closing the session retries stopping them.`)
     // Presence only: details change after almost every cell, and the host
     // appends a fresh runtime-context snapshot whenever this text changes.
-    if (saved && !session?.snapshotProtected) parts.push(issue?.kind === 'failed' ? 'The snapshot file on disk may contain older values.'
+    if (saved === 'available' && !session?.snapshotProtected) parts.push(issue?.kind === 'failed' ? 'The snapshot file on disk may contain older values.'
       : 'A saved Python state exists for this session; it is restored when a new kernel starts.')
     // Changes only at a compaction, so it adds one snapshot then, not one per cell.
     const compacted = await session?.compactionNames(COMPACTION_NAMES_WAIT_MS)

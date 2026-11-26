@@ -1,8 +1,8 @@
 import { strict as assert } from 'node:assert'
 import { createHash } from 'node:crypto'
 import { EventEmitter, once } from 'node:events'
-import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { Context } from '@deepseek-ai/cordis'
 import { Config, PythonReplRuntime } from '../../src/index.ts'
@@ -137,7 +137,8 @@ try {
     // Exercise a real file-size limit, and directory permissions when the test user is subject to them.
     const limitFileSize = !old || process.getuid?.() === 0
     const limit = 'import resource, signal\nprior_limit = resource.getrlimit(resource.RLIMIT_FSIZE)\nsignal.signal(signal.SIGXFSZ, signal.SIG_IGN)\nresource.setrlimit(resource.RLIMIT_FSIZE, (65536, prior_limit[1]))\n'
-    if (!limitFileSize) chmodSync(state, 0o500)
+    const saveDirectory = limitFileSize ? undefined : dirname(dirname(realpathSync(payload)))
+    if (saveDirectory) chmodSync(saveDirectory, 0o500)
     try {
       const update = old ? 'counter += 2' : 'counter = 19'
       const first = await save((limitFileSize ? limit : '') + `${update}\nfresh = bytes(262144)\nprint("changed")`)
@@ -167,7 +168,7 @@ try {
       assert.deepEqual((await panel()).autoSaveIssue, failed.autoSaveIssue)
       if (original) assert.deepEqual(files(), original)
     } finally {
-      if (!limitFileSize) chmodSync(state, 0o700)
+      if (saveDirectory) chmodSync(saveDirectory, 0o700)
     }
     const repair = await save((limitFileSize ? 'resource.setrlimit(resource.RLIMIT_FSIZE, prior_limit)\n' : '') + 'print("fixed")')
     assert.equal(repair.text, 'fixed')

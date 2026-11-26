@@ -100,9 +100,10 @@ class KernelNameTests(unittest.IsolatedAsyncioTestCase):
         legacy = f"{SESSION}__quarter_1"
         async with self.server() as seed:
             await self.cell(seed, "default", "previous_report = 73")
-        # Seed the original flat layout with a real Prime snapshot and its original manifest.
-        for suffix in (".dill", ".manifest.json"):
-            (self.snapshots / f"default{suffix}").rename(self.snapshots / f"{legacy}{suffix}")
+            # Old installations had two independent regular files at their original flat names.
+            for suffix in (".dill", ".manifest.json"):
+                (self.snapshots / f"{legacy}{suffix}").write_bytes((self.snapshots / f"default{suffix}").read_bytes())
+            await self.tool(seed, "kernel_state", action="reset", kernel="default")
         original = (self.snapshots / f"{legacy}.dill").read_bytes()
         async with self.server() as reader:
             for name in ("quarter 1", "Quarter_1"):

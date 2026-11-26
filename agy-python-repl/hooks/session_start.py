@@ -8,6 +8,11 @@ import os
 import sys
 from pathlib import Path
 
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from agy_python_repl.snapshot_paths import kernel_identity, snapshot_paths
+from python_repl_core.snapshot_store import open_snapshot, read_manifest
+
 
 START_GUIDANCE = (
     "For data analysis, batch file reads, calculations or trusted Python skills, start with the "
@@ -24,11 +29,6 @@ def _data_dir() -> Path:
     return Path.home() / ".gemini" / "antigravity" / "plugin_data" / "agy-python-repl"
 
 
-def _sanitize(name: str) -> str:
-    clean = "".join(ch if (ch.isalnum() or ch in "-_:") else "_" for ch in (name or "default"))
-    return clean.replace(":", "__") or "default"
-
-
 def main() -> None:
     try:
         payload = json.load(sys.stdin)
@@ -41,23 +41,21 @@ def main() -> None:
         print(json.dumps({}))
         return
 
-    snap_dir = _data_dir() / "snapshots"
-    key = _sanitize(conv_id)
-    snap_path = snap_dir / f"{key}.dill"
-    manifest_path = snap_dir / f"{key}.manifest.json"
     msg = START_GUIDANCE
-    if snap_path.is_file() and manifest_path.is_file():
-        snapshot = "Saved Python REPL snapshot ready. The first cell will restore it."
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            saved_names = manifest.get("savedNames")
-            if isinstance(saved_names, list) and saved_names:
-                preview_names = ", ".join(str(n) for n in saved_names[:12])
-                more = f" (+{len(saved_names) - 12} more)" if len(saved_names) > 12 else ""
-                snapshot += f" Saved variables include {preview_names}{more}."
-        except (OSError, ValueError, AttributeError):
-            pass
-        msg = f"{msg} {snapshot}"
+    try:
+        data = _data_dir()
+        _, storage = kernel_identity(data, conv_id)
+        with open_snapshot(*snapshot_paths(data, storage)) as pair:
+            if pair is not None:
+                manifest = read_manifest(pair)
+                msg += " Saved Python REPL snapshot ready. The first cell will restore it."
+                saved_names = manifest.get("savedNames")
+                if isinstance(saved_names, list) and saved_names:
+                    preview_names = ", ".join(str(n) for n in saved_names[:12])
+                    more = f" (+{len(saved_names) - 12} more)" if len(saved_names) > 12 else ""
+                    msg += f" Saved variables include {preview_names}{more}."
+    except (OSError, ValueError):
+        msg += " The saved Python REPL snapshot could not be read. The first cell will report its restore status."
 
     print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": msg}}]}))
 

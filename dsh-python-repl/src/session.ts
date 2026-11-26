@@ -9,7 +9,8 @@
  * @module
  */
 
-import { existsSync } from 'node:fs'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { rm } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { withFileSource } from './panel-source.ts'
@@ -31,7 +32,7 @@ import { describeDenial, LeaseRegistry, type BoundTool } from './lease.ts'
 import { BackgroundGrant, ToolLane, type PipelineLike } from './background-tools.ts'
 import { argumentFix, catalogBindings, isCatalogBinding, TOP_LEVEL_TOOLS, type ToolSchemaLike } from './catalog.ts'
 import { failedTasksNotice, foreignLanguageHint, missingModuleHint, usageHint } from './hints.ts'
-import { AutoSaveFeedback, INCOMPLETE_RESTORE_NOTICE, RESTORE_TIMEOUT_MS, SNAPSHOT_DEBOUNCE_MS, SNAPSHOT_SUPPORT_TIMEOUT_MS, SNAPSHOT_TIMEOUT_MS, readRestoreReport, restoreNotice, snapshotFiles, snapshotResult, type SnapshotResult, type RestoreSummary, type RestoreReport } from './snapshot.ts'
+import { AutoSaveFeedback, INCOMPLETE_RESTORE_NOTICE, RESTORE_TIMEOUT_MS, SNAPSHOT_DEBOUNCE_MS, SNAPSHOT_SUPPORT_TIMEOUT_MS, SNAPSHOT_TIMEOUT_MS, readRestoreReport, restoreNotice, snapshotFiles, snapshotPresence, snapshotResult, type SnapshotResult, type RestoreSummary, type RestoreReport } from './snapshot.ts'
 
 export interface SessionOptions {
   python: string
@@ -412,8 +413,13 @@ export class ReplSession {
     const target = this.#snapshotTarget()
     if (target !== undefined) {
       const dir = dirname(target.path)
-      await Promise.all([rm(target.path, { force: true }), rm(target.manifestPath, { force: true }),
-        rm(join(dir, 'lifecycle.json'), { force: true }), rm(join(dir, 'archive'), { recursive: true, force: true })])
+      // Reset and publication share the store's writer lock, including when no kernel is running.
+      await promisify(execFile)(this.#options.python, ['-I', '-B', '-c', [
+        'import sys', 'from pathlib import Path', 'sys.path.insert(0, sys.argv[1])',
+        'import snapshot_refs', 'from python_repl_core.snapshot_store import reset_snapshot',
+        'reset_snapshot(Path(sys.argv[2]), Path(sys.argv[3]))',
+      ].join('\n'), this.#options.pythonRoot, target.path, target.manifestPath])
+      await Promise.all([rm(join(dir, 'lifecycle.json'), { force: true }), rm(join(dir, 'archive'), { recursive: true, force: true })])
     }
     this.#restoreIncomplete = false
     await this.#ensureStarted(new Map())
@@ -1078,7 +1084,7 @@ export class ReplSession {
   }
 
   /** Revive the saved namespace into a kernel that just finished its bootstrap. */
-  async #restoreInto(kernel: PythonKernel, target: SnapshotTarget): Promise<RestoreReport> {
+  async #restoreInto(kernel: PythonKernel, target: SnapshotTarget): Promise<RestoreReport | undefined> {
     const id = `restore-${this.#epoch}`
     const pending = kernel.restore(id, target)
     let outcome = await this.#withDeadline(pending, RESTORE_TIMEOUT_MS)
@@ -1090,7 +1096,8 @@ export class ReplSession {
           + `${RESTORE_TIMEOUT_MS}ms and did not stop when interrupted; the kernel was stopped.`)
       }
     }
-    const { report, complete } = await readRestoreReport(outcome, target.manifestPath)
+    if (outcome.status === 'ok' && outcome.fields?.['reason'] === 'snapshot not found' && outcome.fields['snapshot_skipped'] === undefined) return undefined
+    const { report, complete } = readRestoreReport(outcome)
     this.#restoreIncomplete = !complete
     return report
   }
@@ -1424,11 +1431,16 @@ export class ReplSession {
       this.#snapshotUnavailable = typeof state?.error === 'string' ? state.error
         : `the snapshot support check failed (${support.error === undefined ? support.status : `${support.error.ename}: ${support.error.evalue}`})`
     }
-    const saved = existsSync(target.path)
     const notices: string[] = []
-    if (saved) {
-      this.#restoreIncomplete = this.#snapshotUnavailable !== undefined
-      const report = this.#restoreIncomplete ? { restored: [], failed: [], unsaved: [] } : await this.#restoreInto(kernel, target)
+    let report: RestoreReport | undefined
+    if (this.#snapshotUnavailable === undefined) {
+      // The kernel chooses under the reader lock; a panel timeout or a previous presence check cannot decide what to restore.
+      report = await this.#restoreInto(kernel, target)
+    } else if (await snapshotPresence(target) !== 'missing') {
+      this.#restoreIncomplete = true
+      report = { restored: [], failed: [], unsaved: [] }
+    }
+    if (report) {
       if (this.#restoreIncomplete) {
         const guard = await this.#withDeadline(kernel.execute(`protect-archive-${this.#epoch}`,
           '__import__("lifecycle").state().protected = True'), SNAPSHOT_SUPPORT_TIMEOUT_MS)

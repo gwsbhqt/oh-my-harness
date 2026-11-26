@@ -150,9 +150,10 @@ class ProcessOwnershipTests(unittest.IsolatedAsyncioTestCase):
     async def test_old_colon_and_disk_spellings_protect_the_same_record(self):
         async with self.server() as seed:
             await self.cell(seed, "keep=41", "default")
-        prefix = self.data / "snapshots"
-        for suffix in (".dill", ".manifest.json"):
-            (prefix / ("default" + suffix)).rename(prefix / ("fixture__legacy" + suffix))
+            prefix = self.data / "snapshots"
+            for suffix in (".dill", ".manifest.json"):
+                (prefix / ("fixture__legacy" + suffix)).write_bytes((prefix / ("default" + suffix)).read_bytes())
+            await self.call(seed, "kernel_state", action="reset", kernel="default")
         async with self.server() as a, self.server() as b:
             self.assertEqual((await self.cell(a, "keep", "fixture:legacy"))["result"], "41")
             await self.busy(b, "kernel_state", kernel="fixture__legacy", action="reset")

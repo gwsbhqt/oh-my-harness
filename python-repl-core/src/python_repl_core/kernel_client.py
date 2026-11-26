@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import signal
+import stat
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -322,16 +323,23 @@ class KernelClient:
 
         The kernel reply identifies the names actually restored and any failures.
         """
-        if not path.is_file():
+        try:
+            if not stat.S_ISDIR(path.parent.stat().st_mode):
+                return None
+        except (FileNotFoundError, NotADirectoryError):
             return None
         done = await self.restore(path)
-        manifest: dict[str, Any] = {}
-        if manifest_path and manifest_path.is_file():
+        if done.get("reason") == "snapshot not found":
+            return None
+        manifest = done.get("snapshot_manifest", {})
+        # Bare Prime clients have ordinary files and no manifest in their protocol reply.
+        if ("snapshot_manifest" not in done and done.get("status") == "ok" and not done.get("reason")
+                and manifest_path is not None and not path.is_symlink()):
             try:
                 loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
                 if isinstance(loaded, dict):
                     manifest = loaded
-            except Exception:
+            except (OSError, ValueError):
                 pass
         failed = done.get("failed", [])
         reason = done.get("reason")

@@ -301,15 +301,16 @@ class KernelProcessProtocol(unittest.TestCase):
             env=env,
             cwd=str(VENDOR),
         )
+        cls.addClassCleanup(cls.close_kernel)
         cls.ready = json.loads(cls.proc.stdout.readline())
 
     @classmethod
-    def tearDownClass(cls) -> None:
+    def close_kernel(cls) -> None:
         try:
-            cls.proc.stdin.close()
-            cls.proc.wait(timeout=10)
-        except Exception:
+            cls.proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
             cls.proc.kill()
+            cls.proc.communicate()
 
     def run_cell(self, cell_id: str, code: str) -> list[dict]:
         self.proc.stdin.write(json.dumps({"type": "execute", "id": cell_id, "code": code}) + "\n")
