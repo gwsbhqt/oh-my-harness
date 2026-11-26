@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from python_repl_core import prelude
+from python_repl_core import prelude, recovery_copies
 from python_repl_core.preview import preview as _preview
 from python_repl_core.skills_runtime import _SkillsNamespace, install_skills_import_guard
 
@@ -26,7 +26,22 @@ class _SnapshotSkipNames(set[str]):
 
 
 class _ReplHelper:
-    """Bounded inspection helpers exposed as `repl` inside user cells."""
+    """Kernel inspection, package installation and explicit recovery copies for user cells."""
+
+    def __init__(self, copy_session: str | None = None) -> None:
+        self._copy_session = copy_session
+
+    async def save_copy(self, *names: str) -> dict:
+        """Save named live values in a separate copy for this kernel. Functions can include dependencies."""
+        return recovery_copies.save(self._copy_session, names)
+
+    async def list_copies(self) -> list[str]:
+        """List the IDs of completed copies for this kernel."""
+        return recovery_copies.list_copies(self._copy_session)
+
+    async def read_copy(self, copy_id: str) -> dict:
+        """Read selected values without replacing live names; also reports failed and skipped names."""
+        return recovery_copies.read(self._copy_session, copy_id)
 
     def preview(self, value: Any, *, chars: int = 4000, items: int = 20, depth: int = 8) -> dict[str, Any]:
         return _preview(value, chars=chars, items=items, depth=depth)
@@ -54,7 +69,7 @@ def _report_skill_retry(name: str, error: str | None) -> None:
     prime.emit({SKILL_RETRY_MIME: {"import_name": name, "error": error[:1024] if error else None}})
 
 
-def install_antigravity_surface(skill_entries: list[dict[str, Any]]) -> dict[str, Any]:
+def install_antigravity_surface(skill_entries: list[dict[str, Any]], *, copy_session: str | None = None) -> dict[str, Any]:
     """Prepare the cell namespace and return the skill load report."""
     import dill._dill as dill_impl
     from rlm import repl as prime
@@ -66,7 +81,7 @@ def install_antigravity_surface(skill_entries: list[dict[str, Any]]) -> dict[str
     report = skills_ns._register_all(skill_entries)
     install_skills_import_guard(ns, skills_ns)
 
-    bindings = {"skills": skills_ns, "repl": _ReplHelper()}
+    bindings = {"skills": skills_ns, "repl": _ReplHelper(copy_session)}
     ns.update(bindings)
     prelude.install(ns)
     prime._ALWAYS_SKIP = _SnapshotSkipNames(prime._ALWAYS_SKIP, ns)

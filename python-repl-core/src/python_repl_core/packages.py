@@ -27,12 +27,50 @@ import shutil
 import site
 import sys
 import sysconfig
+import tomllib
 from pathlib import Path
 from typing import Any
 
 
 def _site_packages() -> Path:
     return Path(sysconfig.get_paths()["purelib"])
+
+
+def uv_install_args() -> list[str]:
+    """Select the kernel's interpreter and the user's package sources, independently of the project."""
+    args = ["pip", "install", "--python", sys.executable]
+    explicit = os.environ.get("UV_CONFIG_FILE")
+    if explicit:
+        # uv interprets a relative config after changing directory. Keep the lexical path for relative sources.
+        config = (Path(os.environ.get("UV_WORKING_DIR") or ".") / explicit).absolute()
+    else:
+        if os.environ.get("UV_NO_CONFIG", "").lower() in {"1", "true", "yes", "on"}:
+            return [*args, "--no-config"]
+        if os.name == "nt":
+            directory = os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming"
+        else:
+            directory = os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config"
+        config = (Path(directory) / "uv" / "uv.toml").absolute()
+
+    try:
+        with config.open("rb") as stream:
+            settings = tomllib.load(stream).get("pip", {})
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        if not explicit and isinstance(exc, FileNotFoundError):
+            return [*args, "--no-config"]
+        raise RuntimeError(f"Could not read uv configuration {config}: {exc}") from exc
+    if not isinstance(settings, dict):
+        raise RuntimeError(f"The pip setting in {config} must be a TOML table")
+    if "target" in settings:
+        raise RuntimeError(
+            "The uv configuration sets [pip].target, which redirects packages outside the kernel's normal "
+            "installation layout. Set UV_CONFIG_FILE to a configuration containing your package sources "
+            "without that target."
+        )
+    args.extend(["--config-file", str(config)])
+    if "prefix" in settings:
+        args.extend(["--prefix", sys.prefix])
+    return args
 
 
 def _distributions(target: Path) -> dict[str, tuple[str, Path]]:
@@ -116,8 +154,7 @@ async def install(
     target = _site_packages()
     before = _distributions(target)
     seen_pth = {p.name for p in target.glob("*.pth")}
-    # Workspace uv.toml can redirect even an explicit --python to a different install target.
-    argv = [uv, "pip", "install", "--no-config", "--python", sys.executable]
+    argv = [uv, *uv_install_args()]
     if constraints is not None:
         argv.extend(["--constraints", "-"])
     if upgrade:
@@ -188,3 +225,12 @@ def request_restart(reason: str | None = None) -> dict[str, Any]:
 def take_restart() -> str | None:
     """The pending restart reason, cleared on read."""
     return _RESTART.pop("reason", None)
+
+
+if __name__ == "__main__":
+    # The host uses the new venv's interpreter before any of its packages are installed.
+    try:
+        args = uv_install_args()
+    except RuntimeError as error:
+        raise SystemExit(str(error)) from None
+    os.execvp("uv", ["uv", *args, *sys.argv[1:]])

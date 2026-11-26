@@ -8,7 +8,7 @@ Deliberate limits, all from AGENTS.md:
 - Only explicitly configured trusted roots are scanned. Never the whole
   workspace.
 - Nothing is pip-installed here. A missing dependency is reported, not fixed;
-  the model can fix it with `repl.install` and `repl.restart`.
+  the model can fix it with `repl.install` and retry that skill in the same kernel.
 - A skill that fails to import is reported and EXCLUDED; the others still load.
 - Two skills claiming the same import name: NEITHER loads. No scan-order winner.
 - Import failures are never swallowed silently.
@@ -110,6 +110,76 @@ def _candidate(entry: dict[str, Any]) -> dict[str, Any]:
     return {**entry, "status": "docs-only", "reason": "no Python package under src/; this skill is instructions only"}
 
 
+def _bind_skill(record: dict[str, Any], namespace: Any) -> str | None:
+    """Bind the selected package, returning a reason if its source cannot be used."""
+    name, src = record["import_name"], record["src"]
+    if not name.isidentifier():
+        return f"{name!r} is not a valid Python module name"
+
+    prime_dep = _static_prime_dependency(Path(src) / name)
+    if prime_dep is not None:
+        return (f"depends on Prime's own host runtime ({prime_dep}); this deployment provides DSH "
+                "capabilities through `from dsh_kernel import tools` instead")
+
+    # Like Prime's editable installs, a skill never shadows the stdlib or an installed package.
+    if src not in sys.path:
+        sys.path.append(src)
+    def source_error(origin):
+        if origin and Path(origin).resolve().is_relative_to(src):
+            return None
+        return (f"{name!r} resolved to {origin or 'no source file'}, which is outside "
+                f"the skill directory {src}; refusing to bind an unrelated module")
+
+    cached = name in sys.modules
+    if not cached:
+        spec = importlib.util.find_spec(name)
+        error = source_error(spec.origin if spec and spec.has_location else None)
+        if error:
+            return error
+
+    module = importlib.import_module(name)
+    origin = getattr(module, "__file__", None)
+    error = source_error(origin)
+    if error:
+        if cached:
+            return (f"import name {name!r} is already taken by another module ({origin or 'a built-in'}); "
+                    "rename the skill package so it cannot shadow or be shadowed by it")
+        return error
+    bound = _callable_module(module, name)
+    record["entry"] = "run" if isinstance(bound, _CallableSkill) else None
+    namespace._put(name, bound)
+    return None
+
+
+def _import_record(record: dict[str, Any], namespace: Any, *, retry: bool = False) -> BaseException | None:
+    try:
+        reason = _bind_skill(record, namespace)
+    except BaseException as exc:  # Startup isolates module failures. A cancelled retry leaves its prior result intact.
+        if retry and not isinstance(exc, Exception):
+            raise
+        record.update(status="unavailable", reason=f"{type(exc).__name__}: {exc}", traceback=traceback.format_exc(limit=5))
+        if isinstance(exc, Exception):
+            record["retryable"] = True
+        return exc
+    record.pop("traceback", None)
+    if retry:
+        record["retryable"] = False
+    if reason is not None:
+        record.update(status="unavailable", reason=reason)
+        return ImportError(reason)
+    record.pop("reason", None)
+    record["status"] = "available"
+    return None
+
+
+def _load_report(records: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "loaded": sorted(r["import_name"] for r in records if r["status"] == "available"),
+        "skills": records,
+        "failed": [r for r in records if r["status"] == "unavailable"],
+    }
+
+
 def load(entries: list[dict[str, Any]], namespace: Any, disabled: list[str] | tuple[str, ...] = ()) -> dict[str, Any]:
     """Vet and import every Python skill the host found; bind the good ones into `namespace`.
 
@@ -142,81 +212,13 @@ def load(entries: list[dict[str, Any]], namespace: Any, disabled: list[str] | tu
                     "none is loaded — resolve the collision explicitly"
                 )
 
-    loaded: list[str] = []
     for record in candidates:
-        if record["status"] != "candidate":
-            continue
-        import_name = record["import_name"]
-        src = record["src"]
-        assert isinstance(import_name, str) and isinstance(src, str)
+        if record["status"] == "candidate":
+            # A trusted directory may be a symlink. Keep the source selected at startup for retries.
+            record["src"] = str(Path(record["src"]).resolve())
+            _import_record(record, namespace)
 
-        if not import_name.isidentifier():
-            record["status"] = "unavailable"
-            record["reason"] = f"{import_name!r} is not a valid Python module name"
-            continue
-
-        prime_dep = _static_prime_dependency(Path(src) / import_name)
-        if prime_dep is not None:
-            record["status"] = "unavailable"
-            record["reason"] = (
-                f"depends on Prime's own host runtime ({prime_dep}); this deployment provides DSH "
-                "capabilities through `from dsh_kernel import tools` instead"
-            )
-            continue
-
-        # Inserting on sys.path does NOT beat sys.modules: if `json` (or any
-        # module the kernel already imported) shares this import name,
-        # import_module returns the CACHED module and we would bind the stdlib
-        # while reporting the skill as loaded.
-        cached = sys.modules.get(import_name)
-        if cached is not None:
-            cached_file = getattr(cached, "__file__", None)
-            if cached_file is None or not str(Path(cached_file).resolve()).startswith(
-                str(Path(src).resolve())
-            ):
-                record["status"] = "unavailable"
-                record["reason"] = (
-                    f"import name {import_name!r} is already taken by another module "
-                    f"({cached_file or 'a built-in'}); rename the skill package so it cannot "
-                    "shadow or be shadowed by it"
-                )
-                continue
-
-        # Appended, as Prime's editable installs are: a skill never shadows the
-        # stdlib or an installed package (the resolution check below says so).
-        if src not in sys.path:
-            sys.path.append(src)
-        try:
-            module = importlib.import_module(import_name)
-        except BaseException as exc:  # noqa: BLE001 - report, never swallow
-            record["status"] = "unavailable"
-            record["reason"] = f"{type(exc).__name__}: {exc}"
-            record["traceback"] = traceback.format_exc(limit=5)
-            continue
-
-        # Verify what we actually got: an import can still resolve elsewhere
-        # (a stale entry, a namespace package). Binding the wrong object while
-        # claiming success is the failure this guards against.
-        resolved = getattr(module, "__file__", None)
-        if resolved is None or not str(Path(resolved).resolve()).startswith(str(Path(src).resolve())):
-            record["status"] = "unavailable"
-            record["reason"] = (
-                f"{import_name!r} resolved to {resolved or 'a built-in module'}, which is outside "
-                f"the skill directory {src}; refusing to bind an unrelated module"
-            )
-            sys.modules.pop(import_name, None)
-            continue
-
-        namespace._put(import_name, _callable_module(module, import_name))
-        record["status"] = "available"
-        record["entry"] = "run" if callable(getattr(module, "run", None)) else None
-        loaded.append(import_name)
-
-    report = {
-        "loaded": sorted(loaded),
-        "skills": candidates,
-        "failed": [r for r in candidates if r["status"] == "unavailable"],
-    }
+    report = _load_report(candidates)
     if isinstance(namespace, _SkillsNamespace):
         namespace._report = report
     return report
@@ -240,7 +242,7 @@ def _instructions(record: dict[str, Any]) -> str | None:
 
 
 def _access(name: str) -> str:
-    if name.isidentifier() and not keyword.iskeyword(name) and not name.startswith("_") and name not in {"list", "describe"}:
+    if name.isidentifier() and not keyword.iskeyword(name) and not name.startswith("_") and name not in {"list", "describe", "retry"}:
         return f"skills.{name}"
     return f"skills[{name!r}]"
 
@@ -277,13 +279,48 @@ class _SkillsNamespace(_Namespace):
     the host's text-skill registry (use tools.skill for that registry).
     """
 
-    def __init__(self, renames=None):
+    def __init__(self, renames=None, *, on_retry=None):
         super().__init__("skills")
         self._report = None
+        self._on_retry = on_retry
         self._renames = {key.lower(): value for key, value in (renames or {}).items()}
 
     def _records(self):
         return self._report["skills"] if self._report is not None else []
+
+    def _named_records(self, target, *, for_retry=False):
+        records = self._records()
+        if for_retry:
+            # A document can share a module's name, but contributes no Python import to retry.
+            matches = [r for r in records if r.get("import_name") and r["import_name"] == target]
+        else:
+            matches = [r for r in records if (r.get("import_name") or r["skill"]) == target]
+        return matches or [r for r in records if r["skill"] == target]
+
+    def __dir__(self):
+        return sorted({*super().__dir__(), "retry"})
+
+    async def retry(self, target: str) -> dict[str, str]:
+        """Retry a failed Python import using the trusted source selected for this kernel."""
+        if type(target) is not str:
+            raise TypeError("target must be a skill name")
+        matches = self._named_records(target, for_retry=True)
+        if len(matches) != 1:
+            raise KeyError(f"{'Ambiguous' if matches else 'Unknown'} skill {target!r}")
+        record = matches[0]
+        name = record.get("import_name")
+        if record["status"] == "available":
+            return {"import_name": name, "status": "already_loaded"}
+        if not record.get("retryable"):
+            raise ValueError(f"Cannot retry {target!r}: {record.get('reason', record['status'])}")
+        importlib.invalidate_caches()
+        error = _import_record(record, self, retry=True)
+        self._report = _load_report(self._records())
+        if self._on_retry is not None:
+            self._on_retry(record.copy())
+        if error is not None:
+            raise error
+        return {"import_name": name, "status": "loaded"}
 
     def __getattr__(self, name):
         try:
@@ -311,7 +348,7 @@ class _SkillsNamespace(_Namespace):
         return {
             "id": name, "name": record["skill"], "skill_name": record["skill"],
             "summary": record.get("description", "").split("\n")[0][:160],
-            "status": status,
+            "status": status, "retryable": record.get("retryable", False),
             "instructions_file": record.get("instructions_file"),
             "reason": "loaded skill binding is missing" if record["status"] == "available" and not available else record.get("reason"),
             "access": _access(name) if available else None,
@@ -345,9 +382,7 @@ class _SkillsNamespace(_Namespace):
         for target in targets:
             # Exact ids (including dotted document names) win over a formal name.
             # Only an unmatched target can refer to a single public module member.
-            records = [r for r in catalog if (r.get("import_name") or r["skill"]) == target]
-            if not records:
-                records = [r for r in catalog if r["skill"] == target]
+            records = self._named_records(target)
             member = None
             if not records and target.count(".") == 1:
                 name, member = target.split(".")

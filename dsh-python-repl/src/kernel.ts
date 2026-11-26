@@ -87,6 +87,8 @@ export interface KernelOptions {
   maxFrameBytes?: number
   /** Invoked for every `host_request` frame. */
   onHostRequest: HostRequestHandler
+  /** Display data carrying its originating cell ID, including from its background tasks. */
+  onDisplay?: (id: string, data: Record<string, unknown>) => void
   /** Invoked synchronously when a cell's `done` frame is parsed. */
   onCellSettled?: CellSettledHandler
   /**
@@ -574,6 +576,7 @@ export class PythonKernel {
         return
       }
       case 'display':
+        if (event.id !== null) this.#options.onDisplay?.(event.id, event.data)
         return
     }
   }

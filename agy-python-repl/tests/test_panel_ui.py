@@ -29,6 +29,8 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
             with patch.object(server, "_manager", manager):
                 async with create_connected_server_and_client_session(server.mcp) as client:
                     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+                    for name in ("kernel_state", "app_kernel_action"):
+                        self.assertIn("restart", tools[name].inputSchema["properties"]["action"]["enum"])
                     entry = tools["open_kernel_panel"].meta
                     uri = entry["ui"]["resourceUri"]
                     self.assertEqual(entry["com.google.antigravity/ui"]["entrypoints"][0]["type"], "aux_pane")
@@ -59,6 +61,21 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
                     for action, field in (("vars", "names"), ("snapshot", "saved"), ("restore", "restored")):
                         result = await call("app_kernel_action", kernel="sample", action=action)
                         self.assertIn("sample", result[field])
+                    stopped = await call("kernel_state", kernel="inactive", action="restart")
+                    self.assertEqual(stopped["status"], "error")
+                    self.assertFalse(stopped["original_kept"])
+                    await call("run_code", kernel="sample", code="blocked = (x for x in [7])")
+                    refused = await call("app_kernel_action", kernel="sample", action="restart")
+                    self.assertEqual(refused["status"], "error")
+                    self.assertTrue(refused["original_kept"])
+                    self.assertIn("blocked", [item["name"] for item in refused["skipped"]])
+                    self.assertEqual((await call("run_code", kernel="sample", code="next(blocked)"))["result"], "7")
+                    await call("run_code", kernel="sample", code="del blocked\nprevious_pid = os.getpid()")
+                    restarted = await call("app_kernel_action", kernel="sample", action="restart")
+                    self.assertEqual(restarted["status"], "ok")
+                    self.assertIn("sample", restarted["restored"])
+                    checked = await call("run_code", kernel="sample", code="(previous_pid != os.getpid(), sample)")
+                    self.assertEqual(checked["result"], str((True, "<mark> & text")))
                     await call("app_kernel_action", kernel="sample", action="reset")
                     self.assertEqual((await call("app_kernel_overview"))["kernels"], [])
 
@@ -81,6 +98,51 @@ assert.equal(recovered.children[1].text, 'Loaded skills: reader, ready');
 assert.equal(recovered.children.length, 2);
 """
         result = subprocess.run(["node", "-"], input=renderer + checks, text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js runs the panel's restart control")
+    def test_restart_button_reports_only_the_selected_kernels_completed_restart(self):
+        html = PANEL.read_text(encoding="utf-8")
+        functions = [re.search(rf"    function {name}\(.*?\n    \}}", html, re.S)[0]
+                     for name in ("restartMessage", "kernelCard")]
+        checks = r"""
+const assert = require('node:assert/strict');
+let reply, request;
+const busy = new Set(), status = {};
+const host = {supports: () => true, tool: async (...args) => { request = args; return reply; }};
+const byId = () => status, unpack = value => value, refresh = async () => {};
+function element(tag, text) {
+  return {text, dataset: {}, children: [], append(...nodes) { this.children.push(...nodes); },
+    replaceChildren(...nodes) { this.children = nodes; }, setAttribute() {}};
+}
+function button(label, click) { return {...element('button', label), click}; }
+function controls(alive) {
+  const card = kernelCard({name: 'analysis', alive, python: '3', skills_loaded: []});
+  return card.children.at(-2).children;
+}
+async function check() {
+  assert.equal(controls(false).some(control => control.text === 'Restart'), false);
+  const restart = controls(true).find(control => control.text === 'Restart');
+  reply = {kernel: 'analysis', status: 'ok', restored: ['rows', 'total']};
+  await restart.click();
+  assert.deepEqual(request, ['app_kernel_action', {action: 'restart', kernel: 'analysis'}]);
+  assert.match(status.textContent, /Restarted analysis.*2 variables/);
+  assert.equal(restartMessage("analysis", {...reply, restored: ["rows"]}), "Restarted analysis. Restored 1 variable.");
+  for (const field of ['skipped', 'failed']) {
+    reply = {kernel: 'analysis', status: 'error', original_kept: true, error: 'Restart stopped.',
+             [field]: [{name: 'unfinished', reason: 'fixture reason'}]};
+    await assert.rejects(restart.click(), /Restart stopped.*original kernel is still running.*unfinished.*fixture reason/);
+    assert.equal(status.textContent, '');
+  }
+  reply = {kernel: 'analysis', status: 'partial', failed: [{name: 'rows', reason: 'missing'}]};
+  await assert.rejects(restart.click(), /complete restart.*rows.*missing/);
+  reply = {kernel: 'analysis', status: 'accepted'};
+  await assert.rejects(restart.click(), /confirm a complete restart/);
+}
+check().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+        result = subprocess.run(["node", "-"], input="\n".join(functions) + checks, text=True,
+                                capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js runs the panel's browser-independent message transport")

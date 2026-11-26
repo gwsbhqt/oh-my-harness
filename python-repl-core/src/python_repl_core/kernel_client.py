@@ -83,9 +83,6 @@ class KernelClient:
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         env["PYTHON_REPL_OWNS_GROUP"] = "1"
 
-        loop = asyncio.get_running_loop()
-        self._ready_future = loop.create_future()
-
         self._proc = await asyncio.create_subprocess_exec(
             self.python_exe,
             "-u",
@@ -100,6 +97,7 @@ class KernelClient:
             pass_fds=self.pass_fds,
             limit=self.max_frame_bytes,
         )
+        self._ready_future = asyncio.get_running_loop().create_future()
         self._reader_task = asyncio.create_task(self._read_loop())
 
         try:

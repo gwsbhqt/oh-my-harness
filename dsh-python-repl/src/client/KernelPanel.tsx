@@ -219,14 +219,14 @@ type SnapshotGroup = (typeof snapshotGroups)[number]['key']
 type Selection =
   | { type: 'object'; item: PanelName }
   | { type: 'cell'; seq: number }
-  | { type: 'skill'; name: string }
+  | { type: 'skill'; name: string; importName: string | null }
   | { type: 'snapshot'; group: SnapshotGroup; name: string }
   | { type: 'snapshot-summary' }
   | { type: 'archived'; name: string }
   | { type: 'deleted'; name: string }
 type RecordSelection = Exclude<Selection, { type: 'object' }>
 const selectionKey = (s: Selection | null) => s === null ? '' : s.type === 'object' ? `o:${s.item.name}` : s.type === 'cell' ? `c:${s.seq}`
-  : s.type === 'skill' ? `k:${s.name}` : s.type === 'snapshot' ? `s:${s.group}:${s.name}` : s.type === 'archived' ? `a:${s.name}` : s.type === 'deleted' ? `d:${s.name}` : 'summary'
+  : s.type === 'skill' ? `k:${JSON.stringify([s.name, s.importName])}` : s.type === 'snapshot' ? `s:${s.group}:${s.name}` : s.type === 'archived' ? `a:${s.name}` : s.type === 'deleted' ? `d:${s.name}` : 'summary'
 
 interface RecordView { title: string; summary: string; note: string; tone?: Tone; facts: Array<[string, ReactNode]>; code?: string; codeClipped?: boolean; codeLines?: number; codeMissing?: string; output?: string; outputClipped?: boolean }
 function recordDetails(selection: RecordSelection, state: PanelState | null, now: number): RecordView {
@@ -275,9 +275,12 @@ function recordDetails(selection: RecordSelection, state: PanelState | null, now
       note: '开始前等待包括排队、启动内核和同步工具。记录跟着会话保存，DSH 重启后还在；只留最近 200 格，保存每格的代码和返回结果（过长会截断），不保存变量值。' }
   }
   if (selection.type === 'skill') {
-    const skill = state?.skillReport?.skills.find(item => item.skill === selection.name)
+    const skill = state?.skillReport?.skills.find(item => item.skill === selection.name && (item.import_name ?? null) === selection.importName)
     const status = skill ? skillStatus[skill.status] : undefined
-    return { title: selection.name, summary: '技能导入记录', note: skill ? '这个会话启动内核时的技能导入情况。' : '这个技能已经不在当前导入记录中。', facts: [
+    const note = skill?.retryable && skill.import_name
+      ? `修好依赖后，可在当前会话运行 await skills.retry(${JSON.stringify(skill.import_name)})。`
+      : skill ? '当前内核最近一次导入的结果。' : '这个技能已经不在当前导入记录中。'
+    return { title: selection.name, summary: '技能导入记录', note, facts: [
       ['状态', skill ? <span className="kb-tone" data-tone={status?.tone ?? 'idle'}>{status?.label ?? skill.status}</span> : '已不在记录中'],
       ['内核名称', skill?.import_name ? <code>{skill.import_name}</code> : '—'],
       ['说明', clip(skill?.description) ?? '—'],
@@ -340,7 +343,7 @@ const Directory = memo(function Directory({ state, query, selected, open, onTogg
   const cells = useMemo(() => [...(state?.cells ?? [])].reverse(), [state?.cells])
   const cellHits = cells.filter(cell => hit(`#${cell.seq} ${cell.firstLine} ${cell.code ?? ''} ${cell.tools.map(tool => tool.name).join(' ')}`))
   const names = (state?.names ?? []).filter(item => hit(item.name))
-  const skills = (state?.skillReport?.skills ?? []).filter(item => hit(`${item.skill} ${item.description ?? ''}`))
+  const skills = (state?.skillReport?.skills ?? []).filter(item => hit(`${item.skill} ${item.import_name ?? ''} ${item.description ?? ''}`))
   const snapshot = state?.snapshot
   const snapshotHits = snapshotGroups.map(group => ({ ...group, items: (group.key === 'skipped' ? snapshot?.skipped.map(item => item.name) : snapshot?.[group.key] ?? [])?.filter(hit) ?? [] }))
   const summaryHit = hit('快照概况')
@@ -414,8 +417,10 @@ const Directory = memo(function Directory({ state, query, selected, open, onTogg
       <Group id="skills" label="技能导入" count={skills.length} open={isOpen('skills')} onToggle={onToggle}>
         {skills.map(skill => {
           const status = skillStatus[skill.status]
-          return <Row key={skill.skill} glyph="◇" name={skill.skill} meta={status?.label ?? skill.status} tone={status?.tone === 'error' ? 'error' : undefined}
-            pressed={selected === `k:${skill.skill}`} label={`查看技能 ${skill.skill}`} title={skill.description} onClick={() => onRecord({ type: 'skill', name: skill.skill })}/>
+          const selection: RecordSelection = { type: 'skill', name: skill.skill, importName: skill.import_name ?? null }
+          const key = selectionKey(selection)
+          return <Row key={key} glyph="◇" name={skill.skill} meta={status?.label ?? skill.status} tone={status?.tone === 'error' ? 'error' : undefined}
+            pressed={selected === key} label={`查看技能 ${skill.skill}`} title={skill.description} onClick={() => onRecord(selection)}/>
         })}
         {!skills.length && <div className="kb-more">暂无技能记录</div>}
       </Group>

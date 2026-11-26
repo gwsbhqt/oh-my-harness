@@ -27,7 +27,7 @@
 - 模型写持久 Python 代码格，支持顶层 await、末表达式展示；不提供顶层 return，不做 AST return 仿真。
 - 能力目录按需披露，避免把所有能力放到顶层。read/write/edit/bash/glob/grep 六个固定工具顶层直达；其他 DSH 工具在 tools，技能在 skills。MCP 工具由 dsh-mcp-client 注册成普通工具，按注册名留在 tools 里；它不提供「服务 → 工具」的对应关系，拆名字只能靠猜，所以不设按服务分组的 mcp 命名空间。
 - tools/skills 同构提供异步 list/describe。特殊/元方法冲突名字用索引；无顶层 call_tool。
-- 技能启动时预导入，不提供 skills.load；tools/skills 摘要常驻提示，完整签名/说明按需 describe。元查询不是权限授予，业务只用本格 PTC binding。
+- 技能启动时预导入，不提供 skills.load。运行时导入出错的条目可在补齐依赖后用 `await skills.retry("内核名称")` 单独重试。只在同一内核的已确认重试结果到达时更新面板和动态提示。tools/skills 摘要常驻提示，完整签名/说明按需 describe。元查询不是权限授予，业务只用本格 PTC binding。
 - 命名空间不同可以同名（skills.read 与顶层 read）；同 importName 技能仍拒绝冲突，其他正常技能继续。内部桥名字不能自动覆盖，元方法冲突可用索引访问。
 - 保留 Python 内建、asyncio、最近非 None 结果 `_` 和真实 ToolCallError；内部状态不公开。MCP 层级必须有可靠宿主映射，不拆工具名猜测。
 - 产品按能力命名 dsh-python-repl；Prime 仅作为核心代码和设计来源，继续保留 vendor/prime、许可证、来源清单与补丁记录。

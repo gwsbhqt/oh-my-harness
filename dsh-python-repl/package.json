@@ -91,6 +91,7 @@
         "python-repl-core/src/python_repl_core/panel_state.py",
         "python-repl-core/src/python_repl_core/prelude.py",
         "python-repl-core/src/python_repl_core/preview.py",
+        "python-repl-core/src/python_repl_core/recovery_copies.py",
         "python-repl-core/src/python_repl_core/skill_discovery.py",
         "python-repl-core/src/python_repl_core/skills_runtime.py",
         "python-repl-core/src/python_repl_core/snapshot_errors.py",

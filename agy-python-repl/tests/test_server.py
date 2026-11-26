@@ -166,7 +166,8 @@ class AgyPythonReplTests(unittest.IsolatedAsyncioTestCase):
     def test_session_binding_for_direct_and_deferred_repl_tools(self) -> None:
         server = "agy-python-repl_agy-python-repl"
         workspace = str(self.tmp_dir / "workspace")
-        for tool, original in (("run_code", {"code": "1 + 1"}), ("kernel_state", {"action": "vars"})):
+        for tool, original in (("run_code", {"code": "1 + 1"}), ("kernel_state", {"action": "vars"}),
+                               ("kernel_state", {"action": "restart"})):
             direct = f"mcp_{server}_{tool}"
             calls = (
                 {"name": direct, "args": original},

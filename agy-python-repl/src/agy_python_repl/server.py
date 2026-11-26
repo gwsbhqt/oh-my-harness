@@ -65,10 +65,13 @@ async def run_code(
 
 @mcp.tool(
     title="Manage Kernel State",
-    description="Inspect, snapshot, restore, or reset the current session's Python REPL kernel.",
+    description=(
+        "Inspect, snapshot, restore or restart this session's Python kernel. Restart saves its variables "
+        "and checks that they restore in a fresh process. Reset clears the kernel and deletes its snapshot."
+    ),
 )
 async def kernel_state(
-    action: Literal["list", "vars", "snapshot", "restore", "reset"],
+    action: Literal["list", "vars", "snapshot", "restore", "restart", "reset"],
     kernel: str = "default",
     cwd: str | None = None,
 ) -> dict[str, Any]:
@@ -93,7 +96,7 @@ async def app_kernel_overview() -> dict[str, Any]:
 
 @mcp.tool(name="app_kernel_action", meta=APP_ONLY_META)
 async def app_kernel_action(
-    action: Literal["vars", "snapshot", "restore", "reset"],
+    action: Literal["vars", "snapshot", "restore", "restart", "reset"],
     kernel: str = "default",
 ) -> dict[str, Any]:
     return await _manager.kernel_state(action, kernel=kernel)

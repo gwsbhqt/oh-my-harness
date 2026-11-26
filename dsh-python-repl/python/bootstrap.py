@@ -74,7 +74,13 @@ def _bootstrap(tool_names, top_level_names, epoch, skill_entries=(), disabled_sk
     for name in tool_names:
         _bridge.tools._put(name, _bridge._proxy(name))
 
-    _bridge.skills = _skills._SkillsNamespace(skill_renames)
+    def report_skill_retry(record):
+        update = {key: record[key] for key in ("skill", "import_name", "status", "retryable")}
+        if "reason" in record:
+            update["reason"] = record["reason"]
+        _repl.emit({"application/vnd.dsh.skill-import+json": update})
+
+    _bridge.skills = _skills._SkillsNamespace(skill_renames, on_retry=report_skill_retry)
     # repl.helpers()/describe show this line; a subagent must not read "DSH wakes you".
     _Repl.background.__doc__ = _background_doc(_bridge._SUBAGENT)
     ns["tools"] = _bridge.tools

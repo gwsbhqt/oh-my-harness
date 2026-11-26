@@ -14,7 +14,7 @@ import { promisify } from 'node:util'
 import { rm } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { withFileSource } from './panel-source.ts'
-import type { PanelState, PanelName, PanelPreview, PanelCell, PanelControlAction, PanelControlResult, PanelNameAction, PanelNameResult } from './panel-types.ts'
+import type { PanelState, PanelSkillReport, PanelName, PanelPreview, PanelCell, PanelControlAction, PanelControlResult, PanelNameAction, PanelNameResult } from './panel-types.ts'
 import { CellLog } from './cell-log.ts'
 import { callsReport, newCall, traceNotes, withWaitCap, type CellTrace } from './cell-trace.ts'
 import { withJobBash, type HostJobs } from './bash-jobs.ts'
@@ -109,12 +109,8 @@ interface BackgroundRecipe {
   agent?: unknown
 }
 
-/** What the kernel reported about skill loading at startup. */
-export interface SkillReport {
-  loaded: string[]
-  skills: Array<{ skill: string; status: string; reason?: string; import_name?: string | null; description?: string }>
-  failed: Array<{ skill: string; reason: string }>
-}
+/** The current kernel's startup imports and subsequent explicit retries. */
+export type SkillReport = PanelSkillReport
 
 /** Prime's cap on output no cell owns, carried to the next user cell. */
 const BACKGROUND_OUTPUT_CHARS = 64 * 1024
@@ -205,7 +201,7 @@ export class ReplSession {
       epoch, alive: kernel?.alive === true, started: kernel?.ready === true, snapshotProtected: this.snapshotProtected,
       busy: this.#queuedCells > 0 || this.#starting !== undefined || this.#controlPending !== undefined,
       python: kernel?.pythonVersion || null, executable: null, cwd: null,
-      skillReport: this.#skillReport ?? null, observedAt: null,
+      skillReport: kernel === this.#kernel ? this.skillReport ?? null : null, observedAt: null,
       namespaceStatus: 'unavailable', namespaceReason: 'not-started',
       names: [], total: null, complete: false, scope: 'top-level-excluding-dunder',
     })
@@ -447,7 +443,7 @@ export class ReplSession {
   /** Output no cell owns, shown after the next user cell's own output (Prime's background output). */
   #backgroundOutput = ''
   #backgroundTruncated = false
-  /** Skill load result from the most recent bootstrap. */
+  /** Latest confirmed skill imports for the published kernel. */
   #skillReport: SkillReport | undefined
   /** What the newest kernel restored at boot, told once to the first cell on it. */
   #restoreNotice: string | undefined
@@ -603,9 +599,33 @@ export class ReplSession {
     return got === TIMED_OUT ? undefined : got
   }
 
-  /** What loaded, what did not, and why. Undefined until the kernel starts. */
+  #skillRetried(kernel: PythonKernel, cellId: string, update: unknown): void {
+    const report = this.#skillReport
+    if (kernel !== this.#kernel || !kernel.ready || this.#disposed || report === undefined
+      || !cellId.startsWith(`cell-${kernel.epoch}-`) || !update || typeof update !== 'object' || Array.isArray(update)) return
+    const { skill, import_name, status, retryable, reason } = update as Record<string, unknown>
+    if (typeof skill !== 'string' || typeof import_name !== 'string' || typeof retryable !== 'boolean') return
+    const current = report.skills.find(row => row.skill === skill && row.import_name === import_name)
+    if (current?.retryable !== true || current.status !== 'unavailable') return
+    const next = { ...current, retryable }
+    if (status === 'available' && !retryable) delete next.reason
+    else if (status === 'unavailable' && typeof reason === 'string' && reason.length > 0) next.reason = reason
+    else return
+    next.status = status
+    delete next.traceback
+    const skills = report.skills.map(row => row === current ? next : row)
+    // Python sorts import names by Unicode code point, which UTF-8 byte order preserves.
+    const loaded = status === 'available'
+      ? [...report.loaded, import_name].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b))) : report.loaded
+    this.#skillReport = {
+      skills, loaded,
+      failed: skills.filter((row): row is typeof row & { reason: string } => row.status === 'unavailable' && typeof row.reason === 'string'),
+    }
+  }
+
+  /** What loaded, what did not, and why. Only valid while that kernel is active. */
   get skillReport(): SkillReport | undefined {
-    return this.#skillReport
+    return this.#kernel?.ready ? this.#skillReport : undefined
   }
 
   /**
@@ -1320,6 +1340,7 @@ export class ReplSession {
           ...(this.#options.subagent === true ? { DSH_PYTHON_REPL_SUBAGENT: '1' } : {}),
         },
         onHostRequest: (id, data) => this.#onHostRequest(id, data, kernel),
+        onDisplay: (id, data) => this.#skillRetried(kernel, id, data['application/vnd.dsh.skill-import+json']),
         onUnattributedOutput: (text) => this.#appendBackgroundOutput(text),
         // Synchronous revocation at the protocol boundary.
         onCellSettled: (runId) => this.#revoke(runId),

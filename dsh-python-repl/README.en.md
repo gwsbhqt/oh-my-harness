@@ -26,7 +26,8 @@ These are real recordings using fictional data and local example pages. No accou
 - Top-level `await`, expression results, and variables and functions shared across cells.
 - Namespace snapshots that can restore serializable state after a kernel or Harness restart. Files, connections, processes, and running tasks are not restored as live resources; missing state is reported.
 - Harness tools through `tools`, with `read`, `write`, `edit`, `bash`, `glob`, and `grep` also available as fixed helpers. Tool calls use the current cell's Harness permissions.
-- Python functions supplied by trusted skills, discovered before startup and imported before the first user cell. One failing skill does not prevent the others from loading.
+- Python functions supplied by trusted skills, discovered before startup and imported before the first user cell. One failing skill does not prevent the others from loading. If a dependency is missing, install it with `await repl.install("package-name")`, then run the `await skills.retry("module_name")` command shown in the kernel panel and continue with your variables.
+- Package installations use your user-level `uv.toml` or the file selected by `UV_CONFIG_FILE`. If that file sets `[pip].target`, select a source-only configuration so modules, commands and data are installed in the kernel environment.
 - A kernel tab for inspecting names and explicitly controlling the session kernel, bounded output with retrievable full text, and background Python work through `repl.background`.
 
 ## How this differs from DSH's built-in code mode and Prime Agent
@@ -136,6 +137,8 @@ Runtime state lives below `DSH_HOME/plugins/python-repl/`. Each session has its 
 ## Python skills
 
 Each trusted skill has a standard `SKILL.md` identity and a Python package under `src/<import_name>/`. When present, `PYSKILL.md` supplies Python instructions; otherwise `SKILL.md` is used. Invalid Python instructions are reported without silently switching documents. Import names replace hyphens with underscores. Skills are available through `skills.<import_name>`; use `await skills.list()` and `await skills.describe("demo_reader")` to discover their functions and instructions.
+
+When an import fails, the kernel panel shows the reason. After installing a missing dependency, call `await skills.retry("demo_reader")` with the Python module name shown in the failed entry. The current kernel keeps your analysis variables. The panel and subsequent model context show the outcome, including the latest reason if the import fails again.
 
 Use the returned skill entry’s `directory` to resolve relative references. When `dsh-grep-scope` reports a missing reference under the wrong skill root, the kernel suggests a new `path` if the session catalog identifies one available directory for that skill. Use that path to repeat the original search.
 

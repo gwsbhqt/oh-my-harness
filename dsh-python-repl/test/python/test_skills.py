@@ -213,6 +213,85 @@ class SkillCatalog(unittest.TestCase):
 
     tearDown = SkillLoading.tearDown
 
+    def test_retry_updates_the_selected_record_and_preserves_other_skills(self):
+        events = []
+        namespace = skills_mod._SkillsNamespace(on_retry=events.append)
+        mode = self.root / "mode"
+        mode.write_text("missing")
+        body = (f"import asyncio\nfrom pathlib import Path\nmode = Path({str(mode)!r}).read_text()\n"
+                "if mode == 'missing': raise ModuleNotFoundError('fixture dependency')\n"
+                "if mode == 'changed': raise ValueError('different failure')\n"
+                "if mode == 'cancel': raise asyncio.CancelledError()\n"
+                "def run(): return 'selected'\n")
+        selected = write_skill(self.root / "one", "reader", import_name="broken", body=body)
+        other = write_skill(self.root / "two", "reader", import_name="broken", body="def run(): return 'other'\n")
+        trusted = self.root / "trusted"
+        trusted.mkdir()
+        link = trusted / "reader"
+        link.symlink_to(selected, target_is_directory=True)
+        write_skill(trusted, "good", import_name="good_skill", body="def run(): return 1\n")
+        report = skills_mod.load(found(trusted), namespace)
+        self.assertTrue(report["failed"][0]["retryable"])
+        good = namespace.good_skill
+        link.unlink()
+        link.symlink_to(other, target_is_directory=True)
+        mode.write_text("changed")
+        with self.assertRaisesRegex(ValueError, "different failure"):
+            asyncio.run(namespace.retry("reader"))
+        self.assertEqual(events[-1]["reason"], "ValueError: different failure")
+        self.assertIn("different failure", events[-1]["traceback"])
+        mode.write_text("cancel")
+        with self.assertRaises(asyncio.CancelledError):
+            asyncio.run(namespace.retry("reader"))
+        self.assertEqual(len(events), 1)
+        self.assertEqual(asyncio.run(namespace.describe("broken"))["items"][0]["reason"], events[0]["reason"])
+        mode.write_text("ready")
+        self.assertEqual(asyncio.run(namespace.retry("reader")), {"status": "loaded", "import_name": "broken"})
+        bound = namespace.broken
+        self.assertEqual(asyncio.run(bound()), "selected")
+        self.assertEqual(asyncio.run(namespace.retry("broken"))["status"], "already_loaded")
+        self.assertIs(namespace.broken, bound)
+        self.assertIs(namespace.good_skill, good)
+        self.assertEqual(len(events), 2)
+        self.assertFalse(events[1]["retryable"])
+        self.assertEqual(events[1]["entry"], "run")
+        self.assertNotIn("reason", events[1])
+        self.assertNotIn("traceback", events[1])
+        self.assertFalse(asyncio.run(namespace.list("reader"))["items"][0]["retryable"])
+
+    def test_retry_rejects_nonimports_and_skips_a_namesake_in_a_sibling_directory(self):
+        events = []
+        namespace = skills_mod._SkillsNamespace(on_retry=events.append)
+        selected = write_skill(self.root, "reader", import_name="broken", body="raise ImportError('fixture')\n")
+        write_skill(self.root, "notes")
+        write_skill(self.root / "extra", "first", import_name="dupe")
+        write_skill(self.root / "extra", "second", import_name="dupe")
+        entries = found(self.root, self.root / "extra")
+        skills_mod.load(entries, namespace, disabled=["switched-off"])
+        for target in ("notes", "switched-off", "first", "dupe", "unknown"):
+            with self.subTest(target=target), self.assertRaises((ValueError, KeyError)):
+                asyncio.run(namespace.retry(target))
+        self.assertEqual(events, [])
+        sibling = selected / "src-other"
+        sibling.mkdir()
+        marker = self.root / "ran-unrelated"
+        (sibling / "broken.py").write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
+        sys.path.insert(0, str(sibling))
+        with self.assertRaisesRegex(ImportError, "outside the skill directory"):
+            asyncio.run(namespace.retry("reader"))
+        self.assertFalse(marker.exists())
+        self.assertNotIn("broken", sys.modules)
+        self.assertFalse(events[0]["retryable"])
+        with self.assertRaisesRegex(ValueError, "outside the skill directory"):
+            asyncio.run(namespace.retry("reader"))
+        self.assertEqual(len(events), 1)
+        unrelated = __import__("broken")
+        restarted = skills_mod.load(entries, skills_mod._SkillsNamespace())
+        collision = next(r for r in restarted["failed"] if r["skill"] == "reader")
+        self.assertIn("already taken by another module", collision["reason"])
+        self.assertNotIn("retryable", collision)
+        self.assertIs(sys.modules["broken"], unrelated)
+
     def test_local_description_has_instructions_and_safe_members(self):
         write_skill(self.root, "good", import_name="good_skill", body='''
 class Meta(type):
@@ -288,6 +367,15 @@ run.__wrapped__ = trap
         with self.assertRaises(AttributeError):
             getattr(self.namespace, "fixture-reader")
 
+    def test_retry_requires_a_unique_formal_name_when_no_import_name_matches(self):
+        write_skill(self.root / "one", "reader-guide", import_name="broken", body="raise ImportError('fixture')\n")
+        write_skill(self.root / "two", "reader-guide")
+        skills_mod.load(found(self.root / "one", self.root / "two"), self.namespace)
+        with self.assertRaisesRegex(KeyError, "Ambiguous skill"):
+            asyncio.run(self.namespace.retry("reader-guide"))
+        described = asyncio.run(self.namespace.describe("reader-guide"))["items"][0]
+        self.assertEqual(described["status"], "docs-only")
+
     def test_duplicate_formal_names_do_not_select_or_read_a_document(self):
         write_skill(self.root / "a", "fixture-reader", import_name="good_skill", python_description="First guide.")
         write_skill(self.root / "b", "fixture-reader", import_name="uses_bridge", python_description="Second guide.")
@@ -301,7 +389,7 @@ run.__wrapped__ = trap
         self.assertNotIn("instructions", result)
 
     def test_pagination_query_and_collision_access(self):
-        for name in ("list", "read", "class"):
+        for name in ("list", "read", "class", "retry"):
             write_skill(self.root, name, import_name=name, body="def run(): return 1")
         try:
             skills_mod.load(found(self.root), self.namespace)
@@ -313,9 +401,12 @@ run.__wrapped__ = trap
             self.assertEqual(asyncio.run(self.namespace.describe("list"))["items"][0]["access"], "skills['list']")
             self.assertEqual(asyncio.run(self.namespace.describe("class"))["items"][0]["access"], "skills['class']")
             self.assertEqual(asyncio.run(self.namespace.describe("read"))["items"][0]["access"], "skills.read")
+            self.assertIn("retry", dir(self.namespace))
+            self.assertEqual(asyncio.run(self.namespace.describe("retry"))["items"][0]["access"], "skills['retry']")
+            self.assertEqual(asyncio.run(self.namespace["retry"]()), 1)
             self.assertEqual(asyncio.run(self.namespace["list"]()), 1, "a sync run is awaited, as in Prime")
         finally:
-            for name in ("list", "read", "class"):
+            for name in ("list", "read", "class", "retry"):
                 sys.modules.pop(name, None)
 
 

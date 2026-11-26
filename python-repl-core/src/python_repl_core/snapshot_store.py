@@ -179,14 +179,14 @@ def read_manifest(pair: SnapshotPair) -> dict:
 
 
 @contextmanager
-def _writer(store: Path):
+def _writer(store: Path, operation=fcntl.LOCK_EX):
     # Reset can unlink the lock directory while another process is opening it. Check the inode after flock.
     while True:
-        with _locked_dir(store.parent, fcntl.LOCK_EX, nofollow=False):
+        with _locked_dir(store.parent, operation, nofollow=False):
             store.mkdir(mode=0o700, exist_ok=True)
         with ExitStack() as owner:
             try:
-                fd = owner.enter_context(_locked_dir(store, fcntl.LOCK_EX))
+                fd = owner.enter_context(_locked_dir(store, operation))
                 current = store.lstat()
             except FileNotFoundError:
                 continue
@@ -265,11 +265,12 @@ def _collect(store: Path, keep: set[str]) -> None:
             continue
 
 
-def publish_snapshot(pair: SnapshotPair, write_pair, committed) -> dict:
+def publish_snapshot(pair: SnapshotPair, write_pair, committed=None, *, wait=True) -> dict:
     """Stage Prime's pair, then switch current; only the outer commit may acknowledge or prune."""
     store = _store(pair)
     store.parent.mkdir(parents=True, exist_ok=True)
-    with _writer(store), ExitStack() as cleanup:
+    operation = fcntl.LOCK_EX if wait else fcntl.LOCK_EX | fcntl.LOCK_NB
+    with _writer(store, operation), ExitStack() as cleanup:
         _discard_unpublished(store)
         staging = Path(cleanup.enter_context(tempfile.TemporaryDirectory(dir=store, prefix=".writing-")))
         data, meta = staging / pair.payload.name, staging / pair.manifest.name
@@ -278,7 +279,7 @@ def publish_snapshot(pair: SnapshotPair, write_pair, committed) -> dict:
             return result
         generation = uuid.uuid4().hex
         read_manifest(SnapshotPair(data, meta, generation))
-        with _locked_dir(store.parent, fcntl.LOCK_EX, nofollow=False):
+        with _locked_dir(store.parent, operation, nofollow=False):
             old = resolve_snapshot(pair.payload, pair.manifest)
             if old is not None and old.generation not in (None, "legacy"):
                 read_manifest(old)
@@ -291,12 +292,13 @@ def publish_snapshot(pair: SnapshotPair, write_pair, committed) -> dict:
             try:
                 _install_public_links(pair, store, changed)
                 # The local pointer and its receipt are one commit even when the host interrupts after rename.
-                handler = signal.signal(signal.SIGINT, lambda *_: None)
-                try:
+                with ExitStack() as receipt:
+                    if committed is not None:
+                        handler = signal.signal(signal.SIGINT, lambda *_: None)
+                        receipt.callback(signal.signal, signal.SIGINT, handler)
                     _link(generation, store / "current", store)
-                    committed(result)
-                finally:
-                    signal.signal(signal.SIGINT, handler)
+                    if committed is not None:
+                        committed(result)
             except BaseException:
                 if os.readlink(store / "current") != generation:
                     _undo_links(store, changed)
@@ -307,6 +309,30 @@ def publish_snapshot(pair: SnapshotPair, write_pair, committed) -> dict:
                     if os.readlink(store / "current") == generation:
                         _collect(store, {generation, previous})
         return result
+
+
+def write_restart_snapshot(namespace: dict, payload: str, manifest: str) -> None:
+    """Run Prime's installed serializer in the original kernel without arming its EOF save."""
+    from rlm import repl
+
+    result = repl._snapshot_state(namespace, payload, manifest, repl.DEFAULT_SNAPSHOT_MAX_BYTES,
+                                  repl.DEFAULT_SNAPSHOT_MAX_VARIABLE_BYTES, False)
+    if "error" in result:
+        raise SnapshotStoreError(result["error"])
+
+
+def try_publish_prepared_snapshot(pair: SnapshotPair, prepared: SnapshotPair) -> bool:
+    """Publish the verified files without serializing again, or let an async host yield to another lock holder."""
+    def link_files(data, manifest):
+        os.link(prepared.payload, data)
+        os.link(prepared.manifest, manifest)
+        return {}
+
+    try:
+        publish_snapshot(pair, link_files, wait=False)
+    except BlockingIOError:
+        return False
+    return True
 
 
 def reset_snapshot(payload: Path, manifest: Path) -> None:

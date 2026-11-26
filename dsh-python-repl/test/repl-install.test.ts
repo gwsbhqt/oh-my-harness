@@ -10,11 +10,12 @@ import { strict as assert } from 'node:assert'
 import { after, before, describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { ReplSession } from '../src/session.ts'
 import { kernelEnvironment, probeInterpreter } from '../src/index.ts'
+import { copyKernelSources } from '../src/kernel-sources.ts'
 import type { BoundTool } from '../src/lease.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -183,6 +184,73 @@ describe('the kernel venv', () => {
     assert.match(execFileSync(built.python, ['-I', '-c', script], {
       encoding: 'utf8', timeout: 15_000,
     }), /browser-ready/)
+  })
+
+  it('uses the user wheel source on first install and retries a rejected explicit target', () => {
+    const project = mkdtempSync(join(scratch, 'bootstrap-'))
+    const configHome = join(project, 'config')
+    const userConfig = join(configHome, 'uv', 'uv.toml')
+    const target = join(project, 'outside-kernel')
+    mkdirSync(dirname(userConfig), { recursive: true })
+    const sources = `[pip]\nfind-links = [${JSON.stringify(scratch)}]\n`
+    const redirect = `[pip]\ntarget = ${JSON.stringify(target)}\n`
+    writeFileSync(userConfig, sources)
+    writeFileSync(join(project, 'uv.toml'), redirect)
+    const kernelRoot = copyKernelSources(root, join(project, 'kernel-sources'))
+    const entryUrl = new URL('../src/index.ts', import.meta.url).href
+    const entry = `import { kernelEnvironment, probeInterpreter } from ${JSON.stringify(entryUrl)}
+      const [python, dir, sources, ...packages] = process.argv.slice(1)
+      await kernelEnvironment({ python, ...await probeInterpreter(python) }, dir, packages, sources)`
+    function build(dir: string, explicit?: string) {
+      return spawnSync(process.execPath, ['--input-type=module', '-e', entry, PYTHON, dir, kernelRoot, 'dshprobe_kernel==1.0'], {
+        cwd: project, encoding: 'utf8', timeout: 30_000,
+        env: {
+          PATH: process.env['PATH'], HOME: project, XDG_CONFIG_HOME: configHome, APPDATA: configHome,
+          UV_OFFLINE: 'true', UV_NO_INDEX: 'true', UV_CACHE_DIR: join(project, 'cache'), UV_PYTHON_DOWNLOADS: 'never',
+          ...(explicit && { UV_CONFIG_FILE: explicit }),
+        },
+      })
+    }
+    function value(dir: string): string {
+      return execFileSync(join(dir, 'bin', 'python'), ['-I', '-c', 'import dshprobe_kernel; print(dshprobe_kernel.VALUE)'], { encoding: 'utf8' }).trim()
+    }
+    const fromUser = join(project, 'from-user-config')
+    const installed = build(fromUser)
+    assert.equal(installed.status, 0, installed.stderr)
+    assert.equal(value(fromUser), 'one')
+    assert.ok(!existsSync(target))
+
+    const fromExplicit = join(project, 'from-explicit-config')
+    const explicit = join(project, 'explicit.toml')
+    writeFileSync(explicit, redirect)
+    const failed = build(fromExplicit, explicit)
+    assert.notEqual(failed.status, 0)
+    assert.match(failed.stderr, /\[pip\]\.target/)
+    assert.ok(!existsSync(join(fromExplicit, '.dsh-kernel-env.json')))
+    assert.ok(!existsSync(target))
+
+    writeFileSync(explicit, sources)
+    const retried = build(fromExplicit, explicit)
+    assert.equal(retried.status, 0, retried.stderr)
+    assert.equal(value(fromExplicit), 'one')
+  })
+
+  it('repairs a legacy success marker once and keeps packages the user added', async () => {
+    const base = { python: PYTHON, ...await probeInterpreter(PYTHON) }
+    const dir = join(scratch, 'legacy-env')
+    const extra = wheel('dshprobe_extra', '1.0', 'extra')
+    const built = await kernelEnvironment(base, dir, [extra])
+    const marker = join(dir, '.dsh-kernel-env.json')
+    const legacy = JSON.stringify({ base: base.python, version: base.version, packages: [v1] })
+    writeFileSync(marker, legacy)
+
+    await kernelEnvironment(base, dir, [v1])
+    const imported = 'import dshprobe_kernel, dshprobe_extra; print(dshprobe_kernel.VALUE, dshprobe_extra.VALUE)'
+    assert.equal(execFileSync(built.python, ['-I', '-c', imported], { encoding: 'utf8' }).trim(), 'one extra')
+    assert.notEqual(readFileSync(marker, 'utf8'), legacy)
+    const stamp = statSync(marker).mtimeMs
+    assert.deepEqual(await kernelEnvironment(base, dir, [v1], join(scratch, 'unavailable-sources')), built)
+    assert.equal(statSync(marker).mtimeMs, stamp)
   })
 
   it('reuses a matching venv, installs a changed package list in place, and rebuilds for another Python', async () => {

@@ -171,7 +171,7 @@ class ProcessOwnershipTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, "bootstrap"):
             await kernel.run_code("Path('never').touch()", kernel=REPORT, cwd=self.root)
         stub.write_text("import time\nfrom pathlib import Path\n"
-                        "def install_antigravity_surface(entries):\n    Path('booting').touch()\n    time.sleep(30)\n")
+                        "def install_antigravity_surface(entries, *, copy_session=None):\n    Path('booting').touch()\n    time.sleep(30)\n")
         good = self.root / "good"
         good.mkdir()
         opening = asyncio.create_task(kernel.run_code("Path('never').touch()", kernel=REPORT, cwd=self.root))

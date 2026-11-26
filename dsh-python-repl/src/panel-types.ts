@@ -69,7 +69,10 @@ export interface PanelName {
 
 export interface PanelSkillReport {
   loaded: string[]
-  skills: Array<{ skill: string; status: string; reason?: string; import_name?: string | null; description?: string }>
+  skills: Array<{
+    skill: string; status: string; import_name?: string | null; description?: string
+    reason?: string; traceback?: string; retryable?: boolean
+  }>
   failed: Array<{ skill: string; reason: string }>
 }
 

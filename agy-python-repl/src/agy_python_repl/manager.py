@@ -18,8 +18,8 @@ from typing import Any, BinaryIO
 import python_repl_core
 from python_repl_core.kernel_client import CellResult, KernelClient, KernelProtocolError
 from python_repl_core.output_budget import bound_text
-from python_repl_core.skill_discovery import discover_python_skills
-from python_repl_core.snapshot_store import reset_snapshot
+from python_repl_core.skill_discovery import SkillEntry, discover_python_skills
+from python_repl_core.snapshot_store import SnapshotPair, read_manifest, reset_snapshot, try_publish_prepared_snapshot
 
 from .bootstrap import SKILL_RETRY_MIME
 from .snapshot_paths import NAMED_DIR, flat_names, has_snapshot, kernel_identity, named_storage, snapshot_paths
@@ -40,7 +40,8 @@ def _name_warning(name: str, storage: Path) -> dict[str, str]:
 _BUILTIN_SKILLS_DIR = Path(__file__).resolve().parents[2] / "skills"
 _SNAPSHOT_PROTECTION_MESSAGE = (
     "Saving is paused because the previous snapshot could not be fully restored. "
-    "Retry restore once its dependencies are available, or reset to discard that snapshot."
+    "Retry restore once its dependencies are available, or reset to discard that snapshot. "
+    'Use await repl.save_copy("name") to keep selected live variables.'
 )
 
 
@@ -176,6 +177,7 @@ class ManagedKernel:
     ownership: BinaryIO
     client: KernelClient
     cwd: Path | None
+    skill_entries: list[SkillEntry]
     created_at: float = field(default_factory=time.time)
     last_used_at: float = field(default_factory=time.time)
     skill_report: dict[str, Any] = field(default_factory=dict)
@@ -303,16 +305,20 @@ class KernelManager:
         return ownership
 
     async def _start_kernel(
-        self, key: str, storage: Path, ownership: BinaryIO, work_dir: Path,
+        self, key: str, storage: Path, ownership: BinaryIO, work_dir: Path, *,
+        replacing: ManagedKernel | None = None, restore_from: SnapshotPair | None = None,
     ) -> ManagedKernel:
-        entries = discover_python_skills(
-            skill_roots=self.skill_roots, project_roots=self.project_skill_roots, cwd=work_dir
-        )
-        configured = {entry.import_name for entry in entries}
-        entries.extend(
-            entry for entry in discover_python_skills(skill_roots=[_BUILTIN_SKILLS_DIR])
-            if entry.import_name not in configured
-        )
+        if replacing is not None:
+            entries = replacing.skill_entries
+        else:
+            entries = discover_python_skills(
+                skill_roots=self.skill_roots, project_roots=self.project_skill_roots, cwd=work_dir
+            )
+            configured = {entry.import_name for entry in entries}
+            entries.extend(
+                entry for entry in discover_python_skills(skill_roots=[_BUILTIN_SKILLS_DIR])
+                if entry.import_name not in configured
+            )
         ownership_fd = ownership.fileno()
         snapshot, manifest = snapshot_paths(self.data_dir, storage)
         bootstrap_code = (
@@ -326,7 +332,8 @@ class KernelManager:
             "__import__('python_repl_core.snapshot_store', fromlist=['register_snapshot'])"
             f".register_snapshot({str(snapshot)!r}, {str(manifest)!r})\n"
             "__import__('agy_python_repl.bootstrap', fromlist=['install_antigravity_surface'])"
-            f".install_antigravity_surface({[asdict(entry) for entry in entries]!r})"
+            f".install_antigravity_surface({[asdict(entry) for entry in entries]!r}, "
+            f"copy_session={str(self.data_dir / 'recovery' / storage)!r})"
         )
         client = KernelClient(
             python_exe=self.python_exe,
@@ -354,12 +361,16 @@ class KernelManager:
                 raise KernelProtocolError("Kernel bootstrap returned an invalid skill report")
 
             restored = None
-            if self.auto_snapshot:
-                restored = await client.restore_if_present(snapshot, manifest)
+            if self.auto_snapshot or restore_from is not None:
+                source = restore_from or SnapshotPair(snapshot, manifest)
+                restored = await client.restore_if_present(source.payload, source.manifest)
                 if restored is not None:
                     restored.update(_name_warning(key, storage))
         except BaseException:
-            await client.shutdown()
+            if replacing is None:
+                await client.shutdown()
+            else:
+                await self._close_for_restart(client)
             raise
 
         managed = ManagedKernel(
@@ -368,6 +379,7 @@ class KernelManager:
             ownership=ownership,
             client=client,
             cwd=work_dir,
+            skill_entries=entries,
             skill_report=report,
             pending_restore_notice=restored,
             snapshot_protected=restored is not None and not restored["restored"],
@@ -432,7 +444,8 @@ class KernelManager:
             self._history = self._history[-100:]
         return out
 
-    async def _save_snapshot(self, managed: ManagedKernel, snapshot: Path, manifest: Path) -> dict[str, Any]:
+    @staticmethod
+    def _record_snapshot_name(managed: ManagedKernel, snapshot: Path) -> None:
         if managed.storage.parent != Path("."):
             marker = snapshot.with_suffix(".name")
             if marker.is_file():
@@ -447,7 +460,91 @@ class KernelManager:
                     os.replace(temp.name, marker)
                 finally:
                     Path(temp.name).unlink(missing_ok=True)
+
+    async def _save_snapshot(self, managed: ManagedKernel, snapshot: Path, manifest: Path) -> dict[str, Any]:
+        self._record_snapshot_name(managed, snapshot)
         return await managed.client.snapshot(snapshot, manifest)
+
+    async def _restart_kernel(self, key: str, cwd: Path | None) -> dict[str, Any]:
+        async with self._locks.setdefault(key, asyncio.Lock()):
+            original = self._kernels.get(key)
+            if original is None or not original.client.alive:
+                return {"kernel": key, "status": "error", "original_kept": False,
+                        "error": "This service has no active process for this kernel. Open it in its owning session."}
+            refusal = {"kernel": key, "status": "error", "original_kept": True}
+            if original.snapshot_protected:
+                return {**refusal, "error": _SNAPSHOT_PROTECTION_MESSAGE}
+
+            snapshot, manifest = snapshot_paths(self.data_dir, original.storage)
+            replacement = None
+            try:
+                requested = cwd.resolve(strict=True) if cwd is not None else original.cwd
+                # A crash during a refused restart must not flush unverified variables to the public pair.
+                prepare = "__import__('rlm.repl', fromlist=['_last_snapshot_target'])._last_snapshot_target = None"
+                if requested is not None and requested != original.cwd:
+                    if not requested.is_dir():
+                        raise NotADirectoryError(requested)
+                    work_dir = requested
+                    await _control_cell(original.client, prepare, "Preparing the live kernel for restart")
+                else:
+                    where = await _control_cell(
+                        original.client, prepare + "\n__import__('builtins').print(__import__('json').dumps(__import__('os').getcwd()))",
+                        "Reading the live kernel directory",
+                    )
+                    work_dir = Path(json.loads(where.stdout))
+                snapshot.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.TemporaryDirectory(prefix=".restart-", dir=snapshot.parent, ignore_cleanup_errors=True) as directory:
+                    staged = SnapshotPair(Path(directory) / snapshot.name, Path(directory) / manifest.name)
+                    await _control_cell(
+                        original.client,
+                        "__import__('python_repl_core.snapshot_store', fromlist=['write_restart_snapshot'])"
+                        f".write_restart_snapshot(__import__('builtins').globals(), {str(staged.payload)!r}, {str(staged.manifest)!r})",
+                        "Saving the private restart snapshot",
+                    )
+                    saved = read_manifest(staged)
+                    saved_names = saved.get("savedNames")
+                    if not isinstance(saved_names, list) or not isinstance(saved.get("skipped"), list):
+                        return {**refusal, "error": "The snapshot did not report which variables it saved or skipped."}
+                    if saved["skipped"]:
+                        return {**refusal, "error": "Some variables could not be saved.", "skipped": saved["skipped"]}
+
+                    replacement = await self._start_kernel(
+                        key, original.storage, original.ownership, work_dir, replacing=original, restore_from=staged,
+                    )
+                    report = replacement.pending_restore_notice or {}
+                    restored = report.get("restored_names", [])
+                    if not report.get("restored") or sorted(restored) != sorted(saved_names):
+                        return {**refusal, "error": report.get("reason") or "The new kernel could not restore every saved variable.",
+                                "failed": report.get("failed", [])}
+                    self._record_snapshot_name(original, snapshot)
+                    target = SnapshotPair(snapshot, manifest)
+                    while not try_publish_prepared_snapshot(target, staged):
+                        await asyncio.sleep(0.05)
+                    report["snapshot_path"] = str(snapshot)
+                    replacement.cwd = requested
+                    self._kernels[key] = replacement
+            except Exception as exc:
+                return {**refusal, "error": f"{type(exc).__name__}: {exc}"}
+            finally:
+                if replacement is not None and self._kernels[key] is original:
+                    await self._close_for_restart(replacement.client)
+
+            try:
+                await self._close_for_restart(original.client)
+            except asyncio.CancelledError:
+                # The pointer and the live process already changed together; report the committed result.
+                pass
+            return {"kernel": key, "status": "ok", "restored": restored}
+
+    @staticmethod
+    async def _close_for_restart(client: KernelClient) -> None:
+        # Keep ownership and the per-name lock until the retiring process exits, even on cancellation.
+        closing = asyncio.create_task(client.shutdown())
+        try:
+            await asyncio.shield(closing)
+        except asyncio.CancelledError:
+            await closing
+            raise
 
     async def kernel_state(
         self,
@@ -478,6 +575,15 @@ class KernelManager:
                 ],
                 "saved_snapshots": saved,
             }
+
+        if action == "restart":
+            # MCP can cancel at every await. The task owns the name lock through candidate cleanup.
+            restarting = asyncio.create_task(self._restart_kernel(key, cwd))
+            try:
+                return await asyncio.shield(restarting)
+            except asyncio.CancelledError:
+                restarting.cancel()
+                raise
 
         async with self._locks.setdefault(key, asyncio.Lock()):
             if action == "reset":

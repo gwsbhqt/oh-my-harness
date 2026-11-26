@@ -42,7 +42,7 @@ import { redactHome } from './redact.ts'
 import { sharedPipeline, type PipelineLike } from './background-tools.ts'
 import type { SubagentsLike } from './agent-runs.ts'
 import { JobNotices, listUnfinished, unfinishedNotice, type HostJobs, type JobsService } from './bash-jobs.ts'
-import { copyKernelSources } from './kernel-sources.ts'
+import { copyKernelSources, sharedCoreRoot } from './kernel-sources.ts'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { reminderSummary, reminderText } from '../../tooling/runtime/notice.mjs'
 
@@ -374,7 +374,8 @@ export class PythonReplRuntime extends PtcRuntime {
     if (cached !== undefined) return cached
     const pending = (async () => {
       const base = await resolvePythonInterpreter(configured)
-      const venv = await kernelEnvironment(base, pluginState('kernel-venv', base.version.split('.').slice(0, 2).join('.')))
+      const dir = pluginState('kernel-venv', base.version.split('.').slice(0, 2).join('.'))
+      const venv = await kernelEnvironment(base, dir, KERNEL_PACKAGES, this.kernelRoot)
       this.ctx.logger?.('python-repl')?.info?.(`python-repl: using Python ${venv.version} (${venv.python}, built from ${base.python})`)
       return venv
     })()
@@ -657,7 +658,9 @@ export class PythonReplRuntime extends PtcRuntime {
     if (session?.started && session.kernelAlive && session.skillReport) {
       const report = session.skillReport
       parts.push(`Skill imports in this kernel: ${JSON.stringify(report.loaded)}.`)
-      if (report.failed.length) parts.push(`Skill import failures: ${report.failed.map(s => `${s.skill}: ${s.reason}`).join('; ')}. Use skills.describe for details; fixing a dependency requires explicit repl.install and repl.restart.`)
+      if (report.failed.length) parts.push(`Skill import failures: ${report.failed.map(s => `${s.skill}: ${s.reason}`).join('; ')}. See skills.describe for details.`)
+      const retryable = report.skills.flatMap(s => s.retryable === true && s.import_name ? [s.import_name] : [])
+      if (retryable.length) parts.push(`After fixing a dependency, use await skills.retry(${JSON.stringify(retryable[0])}) in this kernel. The eligible Python module names are ${JSON.stringify(retryable)}.`)
     } else {
       parts.push('No current kernel import/restore result is available. Do not assume old variables exist; inspect the next startup result.')
     }
@@ -1155,10 +1158,12 @@ export async function kernelEnvironment(
   base: ResolvedInterpreter,
   dir: string,
   packages: readonly string[] = KERNEL_PACKAGES,
+  kernelRoot: string = packageRoot,
 ): Promise<ResolvedInterpreter> {
   const python = join(dir, 'bin', 'python')
   const markerPath = join(dir, '.dsh-kernel-env.json')
-  const wanted = JSON.stringify({ base: base.python, version: base.version, packages })
+  // Older installers could report success after writing outside the venv; repair those environments in place.
+  const wanted = JSON.stringify({ base: base.python, version: base.version, packages, installLayout: 1 })
   let marker: { base?: unknown; version?: unknown } | undefined
   try {
     marker = JSON.parse(readFileSync(markerPath, 'utf8')) as typeof marker
@@ -1173,7 +1178,10 @@ export async function kernelEnvironment(
     if (!existsSync(python) || marker?.base !== base.python || marker?.version !== base.version) {
       await run('uv', ['venv', '--clear', '--python', base.python, dir], { timeout: 120_000 })
     }
-    if (packages.length > 0) await run('uv', ['pip', 'install', '--python', python, ...packages], { timeout: 900_000 })
+    if (packages.length > 0) {
+      const installer = join(sharedCoreRoot(kernelRoot), 'packages.py')
+      await run(python, ['-I', installer, ...packages], { timeout: 900_000 })
+    }
   } catch (error) {
     const detail = error instanceof Error ? error.message.trim().split('\n').slice(-15).join('\n') : String(error)
     throw new Error(

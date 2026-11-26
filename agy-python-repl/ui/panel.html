@@ -159,8 +159,20 @@
       if (result?.isError) throw new Error(text || "Kernel tool failed.");
       const payload = result?.structuredContent ?? (text ? JSON.parse(text) : null);
       if (!payload) throw new Error("The kernel tool returned no data.");
-      if (payload.status === "error") throw new Error(payload.error || payload.reason || "Kernel action failed.");
       return payload;
+    }
+    function restartMessage(kernel, result) {
+      if (result.kernel !== kernel) throw new Error(`No restart result for ${kernel}.`);
+      const issues = [...(result.skipped || []), ...(result.failed || [])];
+      if (result.status === "ok" && Array.isArray(result.restored) && !issues.length) {
+        const count = result.restored.length;
+        return `Restarted ${kernel}. Restored ${count} ${count === 1 ? "variable" : "variables"}.`;
+      }
+      const messages = [result.error || result.reason || `Could not confirm a complete restart of ${kernel}.`];
+      if (result.original_kept === true) messages.push("The original kernel is still running.");
+      for (const item of issues.slice(0, 3)) messages.push(`${item.name} (${item.reason})`);
+      if (issues.length > 3) messages.push(`And ${issues.length - 3} more.`);
+      throw new Error(messages.join(" "));
     }
     function theme(context) {
       const style = document.documentElement.style;
@@ -190,16 +202,22 @@
       async function run(action) {
         if (busy.has(kernel.name)) return;
         busy.add(kernel.name);
+        byId("status").textContent = "";
         for (const item of actions.children) item.disabled = true;
         try {
           const result = unpack(await host.tool("app_kernel_action", { action, kernel: kernel.name }));
+          if (action !== "restart" && result.status === "error") throw new Error(result.error || result.reason || "Kernel action failed.");
           if (action === "vars") { detail.textContent = `Variables: ${result.names.join(", ") || "(empty)"}`; return; }
-          let message;
-          if (action === "snapshot") message = `Snapshot · ${result.saved.length} saved · ${result.skipped.length} skipped`;
-          if (action === "restore") message = `${result.status === "partial" ? "Partial restore" : "Restore"} · ${result.restored.length} restored · ${result.failed.length} failed`;
-          if (action === "reset") message = `Reset ${kernel.name}.`;
-          await refresh();
-          byId("status").textContent = message;
+          try {
+            await refresh();
+          } finally {
+            let message;
+            if (action === "snapshot") message = `Snapshot · ${result.saved.length} saved · ${result.skipped.length} skipped`;
+            if (action === "restore") message = `${result.status === "partial" ? "Partial restore" : "Restore"} · ${result.restored.length} restored · ${result.failed.length} failed`;
+            if (action === "restart") message = restartMessage(kernel.name, result);
+            if (action === "reset") message = `Reset ${kernel.name}.`;
+            byId("status").textContent = message;
+          }
         } finally {
           busy.delete(kernel.name);
           for (const item of actions.children) item.disabled = false;
@@ -213,7 +231,8 @@
         detail.replaceChildren(element("span", prompt), choices);
         choices.firstChild.focus();
       }
-      for (const [name, label] of [["vars", "Variables"], ["snapshot", "Snapshot"], ["restore", "Restore"], ["reset", "Reset"]]) {
+      for (const [name, label] of [["vars", "Variables"], ["snapshot", "Snapshot"], ["restore", "Restore"], ["restart", "Restart"], ["reset", "Reset"]]) {
+        if (name === "restart" && !kernel.alive) continue;
         const control = button(label, () => {
           if (name === "restore" || name === "reset") return confirm(name);
           detail.replaceChildren();
@@ -239,6 +258,7 @@
       if (!rows.length) byId("history").append(element("p", "No cells executed yet.", "muted"));
     }
     function renderOverview(data) {
+      if (data.status === "error") throw new Error(data.error || data.reason || "Kernel overview failed.");
       if (!Array.isArray(data.kernels) || !Array.isArray(data.history)) throw new Error("The tool did not return a kernel overview.");
       revision++;
       overview = data;
