@@ -24,7 +24,7 @@ import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 
 import { discoverSkills, findProjectRoot, resolveSkillRoots, withDisabled, withProjectSkills, type SkillDiscovery, type SkillSummary } from './skill-discovery.ts'
 import { createHash } from 'node:crypto'
 import { ReplSession } from './session.ts'
-import { readPanelLifecycle, readPanelSnapshot } from './snapshot.ts'
+import { INCOMPLETE_RESTORE_NOTICE, readPanelLifecycle, readPanelSnapshot } from './snapshot.ts'
 import { controlRoute, nameRoute, panelRoute, previewRoute, type PanelWebServer } from './panel-route.ts'
 import type { PanelControlAction, PanelControlResult, PanelNameAction, PanelNameResult, PanelState } from './panel-types.ts'
 import type { BoundTool } from './lease.ts'
@@ -615,7 +615,9 @@ export class PythonReplRuntime extends PtcRuntime {
     const state = session?.started && session.kernelAlive ? `running (epoch ${session.epoch})`
       : session?.epoch ? `not running (last epoch ${session.epoch})`
         : 'not started in this process'
-    const parts = [`Python kernel for this session: ${state}. Variables are saved shortly after each successful cell and restored when a new kernel starts; the first cell on a new kernel reports what came back.`,
+    const saveNotice = session?.snapshotProtected ? INCOMPLETE_RESTORE_NOTICE
+      : 'Variables are saved shortly after each successful cell and restored when a new kernel starts; the first cell on a new kernel reports what came back.'
+    const parts = [`Python kernel for this session: ${state}. ${saveNotice}`,
       `Trusted Python skillRoots resolved: ${JSON.stringify(discovery.roots)}. Relative configured roots are resolved against the host configuration base ${JSON.stringify(this.skillRootBase)}, not the session workspace. Static discovery does not execute modules or prove availability.`]
     if (JSON.stringify(discovery.roots) !== JSON.stringify(resolveSkillRoots(this.config.skillRoots, this.skillRootBase))) {
       parts.push('Configuration changed: this existing session retains its startup roots; new sessions use the current configuration.')
@@ -627,7 +629,7 @@ export class PythonReplRuntime extends PtcRuntime {
     if (unterminated.length) parts.push(`Earlier kernel processes not confirmed stopped (pids ${unterminated.join(', ')}); they may still use memory or CPU and are never reused. Closing the session retries stopping them.`)
     // Presence only: details change after almost every cell, and the host
     // appends a fresh runtime-context snapshot whenever this text changes.
-    if (saved) parts.push('A saved Python state exists for this session; it is restored when a new kernel starts.')
+    if (saved && !session?.snapshotProtected) parts.push('A saved Python state exists for this session; it is restored when a new kernel starts.')
     // Changes only at a compaction, so it adds one snapshot then, not one per cell.
     const compacted = await session?.compactionNames(COMPACTION_NAMES_WAIT_MS)
     if (compacted !== undefined && session?.kernelAlive && compacted.epoch === session.epoch) {
@@ -753,7 +755,7 @@ export class PythonReplRuntime extends PtcRuntime {
     const [snapshot, lifecycle] = await Promise.all([readPanelSnapshot(statePath(key)), readPanelLifecycle(statePath(key))])
     const session = this.sessions.get(key)
     const observation = session === undefined ? {
-      alive: false, started: false, busy: false, epoch: 0, python: null, executable: null, cwd: null,
+      alive: false, started: false, busy: false, snapshotProtected: false, epoch: 0, python: null, executable: null, cwd: null,
       skillReport: null, observedAt: null, namespaceStatus: 'unavailable' as const,
       namespaceReason: 'not-started' as const, complete: false,
       scope: 'top-level-excluding-dunder' as const, total: null, names: [],

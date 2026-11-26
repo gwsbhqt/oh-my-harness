@@ -31,7 +31,7 @@ import { describeDenial, LeaseRegistry, type BoundTool } from './lease.ts'
 import { BackgroundGrant, ToolLane, type PipelineLike } from './background-tools.ts'
 import { argumentFix, catalogBindings, isCatalogBinding, TOP_LEVEL_TOOLS, type ToolSchemaLike } from './catalog.ts'
 import { failedTasksNotice, foreignLanguageHint, missingModuleHint, usageHint } from './hints.ts'
-import { RESTORE_TIMEOUT_MS, SNAPSHOT_DEBOUNCE_MS, SNAPSHOT_SUPPORT_TIMEOUT_MS, SNAPSHOT_TIMEOUT_MS, readRestoreReport, restoreNotice, snapshotFiles, snapshotResult, type SnapshotResult, type RestoreSummary, type RestoreReport } from './snapshot.ts'
+import { INCOMPLETE_RESTORE_NOTICE, RESTORE_TIMEOUT_MS, SNAPSHOT_DEBOUNCE_MS, SNAPSHOT_SUPPORT_TIMEOUT_MS, SNAPSHOT_TIMEOUT_MS, readRestoreReport, restoreNotice, snapshotFiles, snapshotResult, type SnapshotResult, type RestoreSummary, type RestoreReport } from './snapshot.ts'
 
 export interface SessionOptions {
   python: string
@@ -201,7 +201,7 @@ export class ReplSession {
     const kernel = this.#kernel
     const epoch = this.#epoch
     const current = (): PanelObservation => ({
-      epoch, alive: kernel?.alive === true, started: kernel?.ready === true,
+      epoch, alive: kernel?.alive === true, started: kernel?.ready === true, snapshotProtected: this.snapshotProtected,
       busy: this.#queuedCells > 0 || this.#starting !== undefined || this.#controlPending !== undefined,
       python: kernel?.pythonVersion || null, executable: null, cwd: null,
       skillReport: this.#skillReport ?? null, observedAt: null,
@@ -349,7 +349,8 @@ export class ReplSession {
     this.#controlPending = work
     try {
       const result = await work
-      return { action, name, ok: result.ok, ...(result.reason === undefined ? {} : { reason: result.reason }) }
+      const reason = result.ok && this.#restoreIncomplete ? '保存已暂停。此操作仅在当前内核生效，关闭前请导出需要的值。' : result.reason
+      return { action, name, ok: result.ok, ...(reason === undefined ? {} : { reason }) }
     } catch (error) {
       return refuse(errorMessage(error))
     } finally {
@@ -373,9 +374,9 @@ export class ReplSession {
     if (this.#disposed) return { action, ok: false, epoch: this.#epoch, reason: '这个会话已经关闭' }
     const kernel = this.#kernel
     if (action === 'start') {
-      if (kernel?.ready === true) return done('内核已经在运行')
-      await this.#ensureStarted(new Map())
-      return done()
+      if (kernel?.ready !== true) await this.#ensureStarted(new Map())
+      if (this.#restoreIncomplete) return done('上次快照仅部分恢复，保存已暂停。新改的变量只在内存中，关闭前请先导出。')
+      return done(kernel?.ready === true ? '内核已经在运行' : undefined)
     }
     if (action === 'stop' || action === 'restart') {
       if (action === 'stop' && kernel === undefined) return done('内核没有在运行')
@@ -535,6 +536,8 @@ export class ReplSession {
     this.#interruptGraceMs = options.interruptGraceMs ?? 5_000
     this.#toolCallTimeoutMs = options.toolCallTimeoutMs ?? 0
   }
+
+  get snapshotProtected(): boolean { return this.started && this.#restoreIncomplete }
 
   get epoch(): number {
     return this.#epoch
@@ -914,7 +917,7 @@ export class ReplSession {
         }
         if (saved.status === 'failed') {
           const message = `Kernel restart failed while saving the snapshot (${saved.reason}). The current kernel is still running. `
-            + 'Code that already ran keeps its effects. After resolving the save problem, retry repl.restart() on its own.'
+            + (this.#restoreIncomplete ? INCOMPLETE_RESTORE_NOTICE : 'Code that already ran keeps its effects. After resolving the save problem, retry repl.restart() on its own.')
           if (result.error === undefined) result.error = { kind: 'exception', message }
           else result.logs.push(`[dsh-python-repl] ${message}`)
           return result
@@ -1038,7 +1041,7 @@ export class ReplSession {
     if (this.#snapshotUnavailable !== undefined) return { status: 'failed', reason: this.#snapshotUnavailable }
     if (this.#restoreIncomplete) return {
       status: 'failed', reason: 'the previous restore was incomplete and the existing snapshot is protected',
-      panelReason: '上次恢复时有数据未能读回，已保留原来的快照。',
+      panelReason: '上次恢复时有数据未能读回，保存已暂停，原快照已保留。关闭宿主前请导出新增或修改的值。',
     }
     if (!kernel.ready) return { status: 'failed', reason: 'the kernel is no longer running' }
     this.#dirty = true
@@ -1409,13 +1412,16 @@ export class ReplSession {
     }
     const saved = existsSync(target.path)
     const notices: string[] = []
-    if (saved && this.#snapshotUnavailable === undefined) {
-      const report = await this.#restoreInto(kernel, target)
+    if (saved) {
+      this.#restoreIncomplete = this.#snapshotUnavailable !== undefined
+      const report = this.#restoreIncomplete ? { restored: [], failed: [], unsaved: [] } : await this.#restoreInto(kernel, target)
+      if (this.#restoreIncomplete) {
+        const guard = await this.#withDeadline(kernel.execute(`protect-archive-${this.#epoch}`,
+          '__import__("lifecycle").state().protected = True'), SNAPSHOT_SUPPORT_TIMEOUT_MS)
+        if (guard === TIMED_OUT || guard.status !== 'ok') throw new Error('Failed to protect the last saved Python archive. The kernel was stopped.')
+      }
       notices.push(restoreNotice(report, await this.#restoreSummary(kernel, report.restored)))
-    }
-    if (saved && this.#snapshotUnavailable !== undefined) {
-      this.#restoreIncomplete = true
-      notices.push(restoreNotice({ restored: [], failed: [], unsaved: [] }))
+      if (this.#restoreIncomplete) notices.push(INCOMPLETE_RESTORE_NOTICE)
     }
     if (this.#snapshotUnavailable !== undefined) {
       notices.push(`[dsh-python-repl] Variables are not saved across kernel restarts in this kernel: ${this.#snapshotUnavailable}.`)

@@ -60,6 +60,7 @@ class KernelClient:
         self._ready_future: asyncio.Future[dict[str, Any]] | None = None
         self._write_lock = asyncio.Lock()
         self._exec_lock = asyncio.Lock()
+        self._shutdown_lock = asyncio.Lock()
         self.python_version: str = ""
         self.alive = False
 
@@ -173,12 +174,14 @@ class KernelClient:
                 fut.set_exception(exc)
         self._pending.clear()
 
-    async def _send(self, payload: dict[str, Any]) -> None:
+    async def _send(self, payload: dict[str, Any], *, done: asyncio.Future[dict[str, Any]] | None = None) -> None:
         if not self._proc or not self._proc.stdin:
             raise KernelProtocolError("Kernel stdin is closed")
         raw = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
         async with self._write_lock:
             self._proc.stdin.write(raw)
+            if done is not None:
+                self._pending[payload["id"]] = done
             await self._proc.stdin.drain()
 
     async def _request(self, req_type: str, timeout_s: float = 30.0, **fields: Any) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -187,10 +190,9 @@ class KernelClient:
         req_id = uuid.uuid4().hex
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[dict[str, Any]] = loop.create_future()
-        self._pending[req_id] = fut
         self._cell_events[req_id] = []
         try:
-            await self._send({"type": req_type, "id": req_id, **fields})
+            await self._send({"type": req_type, "id": req_id, **fields}, done=fut)
             done_frame = await asyncio.wait_for(fut, timeout=timeout_s)
             events = self._cell_events.pop(req_id, [])
             return done_frame, events
@@ -200,17 +202,31 @@ class KernelClient:
             raise
 
     async def execute(self, code: str, *, timeout_s: float = 60.0) -> CellResult:
+        # AnyIO may cancel a request at every await. Give its lock and interrupt
+        # acknowledgement to a task that receives the caller's cancellation once.
+        process = self._proc if self.alive else None
+        cell = asyncio.create_task(self._execute(code, timeout_s, process))
+        try:
+            return await asyncio.shield(cell)
+        except asyncio.CancelledError:
+            cell.cancel()
+            raise
+
+    async def _execute(
+        self, code: str, timeout_s: float, queued_process: asyncio.subprocess.Process | None,
+    ) -> CellResult:
         async with self._exec_lock:
+            if queued_process is not None and (queued_process is not self._proc or not self.alive):
+                raise KernelProtocolError("Kernel stopped before the queued cell could run")
             if not self.alive:
                 await self.start()
             req_id = uuid.uuid4().hex
             loop = asyncio.get_running_loop()
             fut: asyncio.Future[dict[str, Any]] = loop.create_future()
-            self._pending[req_id] = fut
             self._cell_events[req_id] = []
             timed_out = False
             try:
-                await self._send({"type": "execute", "id": req_id, "code": code})
+                await self._send({"type": "execute", "id": req_id, "code": code}, done=fut)
                 try:
                     done_frame = await asyncio.wait_for(asyncio.shield(fut), timeout=timeout_s)
                 except asyncio.TimeoutError:
@@ -219,13 +235,22 @@ class KernelClient:
                     try:
                         done_frame = await asyncio.wait_for(asyncio.shield(fut), timeout=5.0)
                     except asyncio.TimeoutError:
+                        fut.cancel()
                         await self.shutdown()
                         raise KernelProtocolError(f"Cell timed out after {timeout_s}s and failed to interrupt")
-                events = self._cell_events.pop(req_id, [])
-            except BaseException:
-                self._pending.pop(req_id, None)
-                self._cell_events.pop(req_id, None)
+            except asyncio.CancelledError:
+                if req_id in self._pending:
+                    try:
+                        async with asyncio.timeout(5.0):
+                            await self._send({"type": "interrupt", "id": req_id})
+                            await fut
+                    except (OSError, KernelProtocolError):
+                        fut.cancel()
+                        await self.shutdown()
                 raise
+            finally:
+                self._pending.pop(req_id, None)
+                events = self._cell_events.pop(req_id, [])
 
             stdout_parts: list[str] = []
             stderr_parts: list[str] = []
@@ -326,6 +351,11 @@ class KernelClient:
         }
 
     async def shutdown(self) -> None:
+        # A caller replacing a stopped kernel must also wait for an ongoing shutdown.
+        async with self._shutdown_lock:
+            await self._shutdown()
+
+    async def _shutdown(self) -> None:
         self.alive = False
         proc = self._proc
         self._proc = None
@@ -347,6 +377,11 @@ class KernelClient:
                         os.killpg(proc.pid, signal.SIGKILL)
                     except OSError:
                         pass
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=2.0)
+                    except asyncio.TimeoutError as exc:
+                        self._proc = proc
+                        raise KernelProtocolError("Kernel did not exit after SIGKILL") from exc
         if self._reader_task and not self._reader_task.done():
             self._reader_task.cancel()
         self._fail_all(KernelProtocolError("Kernel shut down"))

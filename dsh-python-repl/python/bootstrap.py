@@ -343,9 +343,13 @@ class _Repl:
 
     async def restart(self, reason=None):
         """Replace the kernel once this cell ends; saved variables and installed packages come back."""
+        import lifecycle as _lifecycle
         import packages as _packages
 
-        return _packages.request_restart(reason)
+        request = _packages.request_restart(reason)
+        if _lifecycle.state().protected:
+            return {"restart": "blocked", "effect": _lifecycle.PROTECTED_NOTICE}
+        return request
 
 
 def _lifecycle_ops(action, names):
@@ -358,7 +362,10 @@ def _lifecycle_ops(action, names):
             raise TypeError(f"repl.{action}() takes names as strings, got {type(name).__name__}")
     results = {name: _lifecycle.op(action, name) for name in names}
     failed = {name: r["reason"] for name, r in results.items() if not r["ok"]}
-    return {"ok": not failed, "done": [n for n in names if n not in failed], "failed": failed}
+    result = {"ok": not failed, "done": [n for n in names if n not in failed], "failed": failed}
+    if _lifecycle.state().protected:
+        result["note"] = _lifecycle.PROTECTED_NOTICE
+    return result
 
 
 async def _end_cell(code=None, truncated=False):

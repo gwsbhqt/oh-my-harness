@@ -4,6 +4,7 @@ Shared Python core for persistent Prime REPL kernel hosts (`dsh-python-repl`, `a
 
 Provides:
 - `python_repl_core.kernel_client`: Async stdio JSONL client (protocol 3) for `vendor/prime/rlm/repl.py`.
+- `python_repl_core.snapshot_names` preserves user variable names and shared references between snapshot records.
 - `python_repl_core.preview`: Bounded, read-only object previewer.
 - `python_repl_core.output_budget`: Head/tail output truncation with overflow file spill.
 - `python_repl_core.skill_discovery` & `skills_runtime`: Trusted Python skill discovery and `skills.*` namespace loader.

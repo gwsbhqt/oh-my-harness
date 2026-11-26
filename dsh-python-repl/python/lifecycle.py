@@ -33,6 +33,7 @@ ARCHIVE_DIR = "archive"
 STATE_VERSION = 1
 MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
 MAX_DELETED = 2000
+PROTECTED_NOTICE = "Saving is paused. Changes are in memory only. Export needed values before closing the kernel."
 _SHARED = "shares an object with another live name"
 _archive_checks: ContextVar[set | None] = ContextVar("dsh_archive_checks", default=None)
 _USER_CELL = re.compile(r"cell-\d+-\d+")
@@ -62,6 +63,8 @@ class _State:
         #: names brought back during the current cell, told once at its end
         self.back: list[str] = []
         self.loaded = False
+        # The pre-restore archive remains the only durable copy until a fresh kernel can fully restore it.
+        self.protected = False
 
     @property
     def active(self) -> bool:
@@ -98,7 +101,7 @@ def _archive_path(file: str) -> str:
 
 def save() -> None:
     st = state()
-    if st.dir is None:
+    if st.dir is None or st.protected:
         return
     data = {"version": STATE_VERSION, "cell": st.cell, "archiveAfter": st.archive_after,
             "deleteAfter": st.delete_after, "names": st.names, "pins": sorted(st.pins),
@@ -229,10 +232,11 @@ def _bring_back(name: str, ns: dict) -> str | None:
         if key not in ns:
             ns[key] = extra
     del st.archived[name]
-    try:
-        os.remove(path)
-    except OSError:
-        pass
+    if not st.protected:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
     record = st.names.setdefault(name, {"b": entry.get("b", st.cell)})
     record["t"] = st.cell
     record["k"] = entry.get("k", "data")
@@ -245,6 +249,8 @@ def _archive(name: str, ns: dict) -> str | None:
     import dill
 
     st = state()
+    if st.protected:
+        return "saving is paused after an incomplete restore; the value remains in memory"
     shared = _archive_checks.get()
     if name in (shared if shared is not None else _shared_names(ns, [name])):
         return _SHARED
@@ -293,8 +299,10 @@ def _shared_names(ns: dict, candidates: list[str]) -> set[str]:
 def sweep() -> list[str]:
     """End of a user cell: archive and delete what has gone unused; returns notes for the model."""
     st = state()
-    if not st.active:
-        return []
+    notes = [f"Brought back from the archive: {_names(st.back)}."] if st.back else []
+    st.back = []
+    if not st.active or st.protected:
+        return notes
     ns = _ns()
     live = [name for name in list(ns) if _tracked(name)]
     for name in live:
@@ -348,10 +356,6 @@ def sweep() -> list[str]:
             del st.archived[name]
             _delete(name, entry)
     save()
-    notes = []
-    if st.back:
-        notes.append(f"Brought back from the archive: {_names(st.back)}.")
-        st.back = []
     return notes
 
 
@@ -366,7 +370,7 @@ def after_restore(restored: list) -> dict:
     ns = _ns()
     ordered = bool(st.names)
     for name in restored:
-        if name in st.archived:  # restored from an older snapshot: the live value wins
+        if name in st.archived and not st.protected:  # a complete snapshot supersedes the archive
             try:
                 os.remove(_archive_path(st.archived.pop(name)["file"]))
             except OSError:

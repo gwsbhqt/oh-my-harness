@@ -1,7 +1,9 @@
 """Snapshots keep modules and skill bindings by name (python/snapshot_refs.py), on the vendored snapshot code."""
 import asyncio
 import io
+import json
 import os
+import subprocess
 import sys
 import tempfile
 import types
@@ -27,7 +29,7 @@ import snapshot_refs  # noqa: E402
 class ByName(unittest.TestCase):
     def setUp(self):
         snapshot_refs.install()
-        self.dir = tempfile.mkdtemp()
+        self.dir = self.enterContext(tempfile.TemporaryDirectory())
         self.path = os.path.join(self.dir, "state.dill")
         self.manifest = os.path.join(self.dir, "state.json")
         sys.path.insert(0, self.dir)
@@ -129,6 +131,105 @@ class ByName(unittest.TestCase):
         self.assertIs(value, value[0])
         self.assertIs(value, fresh["second"][0])
         self.assertIsNot(value, fresh["other"])
+
+    def test_user_names_roundtrip_in_both_orders_with_literal_manifest_names(self):
+        pairs = [("_成本", 17), ("dsh_user_成本", 23)]
+        for entries in ([pairs[0]], [pairs[1]], pairs, pairs[::-1]):
+            with self.subTest(entries=entries):
+                namespace = dict(entries)
+                result, fresh = self.roundtrip({**namespace, "_": 1, "__internal": 2})
+                self.assertEqual(fresh, namespace)
+                self.assertEqual(result["saved"], sorted(namespace))
+                self.assertTrue(all(type(name) is str for name in result["saved"]))
+                self.assertEqual(json.loads(Path(self.manifest).read_text())["savedNames"], sorted(namespace))
+                with open(self.path, "rb") as payload:
+                    headers = repl._read_snapshot_records(payload, 1 << 20, 1 << 20)
+                self.assertEqual(set(headers), {"__" + n if n.startswith("dsh_user_") else n for n in namespace})
+
+    def test_prefixed_function_and_aliases_use_live_names(self):
+        values = []
+        ns = {"__name__": "__main__", "_items": values, "dsh_user_items": values,
+              "_dsh_user_items": 41, "dsh_user__items": 7, "holder": {"row": values}}
+        exec("def _read(): return _items, dsh_user_items, _dsh_user_items + dsh_user__items", ns)
+        _, fresh = self.roundtrip(ns)
+        self.assertIs(fresh["holder"]["row"], fresh["_items"])
+        self.assertIs(fresh["_items"], fresh["dsh_user_items"])
+        fresh["_items"] = [2]
+        self.assertEqual(fresh["_read"](), ([2], [], 48))
+        fresh["__dsh_user_items"] = "already in kernel"
+        restored = repl._restore_state(fresh, self.path)
+        self.assertEqual(restored["failed"], [])
+        self.assertEqual(fresh["__dsh_user_items"], "already in kernel")
+
+    def test_size_limits_and_unavailable_bindings_report_original_names(self):
+        broken = self.module("missing_named_ref", "pass\n")
+        ns = {"_big": b"x" * 2048, "dsh_user_big": 3, "dsh_user_bad": broken, "_bad": broken}
+        committed = []
+        saved = repl._snapshot_state(ns, self.path, self.manifest, 1 << 20, 512, True, committed)
+        self.assertEqual(committed, [saved])
+        self.assertEqual(saved["pruned"], ["_big"])
+        self.assertEqual(saved["skipped"][0]["name"], "_big")
+        self.assertEqual(set(ns), {"dsh_user_big", "_bad", "dsh_user_bad"})
+        manifest = json.loads(Path(self.manifest).read_text())
+        self.assertEqual((manifest["pruned"], manifest["skipped"]), (saved["pruned"], saved["skipped"]))
+        del sys.modules[broken.__name__]
+        Path(self.dir, broken.__name__ + ".py").unlink()
+        fresh = {}
+        result = repl._restore_state(fresh, self.path, committed)
+        self.assertEqual(committed[-1], result)
+        self.assertEqual({x["name"] for x in result["failed"]}, {"_bad", "dsh_user_bad"})
+        self.assertEqual(fresh, {"dsh_user_big": 3})
+
+    def test_legacy_headers_restore_functions_and_shared_values(self):
+        rows = [5]
+        ns = {"__name__": "__main__", "_rows": rows, "other": rows}
+        exec("def read_row(): return _rows[0]", ns)
+        self.roundtrip(ns)
+        with open(self.path, "rb") as payload:
+            records = repl._read_snapshot_records(payload, 1 << 20, 1 << 20)
+        records["dsh_user_rows"] = records.pop("_rows")
+        framed = bytearray(repl._SNAPSHOT_MAGIC)
+        for name, blob in records.items():
+            key = name.encode("utf-8")
+            framed.extend(len(key).to_bytes(4, "little") + key + len(blob).to_bytes(8, "little") + blob)
+        for payload in (framed, dill.dumps(records)):
+            with self.subTest(framed=payload is framed):
+                Path(self.path).write_bytes(payload)
+                fresh = {}
+                result = repl._restore_state(fresh, self.path)
+                self.assertEqual(result, {"restored": ["_rows", "other", "read_row"], "failed": []})
+                self.assertIs(fresh["_rows"], fresh["other"])
+                self.assertNotIn("dsh_user_rows", fresh)
+                fresh["_rows"] = [11]
+                self.assertEqual(fresh["read_row"](), 11)
+
+    def test_legacy_literal_prefix_is_host_specific(self):
+        ns = {"__name__": "__main__", "dsh_user_total": 23}
+        exec("def total(): return dsh_user_total", ns)
+        records = {name: dill.dumps(ns[name], recurse=True) for name in ("total", "dsh_user_total")}
+        Path(self.path).write_bytes(dill.dumps(records))
+        fresh = {}
+        restored = repl._restore_state(fresh, self.path)
+        self.assertEqual(restored, {"restored": ["_total", "total"], "failed": []})
+        self.assertEqual(fresh["_total"], 23)
+        self.assertNotIn("dsh_user_total", fresh)
+        with self.assertRaises(NameError):
+            fresh["total"]()
+
+        # A different host starts a fresh kernel and never used the DSH underscore alias.
+        script = """import sys
+import snapshot_refs
+from rlm import repl
+snapshot_refs.install(legacy_underscore_aliases=False)
+ns = {}
+restored = repl._restore_state(ns, sys.argv[1])
+assert restored == {"restored": ["dsh_user_total", "total"], "failed": []}, restored
+assert ns["total"]() == 23 and "_total" not in ns, ns.keys()
+"""
+        env = {**os.environ, "PYTHONPATH": os.pathsep.join(str(ROOT / p) for p in ("vendor/prime", "python/compat", "python"))}
+        child = subprocess.run([sys.executable, "-B", "-c", script, self.path], env=env,
+                               capture_output=True, text=True, timeout=20)
+        self.assertEqual(child.returncode, 0, child.stderr)
 
     def test_preexisting_legacy_snapshot_still_loads(self):
         Path(self.path).write_bytes(dill.dumps({"old": dill.dumps({"rows": [1]})}))

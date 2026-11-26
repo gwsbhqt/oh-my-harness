@@ -35,8 +35,11 @@ class _ReplHelper:
 
 def install_antigravity_surface(skill_entries: list[dict[str, Any]]) -> dict[str, Any]:
     """Prepare the cell namespace and return the skill load report."""
+    import dill._dill as dill_impl
     from rlm import repl as prime
+    from python_repl_core.snapshot_names import install_snapshot_names
 
+    install_snapshot_names(dill_impl, legacy_underscore_aliases=False)
     ns = sys.modules["__main__"].__dict__
     skills_ns = _SkillsNamespace()
     report = skills_ns._register_all(skill_entries)

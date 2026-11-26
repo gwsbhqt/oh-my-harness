@@ -24,6 +24,28 @@ class RestoreIntegrityTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(manager.shutdown_all)
         return manager
 
+    async def test_automatic_save_reports_skipped_variables_before_restart(self) -> None:
+        manager = self.manager()
+        response = await manager.run_code(
+            "for index in range(8):\n    globals()[f'stream_{index}'] = (v for v in range(3))\n"
+            "count = 42\nprint('日' * 6000)\ncount",
+            cwd=self.root,
+        )
+        self.assertEqual((response["status"], response["result"]), ("ok", "42"))
+        self.assertTrue(response["truncated"])
+        self.assertEqual(response["snapshot_skipped_count"], 8)
+        self.assertEqual(Path(response["snapshot_manifest"]), self.manifest)
+        manifest = json.loads(self.manifest.read_text(encoding="utf-8"))
+        skipped = {record["name"] for record in manifest["skipped"]}
+        self.assertEqual(skipped, {f"stream_{i}" for i in range(8)})
+        examples = response["snapshot_skipped_names"]
+        self.assertTrue(0 < len(examples) < len(skipped))
+        self.assertTrue(set(examples) <= skipped)
+        await manager.shutdown_all()
+        resumed = await self.manager().run_code("[count, 'stream_0' in globals()]", cwd=self.root)
+        self.assertEqual(resumed["result"], "[42, False]")
+        self.assertNotIn("snapshot_skipped_count", resumed)
+
     async def test_partial_restore_preserves_the_snapshot_until_its_module_returns(self) -> None:
         with_module = self.root / "with-module"
         without_module = self.root / "without-module"

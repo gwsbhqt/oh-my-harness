@@ -11,10 +11,12 @@
  */
 
 import { strict as assert } from 'node:assert'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { after, before, describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { ReplSession } from '../src/session.ts'
@@ -261,6 +263,52 @@ describe('variables survive a kernel replacement', () => {
     await session.dispose()
     assert.equal(session.kernelAlive, false)
     assert.equal(session.epoch, epoch)
+  })
+
+  it('preserves the last saved archives and reports temporary changes across three hosts', { timeout: 120_000 }, async () => {
+    const dir = mkdtempSync(join(scratch, 'three-hosts-'))
+    const home = join(dir, 'home')
+    const host = join(dir, 'host')
+    mkdirSync(home)
+    const runHost = (phase: string) => promisify(execFile)(process.execPath,
+      [join(here, 'fixtures', 'protected-restore-host.ts'), phase, dir, venvPython],
+      { env: { ...process.env, HOME: home, DSH_HOME: host, PYTHONDONTWRITEBYTECODE: '1' } })
+    await runHost('seed')
+    const states = join(host, 'plugins', 'python-repl', 'state')
+    const sessions = readdirSync(states)
+    assert.equal(sessions.length, 1)
+    const state = join(states, sessions[0]!)
+    const durableFiles = () => {
+      const archive = readdirSync(join(state, 'archive')).sort().map((file) => join('archive', file))
+      return Object.fromEntries(['kernel-state.dill', 'kernel-state.json', 'lifecycle.json', ...archive]
+        .map((file) => [file, readFileSync(join(state, file))]))
+    }
+    const original = durableFiles()
+    assert.equal(readdirSync(join(state, 'archive')).length, 4)
+    const partial = JSON.parse((await runHost('partial')).stdout)
+    assert.deepEqual(durableFiles(), original)
+    assert.equal(partial.start.ok, true)
+    assert.match(partial.start.reason, /保存已暂停/)
+    assert.match(partial.first, /could not be restored.*old/)
+    assert.match(partial.first, /Saving is paused/)
+    assert.match(partial.context, /Saving is paused/)
+    assert.doesNotMatch(partial.context, /saved shortly after each/)
+    assert.match(partial.keep, /memory only/)
+    assert.equal(partial.panelKeep.ok, true)
+    assert.match(partial.panelKeep.reason, /保存已暂停/)
+    assert.equal(partial.archive.ok, false)
+    assert.equal(partial.next, '42')
+    assert.match(partial.beforeClose, /\(99, 42, \['A'\], \['B'\], \['changed'\]\)/)
+    assert.equal(partial.stop.ok, false)
+    assert.match(partial.retry.logs.join('\n'), /memory only/)
+    assert.doesNotMatch(partial.retry.logs.join('\n'), /next cell runs on a fresh kernel/)
+    assert.match(partial.retry.error.message, /previous restore was incomplete/)
+    assert.doesNotMatch(partial.retry.error.message, /retry repl\.restart/)
+    const fresh = JSON.parse((await runHost('reopen')).stdout)
+    assert.match(fresh.restored, /\(42, 7, False, \['A'\], \['B'\], \['C'\], \['D'\]\)/)
+    assert.doesNotMatch(fresh.restored, /Saving is paused/)
+    assert.doesNotMatch(fresh.keep, /memory only/)
+    assert.equal(fresh.archive.ok, true)
   })
 
   it('a failed restore protects the existing snapshot through autosave, restart and final close', { timeout: 120_000 }, async () => {

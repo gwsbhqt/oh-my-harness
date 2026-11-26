@@ -578,7 +578,7 @@ export function KernelPanel({ sessionId }: KernelPanelProps) {
       const query = new URLSearchParams({ session: sessionId, action, name })
       const response = await fetch(`${PANEL_NAME_PATH}?${query}`, { method: 'POST', cache: 'no-store' })
       const result = await response.json() as Partial<PanelNameResult>
-      setNameNote(result.ok === true ? { text: nameDone[action], tone: 'ok' } : { text: result.reason ?? `操作失败（${response.status}）`, tone: 'error' })
+      setNameNote(result.ok === true ? { text: result.reason ?? nameDone[action], tone: result.reason ? 'warn' : 'ok' } : { text: result.reason ?? `操作失败（${response.status}）`, tone: 'error' })
     } catch (err) {
       setNameNote({ text: err instanceof Error ? err.message : String(err), tone: 'error' })
     } finally {
@@ -667,6 +667,9 @@ export function KernelPanel({ sessionId }: KernelPanelProps) {
       <div className="kb-head-side"><KernelControls sessionId={sessionId} state={state} onDone={() => refreshState.current()}/><span className="kb-time">{state ? `更新于 ${clock(now)}` : '等待内核状态'}</span></div>
     </header>
     {stateError && <div role="alert" className="kb-error">{stateError}{state ? '，下面保留上次读取的状态。' : ''}</div>}
+    {state?.snapshotProtected && <div className="kb-notice" data-tone="warn" role="status">
+      上次快照只恢复了一部分，保存已暂停。新增或修改的变量只在当前内核中。关闭或重启前，请先导出要保留的值。
+    </div>}
     <section className="kb-metrics" aria-label="内核概况">
       <div className="kb-metric"><div className="kb-metric-label">名字</div><div className="kb-metric-value">{state?.total ?? '—'}<small>个</small></div>
         <div className="kb-metric-sub" title={state?.namespaceStatus === 'cached' ? `内核正忙，显示 ${clock(state.observedAt)} 读到的目录` : undefined}>{pendingText(state) ?? `自定义 ${stats.origin('user')} · 导入 ${stats.origin('import')} · 系统 ${stats.origin('system')}`}</div>

@@ -20,6 +20,13 @@ it('reads each name\'s bytes without the values; damage and legacy files are rep
     const good = join(dir, 'good.dill')
     writeFileSync(good, Buffer.concat([MAGIC, record('rows', 5000), record('名字', 12), record('x', 0)]))
     assert.deepEqual(await readSnapshotSizes(good), { sizes: { rows: 5000, '名字': 12, x: 0 }, complete: true })
+    const spellings = join(dir, 'spellings.dill')
+    writeFileSync(spellings, Buffer.concat([
+      MAGIC, record('_total', 17), record('__dsh_user_total', 23), record('dsh_user_old', 9),
+    ]))
+    assert.deepEqual(await readSnapshotSizes(spellings), {
+      sizes: { _total: 17, dsh_user_total: 23, dsh_user_old: 9 }, complete: true,
+    })
     const cut = join(dir, 'cut.dill')
     writeFileSync(cut, Buffer.concat([MAGIC, record('a', 10), record('b', 100)]).subarray(0, MAGIC.length + 13 + 10 + 20))
     assert.deepEqual(await readSnapshotSizes(cut), { sizes: { a: 10 }, complete: false })

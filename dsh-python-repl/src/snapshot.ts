@@ -98,7 +98,8 @@ export async function readSnapshotSizes(path: string): Promise<{ sizes: Record<s
       if (bytesRead < 4) { complete = false; break }
       const nameLength = head.readUInt32LE(0)
       if (nameLength > MAX_NAME_BYTES || 4 + nameLength + 8 > bytesRead) { complete = false; break }
-      const name = head.toString('utf8', 4, 4 + nameLength)
+      const storedName = head.toString('utf8', 4, 4 + nameLength)
+      const name = storedName.startsWith('__dsh_user_') ? storedName.slice(2) : storedName
       const blob = Number(head.readBigUInt64LE(4 + nameLength))
       const next = at + 4 + nameLength + 8 + blob
       if (!Number.isSafeInteger(next) || next > info.size) { complete = false; break }
@@ -147,6 +148,7 @@ export interface RestoreSummary {
   archiveAfter: number
 }
 
+export const INCOMPLETE_RESTORE_NOTICE = 'Saving is paused after an incomplete restore. New or changed values, including pinned names, are in memory only. Export needed values before closing or restarting the host.'
 const LIST_LIMIT = 10
 const MODULE_LIMIT = 5
 const LOST_LIMIT = 50

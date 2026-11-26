@@ -186,6 +186,7 @@ class AgyPythonReplTests(unittest.IsolatedAsyncioTestCase):
         kernels = (
             ("tables", "conv-abc:tables"),
             ("conv-abc:tables", "conv-abc:tables"),
+            ("conv-abc__tables", "conv-abc:tables"),
             ("conv-abc", "conv-abc"),
         )
         for kernel, expected in kernels:

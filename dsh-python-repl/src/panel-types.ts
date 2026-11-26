@@ -140,6 +140,7 @@ export interface PanelState {
   alive: boolean
   started: boolean
   busy: boolean
+  snapshotProtected: boolean
   epoch: number
   python: string | null
   executable: string | null

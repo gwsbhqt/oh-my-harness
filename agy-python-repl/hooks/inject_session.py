@@ -16,8 +16,10 @@ def _scope_kernel(raw_kernel: object, conv_id: str) -> str:
     kernel = raw_kernel if isinstance(raw_kernel, str) and raw_kernel.strip() else "default"
     if kernel in ("default", conv_id):
         return conv_id
-    if kernel.startswith(f"{conv_id}:") or kernel.startswith(f"{conv_id}__"):
+    if kernel.startswith(f"{conv_id}:"):
         return kernel
+    if kernel.startswith(f"{conv_id}__"):
+        return f"{conv_id}:{kernel.removeprefix(f'{conv_id}__')}"
     return f"{conv_id}:{kernel}"
 
 

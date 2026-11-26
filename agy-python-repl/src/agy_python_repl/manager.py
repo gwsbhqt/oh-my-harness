@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import hashlib
 import json
 import os
+import re
 import sys
+import tempfile
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -16,6 +19,27 @@ import python_repl_core
 from python_repl_core.kernel_client import CellResult, KernelClient, KernelProtocolError
 from python_repl_core.output_budget import bound_text
 from python_repl_core.skill_discovery import discover_python_skills
+
+
+_NAMED_DIR = "named-v2"
+_UUID = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
+_LEGACY_NAME_WARNING = (
+    "This flat snapshot was opened by its exact disk spelling. Its original kernel name was not recorded."
+)
+
+
+def _named_storage(name: str) -> Path:
+    return Path(_NAMED_DIR) / hashlib.sha256(name.encode("utf-8")).hexdigest()
+
+
+def _name_warning(name: str, storage: Path) -> dict[str, str]:
+    if storage.parent == Path(".") and name != "default" and not _UUID.fullmatch(name):
+        return {"legacy_name_warning": _LEGACY_NAME_WARNING}
+    return {}
+
+
+def _flat_root(name: str) -> bool:
+    return "__" not in name and len(name) + len(".manifest.json") <= 255 and bool(re.fullmatch(r"[a-z0-9_-]+", name))
 
 
 _BUILTIN_SKILLS_DIR = Path(__file__).resolve().parents[2] / "skills"
@@ -153,6 +177,7 @@ class CellHistoryEntry:
 @dataclass(slots=True)
 class ManagedKernel:
     name: str
+    storage: Path
     client: KernelClient
     cwd: Path | None
     created_at: float = field(default_factory=time.time)
@@ -194,11 +219,51 @@ class KernelManager:
         self._locks: dict[str, asyncio.Lock] = {}
         self._history: list[CellHistoryEntry] = []
 
-    def _sanitize_kernel_name(self, kernel: str) -> str:
-        clean = "".join(ch if (ch.isalnum() or ch in "-_:") else "_" for ch in (kernel or "default"))
-        return clean.replace(":", "__") or "default"
+    def _flat_names(self) -> set[str]:
+        return {
+            p.stem for p in (self.data_dir / "snapshots").glob("*.dill")
+            if p.is_file() and all(ch.isalnum() or ch in "-_" for ch in p.stem)
+        }
 
-    async def _ensure_kernel(self, key: str, *, cwd: Path | None = None) -> ManagedKernel:
+    def _kernel_identity(self, kernel: str) -> tuple[str, Path]:
+        name = kernel or "default"
+        if name in self._kernels:
+            return name, self._kernels[name].storage
+        storage = _named_storage(name)
+        snapshot, _ = self._snapshot_paths(storage)
+        marker = snapshot.with_suffix(".name")
+        if snapshot.is_file() or marker.is_file():
+            if marker.read_bytes() != name.encode("utf-8"):
+                raise ValueError("Snapshot name record does not match the requested kernel")
+            return name, storage
+
+        # Only the first colon is the hook's scope separator. All other characters are literal.
+        old = name.replace(":", "__", 1)
+        if old in self._flat_names():
+            return old, Path(old)
+        # Keep ordinary unscoped conversation roots in the layout used by the session-start hook.
+        if _flat_root(name):
+            plain = Path(name)
+            plain_snapshot, manifest = self._snapshot_paths(plain)
+            # A different spelling may exist on a case- or normalization-insensitive volume.
+            if not plain_snapshot.exists() and (
+                not manifest.exists() or any(p.name == manifest.name for p in manifest.parent.glob("*.manifest.json"))
+            ):
+                return name, plain
+        return name, storage
+
+    def _saved_names(self) -> set[str]:
+        names = self._flat_names()
+        for snapshot in (self.data_dir / "snapshots" / _NAMED_DIR).glob("*.dill"):
+            try:
+                name = snapshot.with_suffix(".name").read_bytes().decode("utf-8")
+            except (OSError, UnicodeError):
+                continue
+            if snapshot.is_file() and _named_storage(name).name == snapshot.stem:
+                names.add(name)
+        return names
+
+    async def _ensure_kernel(self, key: str, storage: Path, *, cwd: Path | None = None) -> ManagedKernel:
         requested = cwd.resolve(strict=True) if cwd is not None else None
         if requested is not None and not requested.is_dir():
             raise NotADirectoryError(f"Kernel working directory is not a directory: {requested}")
@@ -232,8 +297,8 @@ class KernelManager:
             # A -m process pins its initial directory in sys.path. An interactive REPL follows cwd.
             "if __import__('sys').path[:1] == [__import__('os').getcwd()]:\n"
             "    __import__('sys').path[0] = ''\n"
-            "from agy_python_repl.bootstrap import install_antigravity_surface as _install\n"
-            f"_install({[asdict(entry) for entry in entries]!r})"
+            "__import__('agy_python_repl.bootstrap', fromlist=['install_antigravity_surface'])"
+            f".install_antigravity_surface({[asdict(entry) for entry in entries]!r})"
         )
         client = KernelClient(
             python_exe=self.python_exe,
@@ -261,13 +326,16 @@ class KernelManager:
 
             restored = None
             if self.auto_snapshot:
-                restored = await client.restore_if_present(*self._snapshot_paths(key))
+                restored = await client.restore_if_present(*self._snapshot_paths(storage))
+                if restored is not None:
+                    restored.update(_name_warning(key, storage))
         except BaseException:
             await client.shutdown()
             raise
 
         managed = ManagedKernel(
             name=key,
+            storage=storage,
             client=client,
             cwd=work_dir,
             skill_report=report,
@@ -285,9 +353,9 @@ class KernelManager:
         timeout_seconds: float = 60.0,
         cwd: Path | None = None,
     ) -> dict[str, Any]:
-        key = self._sanitize_kernel_name(kernel)
+        key, storage = self._kernel_identity(kernel)
         async with self._locks.setdefault(key, asyncio.Lock()):
-            managed = await self._ensure_kernel(key, cwd=cwd)
+            managed = await self._ensure_kernel(key, storage, cwd=cwd)
             started = time.monotonic()
             res: CellResult = await managed.client.execute(code, timeout_s=timeout_seconds)
             elapsed_ms = int((time.monotonic() - started) * 1000)
@@ -298,13 +366,18 @@ class KernelManager:
             if managed.snapshot_protected:
                 out["snapshot_warning"] = _SNAPSHOT_PROTECTION_MESSAGE
             elif self.auto_snapshot and not res.timed_out:
+                snapshot, manifest = self._snapshot_paths(storage)
                 try:
-                    saved = await managed.client.snapshot(*self._snapshot_paths(key))
+                    saved = await self._save_snapshot(managed, snapshot, manifest)
                 except Exception as exc:
                     out["snapshot_error"] = f"{type(exc).__name__}: {exc}"
                 else:
                     if saved.get("status") != "ok":
                         out["snapshot_error"] = saved.get("reason") or "Kernel could not save the snapshot"
+                    elif skipped := saved.get("skipped"):
+                        out["snapshot_skipped_count"] = len(skipped)
+                        out["snapshot_skipped_names"] = [bound_text(item["name"], max_chars=96).text for item in skipped[:3]]
+                        out["snapshot_manifest"] = str(manifest)
             if managed.pending_restore_notice is not None:
                 out["restored"] = managed.pending_restore_notice
                 managed.pending_restore_notice = None
@@ -312,7 +385,7 @@ class KernelManager:
         if res.error is not None:
             out["error"] = res.error
 
-        out = _output_receipt(out, res, self.data_dir / "overflow" / key, self.max_output_chars)
+        out = _output_receipt(out, res, self.data_dir / "overflow" / storage, self.max_output_chars)
 
         self._history.append(
             CellHistoryEntry(
@@ -329,9 +402,26 @@ class KernelManager:
             self._history = self._history[-100:]
         return out
 
-    def _snapshot_paths(self, key: str) -> tuple[Path, Path]:
-        snap_dir = self.data_dir / "snapshots"
-        return snap_dir / f"{key}.dill", snap_dir / f"{key}.manifest.json"
+    def _snapshot_paths(self, storage: Path) -> tuple[Path, Path]:
+        stem = self.data_dir / "snapshots" / storage
+        return stem.with_name(stem.name + ".dill"), stem.with_name(stem.name + ".manifest.json")
+
+    async def _save_snapshot(self, managed: ManagedKernel, snapshot: Path, manifest: Path) -> dict[str, Any]:
+        if managed.storage.parent != Path("."):
+            marker = snapshot.with_suffix(".name")
+            if marker.is_file():
+                if marker.read_bytes() != managed.name.encode("utf-8"):
+                    raise ValueError("Snapshot name record does not match the requested kernel")
+            else:
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                temp = tempfile.NamedTemporaryFile(dir=marker.parent, delete=False)
+                try:
+                    with temp:
+                        temp.write(managed.name.encode("utf-8"))
+                    os.replace(temp.name, marker)
+                finally:
+                    Path(temp.name).unlink(missing_ok=True)
+        return await managed.client.snapshot(snapshot, manifest)
 
     async def kernel_state(
         self,
@@ -340,18 +430,15 @@ class KernelManager:
         kernel: str = "default",
         cwd: Path | None = None,
     ) -> dict[str, Any]:
-        key = self._sanitize_kernel_name(kernel)
+        key, storage = self._kernel_identity(kernel)
 
         if action == "list":
-            snap_dir = self.data_dir / "snapshots"
             def _belongs(name: str) -> bool:
-                return key == "default" or name == key or name.startswith(f"{key}__")
+                if key == "default" or name == key:
+                    return True
+                return ":" not in key and "__" not in key and name.startswith((f"{key}:", f"{key}__"))
 
-            saved = (
-                sorted(p.stem for p in snap_dir.glob("*.dill") if _belongs(p.stem))
-                if snap_dir.is_dir()
-                else []
-            )
+            saved = sorted(name for name in self._saved_names() if _belongs(name))
             return {
                 "active_kernels": [
                     {
@@ -372,21 +459,25 @@ class KernelManager:
                 existing = self._kernels.pop(key, None)
                 if existing:
                     await existing.client.shutdown()
-                for path in self._snapshot_paths(key):
+                snapshot, manifest = self._snapshot_paths(storage)
+                paths = [snapshot, manifest]
+                if storage.parent != Path("."):
+                    paths.append(snapshot.with_suffix(".name"))
+                for path in paths:
                     if path.is_file():
                         path.unlink()
                 return {"kernel": key, "status": "reset"}
 
-            managed = await self._ensure_kernel(key, cwd=cwd)
+            managed = await self._ensure_kernel(key, storage, cwd=cwd)
             if action == "vars":
                 info = await managed.client.list_names()
                 return {"kernel": key, "names": info.get("names", [])}
 
-            snap_path, manifest_path = self._snapshot_paths(key)
+            snap_path, manifest_path = self._snapshot_paths(storage)
             if action == "snapshot":
                 if managed.snapshot_protected:
                     return {"kernel": key, "status": "error", "error": _SNAPSHOT_PROTECTION_MESSAGE}
-                done = await managed.client.snapshot(snap_path, manifest_path)
+                done = await self._save_snapshot(managed, snap_path, manifest_path)
                 return {"kernel": key, "snapshot_path": str(snap_path), **done}
 
             if action == "restore":
@@ -402,7 +493,7 @@ class KernelManager:
                     status = "ok"
                     managed.snapshot_protected = False
                 managed.pending_restore_notice = None
-                return {"kernel": key, "snapshot_path": str(snap_path), **done, "status": status}
+                return {"kernel": key, "snapshot_path": str(snap_path), **done, "status": status, **_name_warning(key, storage)}
 
             raise ValueError(f"Unknown kernel_state action: {action!r}")
 
@@ -417,6 +508,9 @@ class KernelManager:
                     "last_used_at": k.last_used_at,
                 }
                 for k in self._kernels.values()
+            ] + [
+                {"name": name, "alive": False, "python": "", "skills_loaded": [], "last_used_at": None}
+                for name in sorted(self._saved_names() - self._kernels.keys())
             ],
             "history": [
                 {

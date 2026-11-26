@@ -4,10 +4,10 @@ Use a persistent Python session in Antigravity for data analysis, batch reads, c
 
 ## Features
 
-- **Stateful Python kernels (`run_code`)**: top-level `await`, variables and functions preserved across cells, named kernels (`default` or custom names).
+- **Stateful Python kernels (`run_code`)** support top-level `await` and preserve variables and functions across cells. Kernel names retain spaces, case, and Unicode across restarts. Use the name shown in the kernel list to reopen an older snapshot. Older snapshots only record their disk spelling.
 - **Output previews**: long stdout, stderr and result previews include paths to the captured text under `PLUGIN_DATA`. Python objects stay available in the kernel. The result file contains the displayed representation.
 - **Python skills (`skills.*`)**: discovers trusted skills under `~/.agents/skills` and `<repo>/.agents/skills`. The bundle includes [`agy-use`](skills/agy-use/SKILL.md) for inspecting the installed CLI and plugins, and running a task in a selected workspace.
-- **Snapshot persistence (`kernel_state`)**: save and restore serializable Python variables across restarts. A failed or partial restore protects the previous snapshot and reports what happened.
+- **Snapshot persistence (`kernel_state`)**: save and restore serializable Python variables across restarts, including single-underscore names. A list referenced by two names or by a dictionary remains one list after recovery. When a variable cannot be saved, the cell reports the number skipped and sample names. The latest snapshot manifest lists every skipped name and its reason. A failed or partial restore protects the previous snapshot and reports what happened.
 - **Kernel Inspector (`aux_pane` UI)**: Antigravity MCP App side-pane view for inspecting live variables and cell history.
 
 ## Requirements
