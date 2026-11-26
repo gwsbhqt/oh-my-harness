@@ -5,6 +5,7 @@ Run:  python3 -m unittest discover -s tests -p "test_*.py" -v   (from the skill 
 import asyncio
 import json
 import os
+import pickle
 import sys
 import tempfile
 import unittest
@@ -33,6 +34,41 @@ SNAP = {"snapshot": "fixture-token", "ok": True, "mode": "snap", "app": {"name":
             {"idx": 3, "role": "AXButton", "label": "全部清除", "axid": "AllClear", "actions": ["Press"], "enabled": False},
             {"idx": 4, "role": "AXTextField", "label": "搜索", "value": "abc", "actions": [], "enabled": True},
         ]}
+
+
+class _SlottedComputerUseError(computer_use.ComputerUseError):
+    __slots__ = ("receipt",)
+
+    def __init__(self, receipt):
+        super().__init__("partial result", None, "fixture", data=receipt, host="local", outcome="unknown")
+        self.receipt = receipt
+
+
+class ErrorPersistence(unittest.TestCase):
+    def test_saved_errors_keep_type_args_status_and_shared_receipt(self):
+        with self.assertRaises(computer_use.ComputerUseError) as raised:
+            asyncio.run(computer_use.autofill("fixture", host="local"))
+        actual = raised.exception
+        receipt = {"events": []}
+        actual.extra = receipt
+        actual.add_note("fixture note")
+        detail = _SlottedComputerUseError(receipt)
+        detail.args = ("custom message", 7)
+
+        restored, restored_detail, shared = pickle.loads(pickle.dumps((actual, detail, receipt)))
+        self.assertIs(type(restored), computer_use.ComputerUseError)
+        self.assertEqual(restored.args, actual.args)
+        self.assertEqual(str(restored), str(actual))
+        self.assertEqual((restored.code, restored.command, restored.outcome), (4, "autofill", "not_sent"))
+        self.assertEqual(restored.__notes__, actual.__notes__)
+        self.assertIs(restored.extra, shared)
+        self.assertIs(type(restored_detail), _SlottedComputerUseError)
+        self.assertEqual(restored_detail.args, detail.args)
+        self.assertEqual(
+            (restored_detail.code, restored_detail.host, restored_detail.outcome), (None, "local", "unknown"),
+        )
+        self.assertIs(restored_detail.receipt, shared)
+        self.assertIs(restored_detail.data, shared)
 
 
 class Case(unittest.TestCase):

@@ -1,6 +1,7 @@
 """Contracts shared by the Cra and Chrome backends."""
 from __future__ import annotations
 
+import copyreg
 import json
 import math
 from importlib.resources import files
@@ -64,11 +65,26 @@ TOOL_DESCRIPTIONS = {
 class BrowserError(Exception):
     """A rejected call or an operation whose result could not be confirmed."""
 
+    __snapshot_exception_fields__ = {"code": str, "outcome": str, "data": object}
+
     def __init__(self, code: str, message: str, *, outcome: str = "not_sent", data=None):
         super().__init__(message)
         self.code = code
         self.outcome = outcome
         self.data = data
+
+    def __reduce__(self):
+        # Use __new__ because args may hold only the display message.
+        return copyreg.__newobj__, (type(self), *self.args), self.__getstate__()
+
+    def __setstate__(self, state):
+        if isinstance(state, tuple):
+            # object.__getstate__ keeps slot values separate for subclasses that define slots.
+            attrs, slots = state
+            self.__dict__.update(attrs or {})
+            super().__setstate__(slots)
+        else:
+            super().__setstate__(state)
 
     def as_dict(self):
         result = {"code": self.code, "message": str(self), "outcome": self.outcome}

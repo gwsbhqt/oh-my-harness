@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import os
 import sys
+from pathlib import Path
 from typing import Any
 
 from python_repl_core import prelude
 from python_repl_core.preview import preview as _preview
 from python_repl_core.skills_runtime import _SkillsNamespace, install_skills_import_guard
+
+SKILL_RETRY_MIME = "application/vnd.agy-python-repl.skill-retry+json"
 
 
 class _SnapshotSkipNames(set[str]):
@@ -27,10 +31,27 @@ class _ReplHelper:
     def preview(self, value: Any, *, chars: int = 4000, items: int = 20, depth: int = 8) -> dict[str, Any]:
         return _preview(value, chars=chars, items=items, depth=depth)
 
+    async def install(self, *specs: str, upgrade: bool = False, timeout: float | None = 900) -> dict[str, Any]:
+        """Install analysis libraries in the plugin environment and refresh the running kernel."""
+        from python_repl_core import packages
+
+        data = os.environ.get("PLUGIN_DATA")
+        constraints = os.environ.get("AGY_PYTHON_REPL_CONSTRAINTS")
+        if not data or not constraints or Path(sys.prefix).resolve() != (Path(data) / "venv").resolve():
+            raise RuntimeError("repl.install requires the workbench launcher and its PLUGIN_DATA/venv environment")
+        result = await packages.install(list(specs), upgrade=upgrade, timeout=timeout, constraints=constraints)
+        return dict(result)
+
     def vars(self) -> list[str]:
         from rlm import repl as prime
 
         return prime._list_names(vars(sys.modules["__main__"]))
+
+
+def _report_skill_retry(name: str, error: str | None) -> None:
+    from rlm import repl as prime
+
+    prime.emit({SKILL_RETRY_MIME: {"import_name": name, "error": error[:1024] if error else None}})
 
 
 def install_antigravity_surface(skill_entries: list[dict[str, Any]]) -> dict[str, Any]:
@@ -41,7 +62,7 @@ def install_antigravity_surface(skill_entries: list[dict[str, Any]]) -> dict[str
 
     install_snapshot_names(dill_impl, legacy_underscore_aliases=False)
     ns = sys.modules["__main__"].__dict__
-    skills_ns = _SkillsNamespace()
+    skills_ns = _SkillsNamespace(on_retry=_report_skill_retry)
     report = skills_ns._register_all(skill_entries)
     install_skills_import_guard(ns, skills_ns)
 

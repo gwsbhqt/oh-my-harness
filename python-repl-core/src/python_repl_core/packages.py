@@ -99,7 +99,9 @@ class InstallResult(dict):
     __str__ = __repr__
 
 
-async def install(specs: list[str], *, upgrade: bool = False, timeout: float | None = 900) -> InstallResult:
+async def install(
+    specs: list[str], *, upgrade: bool = False, timeout: float | None = 900, constraints: str | None = None,
+) -> InstallResult:
     """Install requirement specs into the kernel venv and make them importable now."""
     if not specs or not all(isinstance(s, str) and s.strip() for s in specs):
         raise ValueError('pass one or more requirement strings: await repl.install("pymupdf", "openpyxl>=3.1")')
@@ -114,16 +116,24 @@ async def install(specs: list[str], *, upgrade: bool = False, timeout: float | N
     target = _site_packages()
     before = _distributions(target)
     seen_pth = {p.name for p in target.glob("*.pth")}
-    argv = [uv, "pip", "install", "--python", sys.executable, *(["--upgrade"] if upgrade else []), *(s.strip() for s in specs)]
+    # Workspace uv.toml can redirect even an explicit --python to a different install target.
+    argv = [uv, "pip", "install", "--no-config", "--python", sys.executable]
+    if constraints is not None:
+        argv.extend(["--constraints", "-"])
+    if upgrade:
+        argv.append("--upgrade")
+    argv.extend(s.strip() for s in specs)
 
     # The kernel's PYTHONPATH points at the bridge and vendored modules; the
     # installer has no business seeing them.
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
     proc = await asyncio.create_subprocess_exec(
-        *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env,
+        *argv, stdin=asyncio.subprocess.PIPE if constraints is not None else None,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env,
     )
     try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout)
+        stdin = constraints.encode() if constraints is not None else None
+        out, err = await asyncio.wait_for(proc.communicate(stdin), timeout)
     except asyncio.TimeoutError:
         proc.kill()
         await proc.wait()

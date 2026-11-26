@@ -126,6 +126,43 @@ describe('variables survive a kernel replacement', () => {
     assert.doesNotMatch(text(later), /python-state-restored/, 'the notice is told once')
   })
 
+  it('restores captured read results and errors from old and new kernels', { timeout: 120_000 }, async () => {
+    const dir = mkdtempSync(join(scratch, 'tool-errors-'))
+    writeFileSync(join(dir, 'present.txt'), 'fixture')
+    const tools = new Map<string, BoundTool>([['read', async (args) => {
+      const path = (args as { file_path: string }).file_path
+      const line = readFileSync(join(dir, path), 'utf8')
+      return { path, offset: 1, totalLines: 1, lines: [{ number: 1, text: line }] }
+    }]])
+    const writer = newSession(dir)
+    const seeded = await writer.runCell([
+      // Older kernels inherited BaseException's reducer, which saves only the message as a constructor argument.
+      'ToolCallError.__reduce__ = BaseException.__reduce__',
+      "batch = dict(zip(('ok', 'error'), await asyncio.gather(read('present.txt'), read('missing.txt'), return_exceptions=True)))",
+      "assert batch['error'].__reduce__()[1] == (str(batch['error']),)",
+      "batch['error_type'] = ToolCallError",
+    ].join('\n'), tools)
+    assert.equal(seeded.error, undefined, JSON.stringify(seeded.error))
+    await writer.dispose()
+
+    for (const generation of [1, 2]) {
+      const reader = newSession(dir)
+      const result = await reader.runCell([
+        "assert batch['ok'].lines[0].text == 'fixture'",
+        "assert type(batch['error']) is ToolCallError and batch['error'].toolName == 'read'",
+        "assert 'missing.txt' in str(batch['error']) and batch['error'].args == (str(batch['error']),)",
+        "assert batch['error']._dsh_args == {'file_path': 'missing.txt'}",
+        "assert batch['error_type'] is ToolCallError",
+        "try: raise batch['error']",
+        "except ToolCallError as caught: assert type(caught) is batch['error_type']",
+        generation === 1 ? 'resaved = True' : 'assert resaved is True',
+      ].join('\n'), noTools())
+      assert.equal(result.error, undefined, JSON.stringify(result))
+      assert.equal(reader.snapshotProtected, false)
+      await reader.dispose()
+    }
+  })
+
   it('system names are rebuilt, never restored (as Prime); the user own names come back', { timeout: 180_000 }, async () => {
     const session = newSession()
     const setup = await session.runCell('json = {"mine": True}\ndef glob(p):\n    return "mine"', noTools())

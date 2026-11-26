@@ -1,5 +1,6 @@
 import asyncio
 import json
+import pickle
 from unittest.mock import AsyncMock
 
 import pytest
@@ -7,6 +8,37 @@ import pytest
 import browser_use
 from browser_use import Browser, BrowserError
 from browser_use.protocol import CONTROL_SCHEMAS, checked_reply, mcp_result, native_value
+
+
+class _SlottedBrowserError(BrowserError):
+    __slots__ = ("receipt",)
+
+    def __init__(self, receipt):
+        super().__init__("fixture_failure", "partial result", outcome="unknown", data=receipt)
+        self.receipt = receipt
+
+
+def test_saved_errors_keep_original_type_args_state_and_shared_receipt():
+    with pytest.raises(BrowserError) as raised:
+        Browser("not-a-browser")
+    actual = raised.value
+    receipt = {"events": []}
+    actual.extra = receipt
+    detail = _SlottedBrowserError(receipt)
+    detail.args = ("custom message", 7)
+    actual.add_note("fixture note")
+
+    restored, restored_detail, shared = pickle.loads(pickle.dumps((actual, detail, receipt)))
+    assert type(restored) is BrowserError
+    assert restored.args == actual.args
+    assert str(restored) == str(actual)
+    assert restored.as_dict() == {"code": "invalid_arguments", "message": str(actual), "outcome": "not_sent"}
+    assert restored.__notes__ == actual.__notes__
+    assert restored.extra is shared
+    assert type(restored_detail) is _SlottedBrowserError
+    assert restored_detail.args == detail.args
+    assert restored_detail.outcome == "unknown"
+    assert restored_detail.receipt is restored_detail.data is shared
 
 
 @pytest.mark.parametrize("name", ["cra", "chrome"])

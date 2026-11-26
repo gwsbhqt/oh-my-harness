@@ -19,7 +19,13 @@ PANEL = Path(__file__).resolve().parents[1] / "ui" / "panel.html"
 class PanelTests(unittest.IsolatedAsyncioTestCase):
     async def test_registered_panel_and_real_kernel_actions(self):
         with tempfile.TemporaryDirectory() as folder:
-            manager = KernelManager(data_dir=Path(folder) / "data", skill_roots=[], project_skill_roots=[])
+            root = Path(folder)
+            skill = root / "skills" / "fixture-reader"
+            package = skill / "src" / "fixture_reader"
+            package.mkdir(parents=True)
+            (skill / "SKILL.md").write_text("---\nname: fixture-reader\ndescription: Fixture\n---\n")
+            (package / "__init__.py").write_text("import fixture_dependency")
+            manager = KernelManager(data_dir=root / "data", skill_roots=[skill.parent], project_skill_roots=[])
             with patch.object(server, "_manager", manager):
                 async with create_connected_server_and_client_session(server.mcp) as client:
                     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
@@ -41,13 +47,41 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
                     await call("run_code", kernel="sample", cwd=folder, code=code)
                     overview = await call("app_kernel_overview")
                     self.assertEqual(await call("open_kernel_panel"), overview)
-                    self.assertEqual(overview["kernels"][0]["name"], "sample")
+                    initial_kernel = overview["kernels"][0]
+                    self.assertEqual(initial_kernel["name"], "sample")
+                    self.assertIn("fixture_dependency", initial_kernel["skills_failed"]["fixture_reader"])
                     self.assertEqual(overview["history"][0]["code_preview"], code)
+                    (skill / "src" / "fixture_dependency.py").touch()
+                    await call("run_code", kernel="sample", code="await skills.retry('fixture-reader')")
+                    refreshed = (await call("app_kernel_overview"))["kernels"][0]
+                    self.assertIn("fixture_reader", refreshed["skills_loaded"])
+                    self.assertNotIn("skills_failed", refreshed)
                     for action, field in (("vars", "names"), ("snapshot", "saved"), ("restore", "restored")):
                         result = await call("app_kernel_action", kernel="sample", action=action)
                         self.assertIn("sample", result[field])
                     await call("app_kernel_action", kernel="sample", action="reset")
                     self.assertEqual((await call("app_kernel_overview"))["kernels"], [])
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js runs the panel's kernel card renderer")
+    def test_kernel_card_shows_loaded_skills_and_bounds_each_failure(self):
+        html = PANEL.read_text(encoding="utf-8")
+        renderer = re.search(r"    function kernelCard\(kernel\) \{.*?\n    \}", html, re.S)[0]
+        checks = r"""
+const assert = require('node:assert/strict');
+const host = {supports: () => false};
+function element(tag, text) {
+  return {text, children: [], append(...nodes) { this.children.push(...nodes); }};
+}
+const kernel = {name: 'fixture', alive: true, python: '3', skills_loaded: ['ready']};
+const failed = kernelCard({...kernel, skills_failed: {reader: 'x'.repeat(250)}});
+assert.equal(failed.children[1].text, 'Loaded skills: ready');
+assert.equal(failed.children[2].text, 'Failed to import reader: ' + 'x'.repeat(199) + '…');
+const recovered = kernelCard({...kernel, skills_loaded: ['reader', 'ready']});
+assert.equal(recovered.children[1].text, 'Loaded skills: reader, ready');
+assert.equal(recovered.children.length, 2);
+"""
+        result = subprocess.run(["node", "-"], input=renderer + checks, text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js runs the panel's browser-independent message transport")
     def test_parent_protocol_and_advertised_capabilities(self):

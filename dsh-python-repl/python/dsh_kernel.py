@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import copyreg
 import json
 import os
 import re
@@ -76,9 +77,15 @@ class ToolCallError(Exception):
     past (technical design §10.2.2).
     """
 
+    __snapshot_exception_fields__ = {"toolName": str}
+
     def __init__(self, tool_name: str, message: str) -> None:
         super().__init__(message)
         self.toolName = tool_name
+
+    def __reduce__(self):
+        # BaseException.args contains the message; constructing this type normally also needs a tool name.
+        return copyreg.__newobj__, (type(self), *self.args), self.__dict__
 
 
 class _ToolResult(dict):

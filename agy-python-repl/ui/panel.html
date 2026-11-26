@@ -178,7 +178,11 @@
       const card = element("article");
       const heading = element("div", undefined, "row");
       heading.append(element("h3", kernel.name), element("span", `${kernel.alive ? "Alive" : "Stopped"} · Python ${kernel.python || "?"}`, "muted"));
-      card.append(heading, element("p", `Skills: ${kernel.skills_loaded.join(", ") || "none"}`, "muted"));
+      card.append(heading, element("p", `Loaded skills: ${kernel.skills_loaded.join(", ") || "none"}`, "muted"));
+      for (const [name, error] of Object.entries(kernel.skills_failed || {})) {
+        const reason = error.length > 200 ? error.slice(0, 199) + "…" : error;
+        card.append(element("p", `Failed to import ${name}: ${reason}`, "muted"));
+      }
       if (!host.supports("serverTools")) return card;
       const actions = element("div", undefined, "actions");
       const detail = element("div", undefined, "names");

@@ -25,12 +25,12 @@ const scratch = mkdtempSync(join(tmpdir(), 'dsh-install-'))
 /** The kernel venv, built by the plugin's own code with no packages so the test needs no index. */
 let venvPython = ''
 const sessions: ReplSession[] = []
-function newSession(): ReplSession {
+function newSession(cwd = scratch): ReplSession {
   const session = new ReplSession({
     python: venvPython,
     vendorRoot: join(root, 'vendor', 'prime'),
     pythonRoot: join(root, 'python'),
-    cwd: scratch,
+    cwd,
   })
   sessions.push(session)
   return session
@@ -100,6 +100,23 @@ describe('repl.install in a live kernel', () => {
     )
     assert.equal(cell.error, undefined, JSON.stringify(cell.error))
     assert.match(text(cell), /'one', 42, \['dshprobe_kernel'\]/)
+  })
+
+  it('installs in the kernel when the project config sets a different pip target', async () => {
+    const project = mkdtempSync(join(scratch, 'project-'))
+    const target = join(project, 'packages')
+    writeFileSync(join(project, 'uv.toml'), `[pip]\ntarget = ${JSON.stringify(target)}\n`)
+    const session = newSession(project)
+    const localWheel = wheel('dshprobe_project', '1.0', 'kernel')
+    const installed = await session.runCell(`await repl.install(${JSON.stringify(localWheel)})`, noTools())
+    assert.equal(installed.error, undefined, JSON.stringify(installed.error))
+    assert.equal(existsSync(join(target, 'dshprobe_project')), false, 'analysis libraries belong in the kernel venv')
+    const imported = await session.runCell(
+      'import dshprobe_project, sys\n(dshprobe_project.VALUE, Path(dshprobe_project.__file__).is_relative_to(sys.prefix))',
+      noTools(),
+    )
+    assert.equal(imported.error, undefined, JSON.stringify(imported.error))
+    assert.match(text(imported), /\('kernel', True\)/)
   })
 
   it('restart replaces the kernel after the cell; packages survive, variables do not', async () => {

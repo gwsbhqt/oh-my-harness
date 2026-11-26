@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import builtins
 import importlib
+import importlib.util
 import sys
-import traceback
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -13,45 +14,47 @@ from typing import Any
 class _SkillsNamespace:
     """Exposes discovered Python skills as `skills.<import_name>`."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, on_retry: Callable[[str, str | None], None] | None = None) -> None:
         self._loaded: dict[str, Any] = {}
         self._entries: dict[str, dict[str, Any]] = {}
-        self._failed: dict[str, dict[str, Any]] = {}
+        self._failed: dict[str, str] = {}
         self._conflicts: dict[str, list[dict[str, Any]]] = {}
+        self._on_retry = on_retry
+
+    def _import_entry(self, entry: dict[str, Any]) -> Exception | None:
+        name, source = entry["import_name"], entry["source_root"]
+        # Another skill or a later cell may have moved this source behind a namesake.
+        if source in sys.path:
+            sys.path.remove(source)
+        sys.path.insert(0, source)
+        try:
+            spec = importlib.util.find_spec(name)
+            origin = Path(spec.origin).resolve() if spec and spec.has_location and spec.origin else None
+            if origin is None or not origin.is_relative_to(source):
+                raise ImportError(f"Cannot import skill {name!r} from its discovered source {source}")
+            self._loaded[name] = importlib.import_module(name)
+        except Exception as exc:
+            self._failed[name] = f"{type(exc).__name__}: {exc}"
+            return exc
+        self._failed.pop(name, None)
+        return None
 
     def _register_all(self, entries: list[dict[str, Any]]) -> dict[str, Any]:
         by_name: dict[str, list[dict[str, Any]]] = {}
         for entry in entries:
             by_name.setdefault(entry["import_name"], []).append(entry)
 
-        loaded: list[str] = []
-        failed: dict[str, str] = {}
-
-        for imp_name, group in by_name.items():
-            # Project skills win over global skills when both exist; duplicate
-            # definitions at the same tier are rejected as ambiguous.
-            project_group = [e for e in group if e.get("is_project")]
-            chosen_group = project_group if project_group else group
-            if len(chosen_group) > 1:
-                self._conflicts[imp_name] = chosen_group
-                failed[imp_name] = f"Ambiguous duplicate skill {imp_name!r}"
+        for name, group in by_name.items():
+            # Project skills win over global skills. Reject duplicate definitions at the chosen tier.
+            chosen = [entry for entry in group if entry.get("is_project")] or group
+            if len(chosen) > 1:
+                self._conflicts[name] = chosen
+                self._failed[name] = f"Ambiguous duplicate skill {name!r}"
                 continue
-
-            entry = chosen_group[0]
-            src_root = entry["source_root"]
-            if src_root not in sys.path:
-                sys.path.insert(0, src_root)
-            try:
-                mod = importlib.import_module(imp_name)
-                self._loaded[imp_name] = mod
-                self._entries[imp_name] = entry
-                loaded.append(imp_name)
-            except Exception as exc:
-                msg = f"{type(exc).__name__}: {exc}"
-                self._failed[imp_name] = {"error": msg, "traceback": traceback.format_exc(), **entry}
-                failed[imp_name] = msg
-
-        return {"loaded": sorted(loaded), "failed": failed}
+            entry = {**chosen[0], "source_root": str(Path(chosen[0]["source_root"]).resolve())}
+            self._entries[name] = entry
+            self._import_entry(entry)
+        return {"loaded": sorted(self._loaded), "failed": self._failed.copy()}
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
@@ -61,33 +64,53 @@ class _SkillsNamespace:
         if name in self._conflicts:
             raise AttributeError(f"Skill {name!r} was not loaded due to duplicate conflict")
         if name in self._failed:
-            raise AttributeError(f"Skill {name!r} failed to import: {self._failed[name]['error']}")
+            raise AttributeError(f"Skill {name!r} failed to import: {self._failed[name]}")
         raise AttributeError(f"No Python skill named {name!r}. Call `await skills.list()` to see available skills.")
 
     def __dir__(self) -> list[str]:
-        return sorted([*self._loaded.keys(), "list", "describe"])
+        return sorted([*self._loaded, "list", "describe", "retry"])
 
     async def list(self) -> list[dict[str, Any]]:
         return [
             {
-                "import_name": imp_name,
+                "import_name": name,
                 "name": entry["name"],
                 "description": entry["description"],
                 "directory": entry["directory"],
+                **({"status": "failed", "error": self._failed[name]} if name in self._failed else {"status": "loaded"}),
             }
-            for imp_name, entry in sorted(self._entries.items())
+            for name, entry in sorted(self._entries.items())
         ]
 
-    async def describe(self, import_name: str) -> dict[str, Any]:
+    def _lookup(self, import_name: str) -> dict[str, Any]:
         key = import_name.replace("-", "_")
         conflicts = self._conflicts.get(key, [])
         if any(import_name in (record["name"], record["import_name"]) for record in conflicts):
             raise KeyError(f"Skill {import_name!r} was not loaded due to duplicate definitions of {key!r}")
-        entry = self._entries.get(key) or self._failed.get(key)
+        entry = self._entries.get(key)
         if entry is None or import_name not in (entry["name"], entry["import_name"]):
             raise KeyError(f"Unknown skill {import_name!r}")
+        return entry
+
+    async def retry(self, import_name: str) -> dict[str, str]:
+        """Retry one failed import from the source selected when this kernel started."""
+        entry = self._lookup(import_name)
+        key = entry["import_name"]
+        if key in self._loaded:
+            return {"import_name": key, "status": "already_loaded"}
+        importlib.invalidate_caches()
+        error = self._import_entry(entry)
+        if self._on_retry:
+            self._on_retry(key, self._failed.get(key))
+        if error is not None:
+            raise error
+        return {"import_name": key, "status": "loaded"}
+
+    async def describe(self, import_name: str) -> dict[str, Any]:
+        entry = self._lookup(import_name)
+        key = entry["import_name"]
         if key in self._failed:
-            raise KeyError(f"Skill {import_name!r} failed to import: {entry['error']}")
+            raise KeyError(f"Skill {import_name!r} failed to import: {self._failed[key]}")
         document = Path(entry["doc_path"])
         try:
             doc = document.read_text(encoding="utf-8-sig")

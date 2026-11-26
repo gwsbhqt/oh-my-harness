@@ -21,6 +21,7 @@ from python_repl_core.output_budget import bound_text
 from python_repl_core.skill_discovery import discover_python_skills
 from python_repl_core.snapshot_store import reset_snapshot
 
+from .bootstrap import SKILL_RETRY_MIME
 from .snapshot_paths import NAMED_DIR, flat_names, has_snapshot, kernel_identity, named_storage, snapshot_paths
 
 
@@ -180,6 +181,24 @@ class ManagedKernel:
     skill_report: dict[str, Any] = field(default_factory=dict)
     pending_restore_notice: dict[str, Any] | None = None
     snapshot_protected: bool = False
+
+    def apply_skill_retry(self, display: dict[str, Any]) -> None:
+        update = display.get(SKILL_RETRY_MIME)
+        if not isinstance(update, dict) or "error" not in update:
+            return
+        name, error = update.get("import_name"), update["error"]
+        failed = self.skill_report["failed"]
+        if not isinstance(name, str) or name not in failed:
+            return
+        if error is None:
+            self.skill_report["loaded"] = sorted([*self.skill_report["loaded"], name])
+            del failed[name]
+        elif isinstance(error, str):
+            failed[name] = error
+
+    def skill_status(self) -> dict[str, Any]:
+        failed = self.skill_report.get("failed", {})
+        return {"skills_loaded": self.skill_report.get("loaded", []), **({"skills_failed": failed.copy()} if failed else {})}
 
 
 class KernelManager:
@@ -343,7 +362,7 @@ class KernelManager:
             await client.shutdown()
             raise
 
-        return ManagedKernel(
+        managed = ManagedKernel(
             name=key,
             storage=storage,
             ownership=ownership,
@@ -353,6 +372,8 @@ class KernelManager:
             pending_restore_notice=restored,
             snapshot_protected=restored is not None and not restored["restored"],
         )
+        client.on_display = managed.apply_skill_retry
+        return managed
 
     async def run_code(
         self,
@@ -450,8 +471,7 @@ class KernelManager:
                         "name": k.name,
                         "alive": k.client.alive,
                         "python": k.client.python_version,
-                        "skills_loaded": k.skill_report.get("loaded", []),
-                        **({"skills_failed": k.skill_report["failed"]} if k.skill_report.get("failed") else {}),
+                        **k.skill_status(),
                     }
                     for k in self._kernels.values()
                     if _belongs(k.name)
@@ -522,7 +542,7 @@ class KernelManager:
                     "name": k.name,
                     "alive": k.client.alive,
                     "python": k.client.python_version,
-                    "skills_loaded": k.skill_report.get("loaded", []),
+                    **k.skill_status(),
                     "last_used_at": k.last_used_at,
                 }
                 for k in self._kernels.values()

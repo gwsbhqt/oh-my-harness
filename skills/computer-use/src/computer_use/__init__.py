@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import copyreg
 import functools
 import contextvars
 import inspect
@@ -112,6 +113,10 @@ NOT_FOUND, STALE, NO_PERMISSION, SENSITIVE = 3, 4, 5, 6
 class ComputerUseError(RuntimeError):
     """computer-use 报的错。code：1 动作失败 / 2 用法错 / 3 找不到应用或元素 / 4 界面已变 / 5 缺权限 / 6 敏感应用拒绝操作。"""
 
+    __snapshot_exception_fields__ = {
+        "code": int | None, "command": str, "data": dict, "host": str | None, "outcome": str | None,
+    }
+
     def __init__(self, message: str, code: int | None, command: str, *, data: dict | None = None, host: str | None = None, outcome: str | None = None):
         super().__init__(message)
         self.code = code
@@ -119,6 +124,19 @@ class ComputerUseError(RuntimeError):
         self.data = data or {}
         self.host = host
         self.outcome = outcome
+
+    def __reduce__(self):
+        # Use __new__ because args may hold only the display message.
+        return copyreg.__newobj__, (type(self), *self.args), self.__getstate__()
+
+    def __setstate__(self, state):
+        if isinstance(state, tuple):
+            # object.__getstate__ keeps slot values separate for subclasses that define slots.
+            attrs, slots = state
+            self.__dict__.update(attrs or {})
+            super().__setstate__(slots)
+        else:
+            super().__setstate__(state)
 
 
 _binary: Path | None = None

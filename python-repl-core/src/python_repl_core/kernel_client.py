@@ -8,6 +8,7 @@ import os
 import signal
 import stat
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -66,6 +67,7 @@ class KernelClient:
         self._shutdown_lock = asyncio.Lock()
         self.python_version: str = ""
         self.alive = False
+        self.on_display: Callable[[dict[str, Any]], None] | None = None
 
     async def start(self) -> None:
         if self.alive:
@@ -145,6 +147,13 @@ class KernelClient:
         req_id = frame.get("id")
         if not isinstance(req_id, str):
             return
+
+        if event == "display" and self.on_display is not None and isinstance(data := frame.get("data"), dict):
+            # This kernel can emit after its originating cell was cancelled or finished.
+            try:
+                self.on_display(data)
+            except (Exception, asyncio.CancelledError) as exc:
+                asyncio.get_running_loop().call_exception_handler({"message": "Kernel display observer failed", "exception": exc})
 
         if event == "host_request":
             # This host does not bridge host tool calls; reply with a clear error.

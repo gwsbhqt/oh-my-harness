@@ -3,6 +3,7 @@ import asyncio
 import io
 import json
 import os
+import pickle
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,7 @@ try:
 except ImportError:  # pragma: no cover - the test venv has dill
     dill = None
 
+from dsh_kernel import ToolCallError  # noqa: E402
 from rlm import repl  # noqa: E402
 import snapshot_refs  # noqa: E402
 
@@ -49,6 +51,62 @@ class ByName(unittest.TestCase):
         restored = repl._restore_state(fresh, self.path, max_bytes=64 << 20, max_variable_bytes=16 << 20)
         self.assertEqual(restored.get("failed"), [], restored)
         return result, fresh
+
+    def test_tool_error_uses_standard_pickle_outside_a_snapshot(self):
+        error = ToolCallError("read", "fixture is unavailable")
+        error._dsh_args = {"file_path": "fixture.txt"}
+        for codec in (pickle, dill):
+            with self.subTest(codec=codec.__name__):
+                batch = codec.loads(codec.dumps({"type": ToolCallError, "error": error}))
+                restored = batch["error"]
+                self.assertIs(batch["type"], ToolCallError)
+                self.assertIs(type(restored), ToolCallError)
+                self.assertEqual((restored.toolName, restored.args, str(restored)),
+                                 ("read", ("fixture is unavailable",), "fixture is unavailable"))
+                self.assertEqual(restored._dsh_args, error._dsh_args)
+
+    def test_only_complete_legacy_tool_errors_restore_in_a_snapshot(self):
+        class OldError:
+            def __init__(self, message, state):
+                self.message, self.state = message, state
+
+            def __reduce__(self):
+                return ToolCallError, (self.message,), self.state
+
+        message = "fictional error"
+        good = OldError(message, {"toolName": "read"})
+        states = {"good": good, "no_state": OldError(message, None),
+                  "no_name": OldError(message, {"other": True}),
+                  "bad_name": OldError(message, {"toolName": 42}),
+                  "bad_message": OldError(42, {"toolName": "read"})}
+        self.assertNotIn("error", repl._snapshot_state(states, self.path, self.manifest, 1 << 20, 1 << 20, False))
+        fresh = {}
+        result = repl._restore_state(fresh, self.path)
+        self.assertEqual(result["restored"], ["good"])
+        self.assertEqual({item["name"] for item in result["failed"]}, states.keys() - {"good"})
+        self.assertEqual((fresh["good"].toolName, fresh["good"].args), ("read", (message,)))
+        with self.assertRaises(TypeError):
+            ToolCallError(message)
+        for codec in (pickle, dill):
+            with self.subTest(codec=codec.__name__), self.assertRaises(TypeError):
+                codec.loads(codec.dumps(good))
+
+    def test_legacy_error_with_a_closed_file_keeps_the_host_file_guard(self):
+        target = Path(self.dir, "preserve.txt")
+        with target.open("w", encoding="utf-8") as handle:
+            handle.write("original")
+
+        class OldError:
+            def __reduce__(self):
+                return ToolCallError, ("failed",), {"toolName": "read", "handle": handle}
+
+        record = OldError()
+        _, restored = self.roundtrip({"batch": [ToolCallError, record, record]})
+        cls, error, alias = restored["batch"]
+        self.assertIs(cls, type(error))
+        self.assertIs(error, alias)
+        self.assertTrue(error.handle.closed)
+        self.assertEqual(target.read_text(encoding="utf-8"), "original")
 
     def test_a_module_comes_back_with_its_current_code_not_old_globals(self):
         mod = self.module("refs_mod_a", "X = 1\ndef f():\n    return X\n")

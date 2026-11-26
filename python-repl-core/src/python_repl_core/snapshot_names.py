@@ -8,6 +8,8 @@ from itertools import chain
 from pathlib import Path
 from typing import Any
 
+from .snapshot_errors import snapshot_error_reader
+
 _installed = False
 
 _LEGACY_PREFIX = "dsh_user_"
@@ -308,7 +310,7 @@ def install_snapshot_names(dill_impl: Any, *, legacy_underscore_aliases: bool) -
         return _decode_record_names(records, state.legacy_names)
 
     def unpickler(dill):
-        base = guarded_unpickler(dill)
+        base = snapshot_error_reader(guarded_unpickler(dill), dill)
         state = _restoring.get()
         if state is None:
             return base

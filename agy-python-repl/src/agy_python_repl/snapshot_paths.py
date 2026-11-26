@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from pathlib import Path
 
@@ -32,12 +33,27 @@ def has_snapshot(payload: Path, manifest: Path) -> bool:
         return True
 
 
+def _flat_name(name: str) -> bool:
+    return bool(name) and all(ch.isalnum() or ch in "-_" for ch in name)
+
+
+def _flat_spelling(payload: Path, manifest: Path) -> bool | None:
+    """True for an exact directory entry, False for a spelling collision, None if absent."""
+    if os.path.lexists(payload) or os.path.lexists(manifest):
+        try:
+            with os.scandir(payload.parent) as entries:
+                return any(entry.name == payload.name or entry.name == manifest.name for entry in entries)
+        except (FileNotFoundError, NotADirectoryError):
+            pass  # A concurrent reset removed the directory after the metadata check.
+    return None
+
+
 def flat_names(data_dir: Path) -> set[str]:
     directory = data_dir / "snapshots"
     candidates = {p.stem for p in directory.glob("*.dill")}
     candidates.update(p.name.removesuffix(".manifest.json") for p in directory.glob("*.manifest.json"))
     return {
-        name for name in candidates if name and all(ch.isalnum() or ch in "-_" for ch in name)
+        name for name in candidates if _flat_name(name)
         and has_snapshot(*snapshot_paths(data_dir, Path(name)))
     }
 
@@ -53,15 +69,14 @@ def kernel_identity(data_dir: Path, name: str) -> tuple[str, Path]:
 
     # Only the first colon is the hook's scope separator. All other characters are literal.
     old = name.replace(":", "__", 1)
-    if old in flat_names(data_dir):
-        return old, Path(old)
-    if ("__" not in name and len(name) + len(".manifest.json") <= 255
+    if not _flat_name(old):
+        return name, storage
+    plain = Path(old)
+    pair = snapshot_paths(data_dir, plain)
+    exact = _flat_spelling(*pair)
+    if exact is True and has_snapshot(*pair):
+        return old, plain
+    if (exact is not False and "__" not in name and len(name) + len(".manifest.json") <= 255
             and re.fullmatch(r"[a-z0-9_-]+", name)):
-        plain = Path(name)
-        plain_snapshot, manifest = snapshot_paths(data_dir, plain)
-        # A different spelling may exist on a case- or normalization-insensitive volume.
-        if not plain_snapshot.exists() and (
-            not manifest.exists() or any(p.name == manifest.name for p in manifest.parent.glob("*.manifest.json"))
-        ):
-            return name, plain
+        return name, plain
     return name, storage

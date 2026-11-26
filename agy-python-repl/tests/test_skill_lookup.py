@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from agy_python_repl.manager import KernelManager
 
@@ -76,6 +78,162 @@ class SkillLookupTests(unittest.IsolatedAsyncioTestCase):
                 result = await self.cell(f"await skills.describe({target!r})")
                 self.assertEqual(result["error"]["ename"], "KeyError")
                 self.assertIn("RuntimeError: fixture initialization failed", result["error"]["evalue"])
+
+    async def test_retry_updates_this_kernel_and_its_host_after_a_dependency_appears(self) -> None:
+        selected = self.add_skill(self.project, code=(
+            "from fixture_first_dependency import value\nfrom fixture_second_dependency import extra\n"
+            "def answer(): return value + extra"
+        ))
+        self.add_skill(self.first, code="raise AssertionError('shadowed global skill ran')")
+        self.add_skill(self.first, name="fixture-other", code="import fixture_untouched_dependency")
+        initial = await self.cell(
+            "marker = object()\nmarker_id = id(marker)\n"
+            "next(row for row in await skills.list() if row['name'] == 'fixture-reader')"
+        )
+        self.assertEqual(initial["status"], "ok", initial)
+        row = ast.literal_eval(initial["result"])
+        self.assertEqual(row["status"], "failed")
+        self.assertIn("fixture_first_dependency", row["error"])
+
+        source = selected.parent / "src"
+        (source / "fixture_first_dependency.py").write_text("value = 40", encoding="utf-8")
+        still_missing = await self.cell("await skills.retry('fixture-reader')")
+        self.assertEqual(still_missing["error"]["ename"], "ModuleNotFoundError")
+        self.assertIn("fixture_second_dependency", still_missing["error"]["evalue"])
+        overview = self.manager.get_overview()["kernels"][0]
+        self.assertIn("fixture_second_dependency", overview["skills_failed"]["fixture_reader"])
+        self.assertIn("fixture_other", overview["skills_failed"])
+        failed = await self.cell("await skills.describe('fixture_reader')")
+        self.assertIn("fixture_second_dependency", failed["error"]["evalue"])
+
+        (source / "fixture_second_dependency.py").write_text("extra = 2", encoding="utf-8")
+        (source / "fixture_untouched_dependency.py").touch()
+        result = await self.cell(
+            "retry_alias = skills.retry\nretry_result = await retry_alias('fixture_reader')\n"
+            "raise RuntimeError('after retry')"
+        )
+        self.assertEqual(result["error"]["evalue"], "after retry")
+        state = (await self.manager.kernel_state("list"))["active_kernels"][0]
+        self.assertIn("fixture_reader", state["skills_loaded"])
+        self.assertEqual(set(state["skills_failed"]), {"fixture_other"})
+        overview = self.manager.get_overview()["kernels"][0]
+        self.assertEqual(overview["skills_loaded"], state["skills_loaded"])
+        self.assertEqual(overview["skills_failed"], state["skills_failed"])
+        usable = await self.cell(
+            "row = next(row for row in await skills.list() if row['name'] == 'fixture-reader')\n"
+            "(retry_result, row['status'], id(marker) == marker_id, skills.fixture_reader.answer(), "
+            "(await skills.describe('fixture-reader'))['doc_path'])"
+        )
+        self.assertEqual(ast.literal_eval(usable["result"]), (
+            {"import_name": "fixture_reader", "status": "loaded"}, "loaded", True, 42, str(selected),
+        ))
+        again = await self.cell(
+            "skills.fixture_reader.answer = lambda: 99\n"
+            "((await skills.retry('fixture-reader'))['status'], skills.fixture_reader.answer())"
+        )
+        self.assertEqual(ast.literal_eval(again["result"]), ("already_loaded", 99))
+
+    async def test_cancelling_the_cell_after_retry_keeps_the_host_in_sync(self) -> None:
+        selected = self.add_skill(self.first, code="import fixture_dependency\nanswer = 42")
+        await self.cell("pass")
+        (selected.parent / "src" / "fixture_dependency.py").touch()
+        running = asyncio.create_task(self.cell(
+            "import asyncio\nawait skills.retry('fixture-reader')\n"
+            "Path('retried').touch()\nawait asyncio.sleep(60)"
+        ))
+        try:
+            async with asyncio.timeout(5):
+                while not (self.root / "retried").exists():
+                    await asyncio.sleep(0.01)
+            self.assertFalse(running.done())
+        finally:
+            running.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await running
+        self.assertEqual((await self.cell("skills.fixture_reader.answer"))["result"], "42")
+        overview = self.manager.get_overview()["kernels"][0]
+        self.assertIn("fixture_reader", overview["skills_loaded"])
+        self.assertNotIn("skills_failed", overview)
+
+    async def test_late_retry_updates_only_the_kernel_that_emitted_it(self) -> None:
+        selected = self.add_skill(self.first, code="import fixture_dependency")
+        await self.cell("pass")
+        await self.manager.run_code("pass", kernel="other", cwd=self.root)
+        (selected.parent / "src" / "fixture_dependency.py").touch()
+        scheduled = await self.cell(
+            "import asyncio\n"
+            "async def later():\n"
+            "    while not Path('release').exists():\n        await asyncio.sleep(0.01)\n"
+            "    await skills.retry('fixture-reader')\n"
+            "background = asyncio.create_task(later())"
+        )
+        self.assertEqual(scheduled["status"], "ok", scheduled)
+        (self.root / "release").touch()
+        async with asyncio.timeout(5):
+            while True:
+                kernels = {k["name"]: k for k in self.manager.get_overview()["kernels"]}
+                if "fixture_reader" in kernels["default"]["skills_loaded"]:
+                    break
+                await asyncio.sleep(0.01)
+        self.assertIn("fixture_reader", kernels["other"]["skills_failed"])
+
+    async def test_display_observer_errors_leave_the_kernel_and_receipt_usable(self) -> None:
+        await self.cell("pass")
+        client = self.manager._kernels["default"].client
+        def bad_observer(display):
+            raise ValueError("observer failed")
+
+        client.on_display = bad_observer
+        loop = asyncio.get_running_loop()
+        with mock.patch.object(loop, "call_exception_handler") as reported:
+            receipt = await client.execute("from rlm.repl import emit\nemit({'text/plain': 'fixture'})\n42")
+        self.assertEqual(str(reported.call_args.args[0]["exception"]), "observer failed")
+        self.assertEqual(receipt.displays, [{"text/plain": "fixture"}])
+        self.assertEqual(receipt.result, "42")
+        self.assertEqual((await self.cell("6 * 7"))["result"], "42")
+
+    async def test_retry_only_selects_previously_discovered_unique_names(self) -> None:
+        self.add_skill(self.first)
+        self.add_skill(self.second, name="fixture_reader")
+        self.add_skill(self.first, name="strict_name", code="import fixture_missing_dependency")
+        await self.cell("pass")
+        self.add_skill(self.first, name="added-later", code="raise AssertionError('new skill executed')")
+        for name, diagnostic in (("fixture-reader", "duplicate"), ("fixture_reader", "duplicate"),
+                                 ("strict-name", "Unknown"), ("added-later", "Unknown")):
+            with self.subTest(name=name):
+                result = await self.cell(f"await skills.retry({name!r})")
+                self.assertEqual(result["error"]["ename"], "KeyError", result)
+                self.assertIn(diagnostic, result["error"]["evalue"])
+
+    async def test_retry_keeps_the_original_target_of_a_linked_source(self) -> None:
+        selected = self.add_skill(self.first, code="import fixture_dependency\nanswer = 42")
+        linked_source = selected.parent / "src"
+        original = self.root / "original-source"
+        linked_source.rename(original)
+        linked_source.symlink_to(original, target_is_directory=True)
+        await self.cell("pass")
+        replacement = self.add_skill(self.second, name="replacement")
+        (replacement.parent / "src" / "replacement").rename(replacement.parent / "src" / "fixture_reader")
+        linked_source.unlink()
+        linked_source.symlink_to(replacement.parent / "src", target_is_directory=True)
+        (original / "fixture_dependency.py").touch()
+        result = await self.cell(
+            "await skills.retry('fixture-reader')\nPath(skills.fixture_reader.__file__).parent"
+            ".relative_to(Path.cwd()).as_posix()"
+        )
+        self.assertEqual(ast.literal_eval(result["result"]), "original-source/fixture_reader")
+
+    async def test_retry_never_executes_a_namesake_outside_the_selected_source(self) -> None:
+        selected = self.add_skill(self.first, code="import fixture_missing_dependency")
+        await self.cell("pass")
+        (selected.parent / "src" / "fixture_reader" / "__init__.py").unlink()
+        (self.root / "fixture_reader.py").write_text(
+            "from pathlib import Path\nPath('wrong-source-ran').touch()", encoding="utf-8"
+        )
+        result = await self.cell("await skills.retry('fixture-reader')")
+        self.assertEqual(result["error"]["ename"], "ImportError", result)
+        self.assertIn(str(selected.parent / "src"), result["error"]["evalue"])
+        self.assertFalse((self.root / "wrong-source-ran").exists())
 
     async def test_selected_python_instructions_become_unreadable(self) -> None:
         selected = self.add_skill(self.first)
