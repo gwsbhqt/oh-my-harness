@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import fcntl
 import json
@@ -37,6 +36,7 @@ def _name_warning(name: str, storage: Path) -> dict[str, str]:
     return {}
 
 
+_BOOTSTRAP_REPORT_MIME = "application/vnd.agy-python-repl.bootstrap+json"
 _BUILTIN_SKILLS_DIR = Path(__file__).resolve().parents[2] / "skills"
 _SNAPSHOT_PROTECTION_MESSAGE = (
     "Saving is paused because the previous snapshot could not be fully restored. "
@@ -331,9 +331,12 @@ class KernelManager:
             "    __import__('sys').path[0] = ''\n"
             "__import__('python_repl_core.snapshot_store', fromlist=['register_snapshot'])"
             f".register_snapshot({str(snapshot)!r}, {str(manifest)!r})\n"
+            "__import__('rlm.repl', fromlist=['emit']).emit({"
+            f"{_BOOTSTRAP_REPORT_MIME!r}: "
             "__import__('agy_python_repl.bootstrap', fromlist=['install_antigravity_surface'])"
             f".install_antigravity_surface({[asdict(entry) for entry in entries]!r}, "
             f"copy_session={str(self.data_dir / 'recovery' / storage)!r})"
+            "})"
         )
         client = KernelClient(
             python_exe=self.python_exe,
@@ -349,10 +352,8 @@ class KernelManager:
         try:
             await client.start()
             boot = await _control_cell(client, bootstrap_code, "Kernel bootstrap")
-            try:
-                report = ast.literal_eval(boot.result or "")
-            except (SyntaxError, ValueError) as exc:
-                raise KernelProtocolError("Kernel bootstrap returned an invalid skill report") from exc
+            report = next((frame[_BOOTSTRAP_REPORT_MIME] for frame in reversed(boot.displays)
+                           if _BOOTSTRAP_REPORT_MIME in frame), None)
             if not (
                 isinstance(report, dict)
                 and isinstance(report.get("loaded"), list)

@@ -35,7 +35,7 @@ agy plugin install "$bundle_dir"
 agy plugin list --json
 ```
 
-New conversations receive the Python workbench hint on their first turn. In an existing conversation, use `run_code` once it appears in that conversation’s tool list. To continue a CLI conversation with its saved variables, pass its original ID as `conversation_id` to `skills.agy_use.run` and use the same workspace. Antigravity handles permission requests for the Python tool. In headless mode, inspect `result.denied_actions` and the tool events when a run returns an empty answer. The CLI can exit successfully after a tool was denied. [Headless mode](https://antigravity.google/docs/cli/headless/) · [Permissions](https://antigravity.google/docs/permissions/)
+New conversations receive the Python workbench hint on their first turn. If a save is in progress, the hint still arrives and the first Python cell waits for the saved state. In an existing conversation, use `run_code` once it appears in that conversation’s tool list. To continue a CLI conversation with its saved variables, pass its original ID as `conversation_id` to `skills.agy_use.run` and use the same workspace. Antigravity handles permission requests for the Python tool. In headless mode, inspect `result.denied_actions` and the tool events when a run returns an empty answer. The CLI can exit successfully after a tool was denied. [Headless mode](https://antigravity.google/docs/cli/headless/) · [Permissions](https://antigravity.google/docs/permissions/)
 
 ## Testing
 

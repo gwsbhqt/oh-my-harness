@@ -6,11 +6,12 @@
 
 ## 函数与命令
 
-所有 Python 函数都使用 `await skills.agy_use.<函数>(...)`。本表中的 `timeout` 以秒计，须为正的有限数值。路径支持字符串和 Python `Path`，在调用时解析为本机绝对路径。`--help` 显示命令参数。
+所有 Python 函数都使用 `await skills.agy_use.<函数>(...)`。本表中的 `timeout` 以秒计。`run` 接受有限的非负数，其他操作接受有限的正数。路径支持字符串和 Python `Path`，在调用时解析为本机绝对路径。`--help` 显示命令参数。
 
 | Python 函数 | 命令参数 | 官方操作 |
 | --- | --- | --- |
 | `status(*, timeout=10)` | `status [--timeout 秒]` | `agy --version` |
+| `models(*, timeout=30)` | `models [--timeout 秒]` | `agy models`，`stdout` 按原格式列出可用模型的 ID 和显示名称 |
 | `plugins(*, timeout=30)` | `plugins [--timeout 秒]` | `agy plugin list --json` |
 | `validate_plugin(path, *, strict=False, timeout=30)` | `validate-plugin 路径 [--strict] [--timeout 秒]` | `agy plugin validate 路径 --json`，可加 `--strict` |
 | `install_plugin(path, *, timeout=60)` | `install-plugin 插件目录 [--timeout 秒]` | `agy plugin install 插件目录` |
@@ -28,6 +29,8 @@ Python 返回字典，命令将同一回执作为 JSON 写到标准输出。`exe
 
 `plugins` 和 `validate_plugin` 把原生 JSON 放在 `data`，校验失败的报告也保留。`install_plugin` 的 `ok` 表示安装命令成功退出；确认插件可用还需核对清单并检查新会话里的实际操作。`run` 的 `events` 保留按顺序读到的事件，完整的结束事件存为 `result`。成功需要进程正常退出、本轮得到 `SUCCESS` 和非空答复，且宿主没有报告被拒绝的动作。续接时还核对结果中的会话编号。工具失败的详情见对应步骤的 `state` 和 `tool_info.error`。[官方非交互模式与事件字段](https://antigravity.google/docs/cli/headless)
 
-`timeout` 限制本地等待时间。`run` 先将期限交给 AGY，再给它最多两秒写回结果；若本地等待也到期，技能终止自己启动的进程，在 POSIX 系统上终止该进程组，返回当时已收到的输出并标记 `timed_out=true`。宿主先返回的错误或中断会保留其原生状态。Python 任务被取消时，技能回收本次进程并传播 `asyncio.CancelledError`。已取得的取消回执位于异常的 `receipt` 属性。取消、超时和断连后，远端请求可能已经执行，检查原会话或安装状态后再决定下一步。
+`run` 默认限时 120 秒。设为 `0` 时，技能传入 `--print-timeout=0`，持续等待当前一轮结束。正数期限先交给 AGY，再留两秒让它写回结果。若本地等待也到期，技能终止自己启动的进程，在 POSIX 系统上终止该进程组，返回当时已收到的输出并标记 `timed_out=true`。宿主先返回的错误或中断保留其原生状态。
+
+取消 Python 任务或在终端按 `Ctrl-C` 时，技能回收本次进程。取得的取消回执带 `cancelled=true`，保留原生退出码、部分 `stdout` 和 `stderr`。Python 传播 `asyncio.CancelledError`，从异常的 `receipt` 属性可取回这份回执。命令行会将已取得的回执写到标准输出并退出 130。取消、超时和断连后，远端请求可能已经执行，检查原会话或安装状态后再决定下一步。
 
 命令保留宿主的非零退出码；信号按 `128 + 信号编号` 返回，本地超时退出 124，键盘中断退出 130。AGY 未能启动，或宿主退出 0 但回执未达到成功条件时，命令退出 1。原生退出码和错误始终保留在回执中。

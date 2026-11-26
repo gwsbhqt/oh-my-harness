@@ -45,7 +45,7 @@ def main() -> None:
     try:
         data = _data_dir()
         _, storage = kernel_identity(data, conv_id)
-        with open_snapshot(*snapshot_paths(data, storage)) as pair:
+        with open_snapshot(*snapshot_paths(data, storage), wait=False) as pair:
             if pair is not None:
                 manifest = read_manifest(pair)
                 msg += " Saved Python REPL snapshot ready. The first cell will restore it."
@@ -54,6 +54,9 @@ def main() -> None:
                     preview_names = ", ".join(str(n) for n in saved_names[:12])
                     more = f" (+{len(saved_names) - 12} more)" if len(saved_names) > 12 else ""
                     msg += f" Saved variables include {preview_names}{more}."
+    except BlockingIOError:
+        # The hook deadline also applies to the routing guidance; the first cell will wait for the snapshot.
+        pass
     except (OSError, ValueError):
         msg += " The saved Python REPL snapshot could not be read. The first cell will report its restore status."
 

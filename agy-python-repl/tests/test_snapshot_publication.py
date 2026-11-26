@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import hashlib
 import json
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -58,9 +60,11 @@ class SnapshotPublicationTests(unittest.IsolatedAsyncioTestCase):
         return result
 
     def hook(self, kernel):
-        proc = subprocess.run([sys.executable, str(ROOT / "hooks" / "session_start.py")], check=True,
+        config = json.loads((ROOT / "hooks.json").read_text())["agy-python-repl-session"]["SessionStart"][0]
+        proc = subprocess.run(shlex.split(config["command"]), cwd=ROOT, timeout=config["timeout"], check=True,
                               input=json.dumps({"conversationId": kernel}), capture_output=True, text=True,
-                              env={"HOME": str(self.root), "PLUGIN_DATA": str(self.data), "PYTHONDONTWRITEBYTECODE": "1"})
+                              env={"HOME": str(self.root), "PLUGIN_DATA": str(self.data), "PYTHONDONTWRITEBYTECODE": "1",
+                                   "PATH": os.pathsep.join((str(Path(sys.executable).parent), os.defpath))})
         return json.loads(proc.stdout)["injectSteps"][0]["systemMessage"]["systemMessage"]
 
     def fail_publication(self):
@@ -78,6 +82,26 @@ class SnapshotPublicationTests(unittest.IsolatedAsyncioTestCase):
             os.replace = fault
         """)
         return f"exec({install!r}, {{}})\n"
+
+    async def test_busy_snapshot_still_gives_full_start_guidance_before_unlock(self):
+        guidance = self.hook("new-conversation")
+        async with self.server() as writer:
+            await self.cell(writer, "first, second = 7, 11")
+            state = await self.call(writer, "kernel_state", action="snapshot")
+        payload = Path(state["snapshot_path"])
+        for directory in (payload.parent, payload.resolve(strict=True).parent):
+            with self.subTest(directory=directory.name):
+                fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX)
+                    self.assertEqual(self.hook("default"), guidance)
+                finally:
+                    os.close(fd)
+        self.assertIn("first, second", self.hook("default"))
+        async with self.server() as reader:
+            restored = await self.cell(reader, "(first, second)")
+            self.assertEqual(restored["result"], "(7, 11)")
+            self.assertEqual(restored["restored"]["status"], "ok")
 
     async def test_failed_publication_preserves_the_previous_bytes_and_value(self):
         async with self.server() as writer:

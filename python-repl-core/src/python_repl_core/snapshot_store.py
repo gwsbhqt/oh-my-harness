@@ -138,18 +138,19 @@ def _locked_dir(path: Path, operation: int, *, nofollow: bool = True):
 
 
 @contextmanager
-def open_snapshot(payload: Path, manifest: Path):
-    """Hold the selected generation against garbage collection or reset, without creating any files."""
+def open_snapshot(payload: Path, manifest: Path, *, wait: bool = True):
+    """Hold the selected generation against collection or reset. With wait=False, a busy lock raises BlockingIOError."""
     pair = _paths(payload, manifest)
+    operation = fcntl.LOCK_SH if wait else fcntl.LOCK_SH | fcntl.LOCK_NB
     with ExitStack() as generation, ExitStack() as parent:
         try:
-            parent.enter_context(_locked_dir(pair.payload.parent, fcntl.LOCK_SH, nofollow=False))
+            parent.enter_context(_locked_dir(pair.payload.parent, operation, nofollow=False))
         except FileNotFoundError:
             yield None
             return
         selected = resolve_snapshot(pair.payload, pair.manifest)
         if selected is not None and selected.generation is not None:
-            generation.enter_context(_locked_dir(selected.payload.parent, fcntl.LOCK_SH))
+            generation.enter_context(_locked_dir(selected.payload.parent, operation))
         if selected is None or selected.generation is not None:
             parent.close()
         yield selected

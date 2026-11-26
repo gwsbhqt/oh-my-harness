@@ -39,6 +39,25 @@ class KernelPreludeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await manager.run_code("repl.vars()"))["result"], "[]")
         self.assertEqual(self.saved_names(), set())
 
+    async def test_last_result_belongs_to_a_user_expression(self) -> None:
+        manager = self.new_manager()
+        empty = await manager.run_code("'_' in globals()", cwd=self.workspace)
+        self.assertEqual(empty["result"], "False")
+
+        first = await manager.run_code("entries = [3, 4, 7]\nentries")
+        self.assertEqual(first["result"], "[3, 4, 7]")
+        self.assertNotIn("result", await manager.run_code("total = sum(entries)"))
+        printed = await manager.run_code("print(total)\nNone")
+        self.assertEqual(printed["stdout"], "14\n")
+        self.assertNotIn("result", printed)
+        other = self.workspace / "another directory"
+        other.mkdir()
+        self.assertEqual((await manager.run_code("_ is entries", cwd=other))["result"], "True")
+
+        await manager.shutdown_all()
+        reopened = await self.new_manager().run_code("('_' in globals(), entries)", cwd=other)
+        self.assertEqual(reopened["result"], "(False, [3, 4, 7])")
+
     async def test_user_rebindings_survive_a_restart_and_reimported_defaults_are_hidden(self) -> None:
         first = self.new_manager()
         initial = await first.run_code(

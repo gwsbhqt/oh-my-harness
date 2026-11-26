@@ -1,4 +1,4 @@
-"""在本机用官方 Antigravity CLI 查询插件、安装本地插件和执行单次会话。"""
+"""在本机用官方 Antigravity CLI 查询模型和插件、安装本地插件和执行单次会话。"""
 from __future__ import annotations
 
 import asyncio
@@ -10,15 +10,15 @@ import shutil
 import signal
 from typing import Any
 
-__all__ = ["status", "plugins", "validate_plugin", "install_plugin", "run"]
+__all__ = ["status", "models", "plugins", "validate_plugin", "install_plugin", "run"]
 
 
-def _seconds(timeout: float) -> float:
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
-        raise ValueError("timeout 必须是正的有限秒数")
-    if not math.isfinite(timeout) or timeout <= 0:
-        raise ValueError("timeout 必须是正的有限秒数")
-    return float(timeout)
+def _seconds(timeout: float, *, allow_zero: bool = False) -> float:
+    if (isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and math.isfinite(timeout)
+            and (timeout > 0 or (allow_zero and timeout == 0))):
+        return float(timeout)
+    expected = "非负" if allow_zero else "正"
+    raise ValueError(f"timeout 必须是{expected}的有限秒数")
 
 
 def _local_path(value: str | Path, *, directory: bool = False) -> Path:
@@ -40,8 +40,7 @@ def _stop(process: asyncio.subprocess.Process) -> None:
         pass
 
 
-async def _command(args: list[str], *, timeout: float, cwd: Path | None = None) -> dict[str, Any]:
-    timeout = _seconds(timeout)
+async def _command(args: list[str], *, timeout: float | None, cwd: Path | None = None) -> dict[str, Any]:
     installed = shutil.which("agy")
     executable = str(Path(installed).absolute() if installed else Path.home() / ".local/bin/agy")
     receipt = {"executable": executable, "ok": False, "exit_code": None, "timed_out": False,
@@ -69,7 +68,7 @@ async def _command(args: list[str], *, timeout: float, cwd: Path | None = None) 
             raise cancelled
         _stop(process)
         stdout, stderr = await (output if output is not None else process.communicate())
-        receipt.update(exit_code=process.returncode, stdout=stdout.decode(errors="replace"),
+        receipt.update(cancelled=True, exit_code=process.returncode, stdout=stdout.decode(errors="replace"),
                        stderr=stderr.decode(errors="replace"))
         cancelled.receipt = receipt
         raise
@@ -96,12 +95,17 @@ def _json_output(receipt: dict[str, Any], expected: type) -> dict[str, Any]:
 
 async def status(*, timeout: float = 10) -> dict[str, Any]:
     """运行 agy --version。executable 是所选入口，版本原文在 stdout。"""
-    return await _command(["--version"], timeout=timeout)
+    return await _command(["--version"], timeout=_seconds(timeout))
+
+
+async def models(*, timeout: float = 30) -> dict[str, Any]:
+    """读取 AGY 可用模型的 ID 和显示名称。stdout 保留目录原文。"""
+    return await _command(["models"], timeout=_seconds(timeout))
 
 
 async def plugins(*, timeout: float = 30) -> dict[str, Any]:
     """读取已安装插件及其启用状态。data 为 AGY 的原始 JSON 数组。"""
-    return _json_output(await _command(["plugin", "list", "--json"], timeout=timeout), list)
+    return _json_output(await _command(["plugin", "list", "--json"], timeout=_seconds(timeout)), list)
 
 
 async def validate_plugin(path: str | Path, *, strict: bool = False, timeout: float = 30) -> dict[str, Any]:
@@ -111,22 +115,23 @@ async def validate_plugin(path: str | Path, *, strict: bool = False, timeout: fl
     args = ["plugin", "validate", str(_local_path(path)), "--json"]
     if strict:
         args.append("--strict")
-    return _json_output(await _command(args, timeout=timeout), dict)
+    return _json_output(await _command(args, timeout=_seconds(timeout)), dict)
 
 
 async def install_plugin(path: str | Path, *, timeout: float = 60) -> dict[str, Any]:
     """按已有授权安装指定的本地插件目录一次，返回安装命令的回执。"""
-    return await _command(["plugin", "install", str(_local_path(path, directory=True))], timeout=timeout)
+    return await _command(["plugin", "install", str(_local_path(path, directory=True))], timeout=_seconds(timeout))
 
 
 async def run(prompt: str, workspace: str | Path, *, conversation_id: str | None = None,
               model: str | None = None, allow_repl: bool = False, timeout: float = 120) -> dict[str, Any]:
-    """在指定目录发一次提示。无编号开新会话，指定编号续聊；返回原始事件和官方结果。"""
+    """在指定目录发一次提示。指定编号可续聊。timeout=0 等待这一轮自然结束，返回原始事件和官方结果。"""
     cwd = _local_path(workspace, directory=True)
-    seconds = _seconds(timeout)
+    seconds = _seconds(timeout, allow_zero=True)
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("提示不能为空")
-    args = ["--output-format=stream-json", f"--print-timeout={max(1, round(seconds * 1000))}ms"]
+    duration = f"{max(1, round(seconds * 1000))}ms" if seconds else "0"
+    args = ["--output-format=stream-json", f"--print-timeout={duration}"]
     for flag, value in (("conversation", conversation_id), ("model", model)):
         if value is not None:
             if not isinstance(value, str) or not value.strip():
@@ -138,8 +143,8 @@ async def run(prompt: str, workspace: str | Path, *, conversation_id: str | None
         settings = {"permissions": {"allow": ["mcp(agy-python-repl_agy-python-repl/run_code)"]}}
         args.append("--settings=" + json.dumps(settings, separators=(",", ":")))
     args.append(f"--print={prompt}")
-    # 给宿主留出写回原生超时结果并退出的时间。
-    receipt = await _command(args, cwd=cwd, timeout=seconds + 2)
+    # 有期限时，留两秒让宿主写回原生超时结果并退出。
+    receipt = await _command(args, cwd=cwd, timeout=seconds + 2 if seconds else None)
     receipt["workspace"] = str(cwd)
     events = []
     receipt["events"] = events

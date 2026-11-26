@@ -1,6 +1,6 @@
 ---
 name: agy-use
-description: 通过本机 Antigravity CLI 查看版本和插件，验证或安装已授权的本地插件，在专用工作目录新开或续接一轮会话并核对原始事件。
+description: 通过本机 Antigravity CLI 查看版本、可用模型和插件，验证或安装已授权的本地插件，在专用工作目录新开或续接一轮会话并核对原始事件。
 ---
 
 # agy-use
@@ -9,10 +9,11 @@ description: 通过本机 Antigravity CLI 查看版本和插件，验证或安�
 
 ## 查看本机状态
 
-`status` 返回实际使用的 AGY 路径和版本。`plugins` 读取当前账号安装的插件及启用状态。插件列入清单后，还可用一次专用会话检查工具能否实际运行。
+`status` 返回实际使用的 AGY 路径和版本。`models` 的 `stdout` 列出可用模型的 ID 和显示名称，ID 可用于选择本轮模型。`plugins` 读取当前账号安装的插件及启用状态。插件列入清单后，还可用一次专用会话检查工具能否实际运行。
 
 ```sh
 agy-use status
+agy-use models
 agy-use plugins
 ```
 
@@ -38,6 +39,8 @@ agy-use plugins
 ```sh
 agy-use run --workspace ./demo-workspace --timeout 60 '只回复 READY。'
 ```
+
+一轮默认限时 120 秒。长任务可把 `timeout` 设为 `0`，命令行使用 `--timeout 0`。这会等待当前这一轮自然结束。运行期间可取消 Python 任务或在终端按 `Ctrl-C`，取消回执保留已经收到的输出。
 
 新会话的编号在 `result.conversation_id`。用户明确要求续接时，在原工作目录中传入这个编号。下面的示例需要先把示例编号换成实际值。
 

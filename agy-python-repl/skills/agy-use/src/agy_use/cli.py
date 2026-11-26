@@ -4,18 +4,29 @@ import asyncio
 import json
 import sys
 
-from . import install_plugin, plugins, run, status, validate_plugin
+from . import install_plugin, models, plugins, run, status, validate_plugin
+
+
+async def _invoke(function, args):
+    try:
+        return await function(**args)
+    except asyncio.CancelledError as cancelled:
+        receipt = getattr(cancelled, "receipt", None)
+        if receipt is not None:
+            print(json.dumps(receipt, ensure_ascii=False))
+        raise
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="agy-use", allow_abbrev=False)
     commands = parser.add_subparsers(dest="action", required=True)
-    for action in (status, plugins, validate_plugin, install_plugin, run):
+    for action in (status, models, plugins, validate_plugin, install_plugin, run):
         help_text = action.__doc__.splitlines()[0]
         child = commands.add_parser(action.__name__.replace("_", "-"), help=help_text,
                                     description=help_text, allow_abbrev=False)
         child.set_defaults(function=action)
-        child.add_argument("--timeout", type=float, default=argparse.SUPPRESS, metavar="SECONDS")
+        timeout_help = "等待秒数，默认 120 秒。0 等待本轮自然结束" if action is run else "等待秒数，须大于 0"
+        child.add_argument("--timeout", type=float, default=argparse.SUPPRESS, metavar="SECONDS", help=timeout_help)
         if action in (validate_plugin, install_plugin):
             child.add_argument("path", help="本地插件路径")
         if action is validate_plugin:
@@ -31,7 +42,7 @@ def main(argv=None) -> int:
     function = args.pop("function")
     args.pop("action")
     try:
-        receipt = asyncio.run(function(**args))
+        receipt = asyncio.run(_invoke(function, args))
     except (ValueError, OSError) as error:
         print(str(error), file=sys.stderr)
         return 2
