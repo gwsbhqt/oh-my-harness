@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SessionStart hook: inject a concise notice only when a saved session snapshot exists."""
+"""Tell each conversation how to find its Python REPL and resume its data."""
 
 from __future__ import annotations
 
@@ -7,6 +7,14 @@ import json
 import os
 import sys
 from pathlib import Path
+
+
+START_GUIDANCE = (
+    "For data analysis, batch file reads, calculations or trusted Python skills, start with the "
+    "Python REPL's run_code. Open the requested inputs in the first cell and keep the data there. "
+    "Call the advertised tool directly, or read its MCP schema and use call_mcp_tool with the "
+    "listed ServerName and ToolName run_code."
+)
 
 
 def _data_dir() -> Path:
@@ -28,7 +36,7 @@ def main() -> None:
         print(json.dumps({}))
         return
 
-    conv_id = payload.get("conversationId")
+    conv_id = payload.get("conversationId") if isinstance(payload, dict) else None
     if not isinstance(conv_id, str) or not conv_id:
         print(json.dumps({}))
         return
@@ -37,20 +45,19 @@ def main() -> None:
     key = _sanitize(conv_id)
     snap_path = snap_dir / f"{key}.dill"
     manifest_path = snap_dir / f"{key}.manifest.json"
-    if not (snap_path.is_file() and manifest_path.is_file()):
-        print(json.dumps({}))
-        return
-
-    msg = "Saved Python REPL snapshot ready for this session; `run_code` will auto-restore it."
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        saved_names = manifest.get("savedNames") or []
-        if isinstance(saved_names, list) and saved_names:
-            preview_names = ", ".join(str(n) for n in saved_names[:12])
-            more = f" (+{len(saved_names) - 12} more)" if len(saved_names) > 12 else ""
-            msg = f"Saved Python REPL snapshot ready (vars: {preview_names}{more}); `run_code` will auto-restore it."
-    except Exception:
-        pass
+    msg = START_GUIDANCE
+    if snap_path.is_file() and manifest_path.is_file():
+        snapshot = "Saved Python REPL snapshot ready. The first cell will restore it."
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            saved_names = manifest.get("savedNames")
+            if isinstance(saved_names, list) and saved_names:
+                preview_names = ", ".join(str(n) for n in saved_names[:12])
+                more = f" (+{len(saved_names) - 12} more)" if len(saved_names) > 12 else ""
+                snapshot += f" Saved variables include {preview_names}{more}."
+        except (OSError, ValueError, AttributeError):
+            pass
+        msg = f"{msg} {snapshot}"
 
     print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": msg}}]}))
 

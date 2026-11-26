@@ -290,7 +290,10 @@ class KernelClient:
         return done
 
     async def restore_if_present(self, path: Path, manifest_path: Path | None = None) -> dict[str, Any] | None:
-        """Restore a Prime kernel snapshot when `path` exists; return a concise summary or None."""
+        """Restore an existing snapshot. The manifest describes what was saved.
+
+        The kernel reply identifies the names actually restored and any failures.
+        """
         if not path.is_file():
             return None
         done = await self.restore(path)
@@ -302,13 +305,24 @@ class KernelClient:
                     manifest = loaded
             except Exception:
                 pass
+        failed = done.get("failed", [])
+        reason = done.get("reason")
+        if done.get("status") != "ok" or reason:
+            status = "error"
+        elif failed:
+            status = "partial"
+        else:
+            status = "ok"
         return {
-            "restored": done.get("status") == "ok",
-            "status": done.get("status"),
+            "restored": status == "ok",
+            "status": status,
             "snapshot_path": str(path),
             "saved_names": manifest.get("savedNames", []),
+            "restored_names": done.get("restored", []),
+            "failed": failed,
             "skipped": manifest.get("skipped", []),
             "timestamp": manifest.get("timestamp"),
+            **({"reason": reason} if reason else {}),
         }
 
     async def shutdown(self) -> None:

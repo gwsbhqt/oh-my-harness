@@ -5,8 +5,20 @@ from __future__ import annotations
 import sys
 from typing import Any
 
+from python_repl_core import prelude
 from python_repl_core.preview import preview as _preview
 from python_repl_core.skills_runtime import _SkillsNamespace, install_skills_import_guard
+
+
+class _SnapshotSkipNames(set[str]):
+    """Prime asks for names. Prelude names are defaults only while their objects match."""
+
+    def __init__(self, fixed_names: set[str], namespace: dict[str, Any]) -> None:
+        super().__init__(fixed_names)
+        self.namespace = namespace
+
+    def __contains__(self, name: object) -> bool:
+        return super().__contains__(name) or prelude.is_preloaded(name, self.namespace.get(name))
 
 
 class _ReplHelper:
@@ -16,29 +28,26 @@ class _ReplHelper:
         return _preview(value, chars=chars, items=items, depth=depth)
 
     def vars(self) -> list[str]:
-        ns = sys.modules["__main__"].__dict__
-        return sorted(
-            k for k in ns
-            if not k.startswith("_") and k not in {"skills", "repl"}
-        )
+        from rlm import repl as prime
+
+        return prime._list_names(vars(sys.modules["__main__"]))
 
 
 def install_antigravity_surface(skill_entries: list[dict[str, Any]]) -> dict[str, Any]:
-    """Install `skills` and `repl` into `__main__` and return the skill load report."""
+    """Prepare the cell namespace and return the skill load report."""
+    from rlm import repl as prime
+
     ns = sys.modules["__main__"].__dict__
     skills_ns = _SkillsNamespace()
     report = skills_ns._register_all(skill_entries)
     install_skills_import_guard(ns, skills_ns)
 
-    ns["skills"] = skills_ns
-    ns["repl"] = _ReplHelper()
-
-    try:
-        import rlm.repl as _repl
-        skip = getattr(_repl, "_SNAPSHOT_SKIP_NAMES", None)
-        if isinstance(skip, set):
-            skip.update({"skills", "repl"})
-    except Exception:
-        pass
+    bindings = {"skills": skills_ns, "repl": _ReplHelper()}
+    ns.update(bindings)
+    prelude.install(ns)
+    prime._ALWAYS_SKIP = _SnapshotSkipNames(prime._ALWAYS_SKIP, ns)
+    prime._ALWAYS_SKIP.update(bindings)
+    # Older snapshots still contain bindings from their original kernel.
+    prime._RESTORE_SKIP.update(bindings)
 
     return report

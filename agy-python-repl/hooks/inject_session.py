@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse hook: concurrency-safe injection of conversationId and workspace path."""
+"""Bind this plugin's calls to the current Antigravity conversation and workspace."""
 
 from __future__ import annotations
 
@@ -7,9 +7,14 @@ import json
 import sys
 
 
+SERVER_NAME = "agy-python-repl_agy-python-repl"
+SCOPED_TOOLS = ("run_code", "kernel_state")
+DIRECT_NAMES = {f"mcp_{SERVER_NAME}_{name}" for name in SCOPED_TOOLS}
+
+
 def _scope_kernel(raw_kernel: object, conv_id: str) -> str:
     kernel = raw_kernel if isinstance(raw_kernel, str) and raw_kernel.strip() else "default"
-    if kernel == "default":
+    if kernel in ("default", conv_id):
         return conv_id
     if kernel.startswith(f"{conv_id}:") or kernel.startswith(f"{conv_id}__"):
         return kernel
@@ -26,41 +31,47 @@ def _resolve_workspace(payload: dict) -> str | None:
     return None
 
 
+def _overwrite(payload: dict) -> dict:
+    conv_id = payload.get("conversationId")
+    call = payload.get("toolCall")
+    if not isinstance(conv_id, str) or not conv_id or not isinstance(call, dict):
+        return {}
+
+    tool_name = call.get("name")
+    args = call.get("args", {})
+    if not isinstance(tool_name, str) or not isinstance(args, dict):
+        return {}
+    deferred = tool_name == "call_mcp_tool"
+    if deferred:
+        if args.get("ServerName") != SERVER_NAME or args.get("ToolName") not in SCOPED_TOOLS:
+            return {}
+        args = args.get("Arguments", {})
+        if not isinstance(args, dict):
+            return {}
+    elif tool_name not in DIRECT_NAMES:
+        return {}
+
+    updates = {"kernel": _scope_kernel(args.get("kernel"), conv_id)}
+    work_dir = _resolve_workspace(payload)
+    if work_dir and not args.get("cwd"):
+        updates["cwd"] = work_dir
+    if deferred:
+        # AGY shallow-merges the outer call. Keep the arguments that the model supplied.
+        return {"Arguments": {**args, **updates}}
+    return updates
+
+
 def main() -> None:
     try:
         payload = json.load(sys.stdin)
-    except Exception:
-        print(json.dumps({"decision": "allow"}))
-        return
-
-    conv_id = payload.get("conversationId") or ""
-    if not isinstance(conv_id, str) or not conv_id:
-        print(json.dumps({"decision": "allow"}))
-        return
-
-    tool_call = payload.get("toolCall") or {}
-    tool_name = str(tool_call.get("name", ""))
-    args = tool_call.get("args") or {}
-    work_dir = _resolve_workspace(payload)
-
-    if tool_name == "call_mcp_tool":
-        server_name = str(args.get("ServerName", ""))
-        target_tool = str(args.get("ToolName", ""))
-        if "agy-python-repl" not in server_name or target_tool not in {"run_code", "kernel_state"}:
-            print(json.dumps({"decision": "allow"}))
-            return
-        inner = dict(args.get("Arguments") or {})
-        inner["kernel"] = _scope_kernel(inner.get("kernel"), conv_id)
-        if work_dir and not inner.get("cwd"):
-            inner["cwd"] = work_dir
-        print(json.dumps({"decision": "allow", "overwrite": {"Arguments": inner}}))
-        return
-
-    overwrite: dict[str, str] = {"kernel": _scope_kernel(args.get("kernel"), conv_id)}
-    if work_dir and not args.get("cwd"):
-        overwrite["cwd"] = work_dir
-
-    print(json.dumps({"decision": "allow", "overwrite": overwrite}))
+    except ValueError:
+        payload = None
+    result: dict[str, object] = {"decision": "allow"}
+    if isinstance(payload, dict):
+        overwrite = _overwrite(payload)
+        if overwrite:
+            result["overwrite"] = overwrite
+    print(json.dumps(result))
 
 
 if __name__ == "__main__":

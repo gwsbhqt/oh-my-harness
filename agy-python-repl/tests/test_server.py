@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import os
+import re
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -50,9 +55,11 @@ class AgyPythonReplTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(r["result"], "False")
 
     async def test_skills_namespace_and_import_guard(self) -> None:
-        r_list = await self.manager.run_code("await skills.list()")
+        r_list = await self.manager.run_code(
+            "any(skill['import_name'] == 'demo_math' for skill in await skills.list())"
+        )
         self.assertEqual(r_list["status"], "ok")
-        self.assertIn("demo_math", r_list["result"])
+        self.assertEqual(r_list["result"], "True")
 
         r_call = await self.manager.run_code("from skills import demo_math\ndemo_math.add(19, 23)")
         self.assertEqual(r_call["status"], "ok")
@@ -130,74 +137,98 @@ class AgyPythonReplTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(active_names, ["conv-a"])
         self.assertEqual(listed["saved_snapshots"], ["conv-a"])
 
-    def test_pretooluse_hook_scopes_kernel_by_conversation_id(self) -> None:
-        import json
-        import subprocess
-
-        hook_script = Path(__file__).resolve().parents[1] / "hooks" / "inject_session.py"
-        lazy_payload = {
-            "conversationId": "conv-abc",
-            "workspacePaths": ["/tmp/ws-from-paths"],
-            "toolCall": {
-                "name": "call_mcp_tool",
-                "args": {
-                    "ServerName": "agy-python-repl_agy-python-repl",
-                    "ToolName": "run_code",
-                    "Arguments": {"code": "1+1"},
-                },
-            },
-        }
-        proc = subprocess.run(
-            ["python3", str(hook_script)],
-            input=json.dumps(lazy_payload),
-            text=True,
-            capture_output=True,
-            check=True,
-        )
-        out = json.loads(proc.stdout)
-        self.assertEqual(out["decision"], "allow")
-        self.assertEqual(out["overwrite"]["Arguments"]["kernel"], "conv-abc")
-        self.assertEqual(out["overwrite"]["Arguments"]["cwd"], "/tmp/ws-from-paths")
-
-    def test_session_start_hook_reports_snapshot_only_when_present(self) -> None:
-        import json
-        import os
-        import subprocess
-
-        data_dir = self.tmp_dir / "hook_data"
-        hook_script = Path(__file__).resolve().parents[1] / "hooks" / "session_start.py"
-        env = os.environ.copy()
-        env["PLUGIN_DATA"] = str(data_dir)
-
-        # No snapshot -> empty JSON (zero extra tokens).
-        empty_proc = subprocess.run(
-            ["python3", str(hook_script)],
-            input=json.dumps({"conversationId": "conv-xyz"}),
-            text=True,
-            capture_output=True,
+    def run_hook(self, name: str, payload: dict) -> dict:
+        script = Path(__file__).resolve().parents[1] / "hooks" / name
+        env = {**os.environ, "PLUGIN_DATA": str(self.tmp_dir / "hook_data")}
+        result = subprocess.run(
+            [sys.executable, str(script)],
+            input=json.dumps(payload),
             env=env,
+            text=True,
+            capture_output=True,
             check=True,
         )
-        self.assertEqual(json.loads(empty_proc.stdout), {})
+        return json.loads(result.stdout)
 
-        snap_dir = data_dir / "snapshots"
+    def test_hook_matcher_selects_the_repl_and_deferred_dispatch(self) -> None:
+        config = Path(__file__).resolve().parents[1] / "hooks.json"
+        group = json.loads(config.read_text(encoding="utf-8"))["agy-python-repl-session"]["PreToolUse"][0]
+        matcher = re.compile(group["matcher"])
+        for name in (
+            "mcp_agy-python-repl_agy-python-repl_run_code",
+            "mcp_agy-python-repl_agy-python-repl_kernel_state",
+            "call_mcp_tool",
+        ):
+            self.assertIsNotNone(matcher.search(name), name)
+        for name in ("mcp_other_run_code", "run_code", "run_command", "other_call_mcp_tool"):
+            self.assertIsNone(matcher.search(name), name)
+
+    def test_session_binding_for_direct_and_deferred_repl_tools(self) -> None:
+        server = "agy-python-repl_agy-python-repl"
+        workspace = str(self.tmp_dir / "workspace")
+        for tool, original in (("run_code", {"code": "1 + 1"}), ("kernel_state", {"action": "vars"})):
+            direct = f"mcp_{server}_{tool}"
+            calls = (
+                {"name": direct, "args": original},
+                {"name": "call_mcp_tool", "args": {"ServerName": server, "ToolName": tool, "Arguments": original}},
+            )
+            for call in calls:
+                with self.subTest(tool=tool, form=call["name"]):
+                    result = self.run_hook("inject_session.py", {
+                        "conversationId": "conv-abc", "workspacePaths": [workspace], "toolCall": call,
+                    })
+                    updates = {"kernel": "conv-abc", "cwd": workspace}
+                    if call["name"] == "call_mcp_tool":
+                        updates = {"Arguments": {**original, **updates}}
+                    self.assertEqual(result, {"decision": "allow", "overwrite": updates})
+
+    def test_session_binding_preserves_scoped_kernels_and_an_explicit_workspace(self) -> None:
+        kernels = (
+            ("tables", "conv-abc:tables"),
+            ("conv-abc:tables", "conv-abc:tables"),
+            ("conv-abc", "conv-abc"),
+        )
+        for kernel, expected in kernels:
+            with self.subTest(kernel=kernel):
+                result = self.run_hook("inject_session.py", {
+                    "conversationId": "conv-abc", "cwd": "/workspace",
+                    "toolCall": {
+                        "name": "mcp_agy-python-repl_agy-python-repl_run_code",
+                        "args": {"code": "2 + 2", "kernel": kernel, "cwd": "/workspace/data"},
+                    },
+                })
+                self.assertEqual(result["overwrite"], {"kernel": expected})
+
+    def test_other_mcp_tools_keep_their_original_arguments(self) -> None:
+        server = "agy-python-repl_agy-python-repl"
+        for call in (
+            {"name": "run_code", "args": {}},
+            {"name": "mcp_other_plugin_run_code", "args": {}},
+            {"name": "call_mcp_tool", "args": {"ServerName": f"other-{server}", "ToolName": "run_code"}},
+            {"name": "call_mcp_tool", "args": {"ServerName": server, "ToolName": "open_kernel_panel"}},
+        ):
+            with self.subTest(call=call):
+                result = self.run_hook("inject_session.py", {"conversationId": "conv-abc", "toolCall": call})
+                self.assertEqual(result, {"decision": "allow"})
+
+    def test_session_start_announces_tool_access_and_any_saved_state(self) -> None:
+        request = {"conversationId": "conv-xyz"}
+        fresh = self.run_hook("session_start.py", request)
+        msg = fresh["injectSteps"][0]["systemMessage"]["systemMessage"]
+        self.assertIn("run_code", msg)
+        self.assertIn("call_mcp_tool", msg)
+        self.assertNotIn("snapshot", msg.lower())
+
+        snap_dir = self.tmp_dir / "hook_data" / "snapshots"
         snap_dir.mkdir(parents=True)
         (snap_dir / "conv-xyz.dill").write_bytes(b"stub")
         (snap_dir / "conv-xyz.manifest.json").write_text(
-            json.dumps({"savedNames": ["df", "records"]}),
-            encoding="utf-8",
+            json.dumps({"savedNames": ["df", "records"]}), encoding="utf-8",
         )
-
-        proc = subprocess.run(
-            ["python3", str(hook_script)],
-            input=json.dumps({"conversationId": "conv-xyz"}),
-            text=True,
-            capture_output=True,
-            env=env,
-            check=True,
-        )
-        out = json.loads(proc.stdout)
-        msg = out["injectSteps"][0]["systemMessage"]["systemMessage"]
+        resumed = self.run_hook("session_start.py", request)
+        msg = resumed["injectSteps"][0]["systemMessage"]["systemMessage"]
+        self.assertIn("run_code", msg)
+        self.assertIn("snapshot", msg)
         self.assertIn("df, records", msg)
 
 

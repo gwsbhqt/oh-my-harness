@@ -1,237 +1,273 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Python REPL</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Python REPL Workbench</title>
   <style>
     :root {
       color-scheme: light dark;
-      --bg: var(--vscode-editor-background, #18181b);
-      --fg: var(--vscode-editor-foreground, #e4e4e7);
-      --muted: var(--vscode-descriptionForeground, #a1a1aa);
-      --border: var(--vscode-panel-border, rgba(161, 161, 170, 0.25));
-      --card: var(--vscode-sideBar-background, rgba(255, 255, 255, 0.04));
-      --accent: var(--vscode-button-background, #3b82f6);
-      --accent-fg: var(--vscode-button-foreground, #ffffff);
-      --ok: #22c55e;
-      --err: #ef4444;
-    }
-    @media (prefers-color-scheme: light) {
-      :root {
-        --bg: #ffffff;
-        --fg: #18181b;
-        --muted: #52525b;
-        --border: rgba(24, 24, 27, 0.14);
-        --card: #f4f4f5;
-      }
+      --background: var(--color-background-primary, var(--vscode-editor-background, Canvas));
+      --surface: var(--color-background-secondary, var(--vscode-sideBar-background, Canvas));
+      --text: var(--color-text-primary, var(--vscode-editor-foreground, CanvasText));
+      --muted: var(--color-text-secondary, var(--vscode-descriptionForeground, GrayText));
+      --border: var(--color-border-primary, var(--vscode-panel-border, color-mix(in srgb, CanvasText 22%, transparent)));
+      --accent: var(--color-ring-primary, var(--vscode-focusBorder, Highlight));
     }
     * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      padding: 12px;
-      font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: var(--bg);
-      color: var(--fg);
-    }
-    header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 12px;
-    }
-    h1 { font-size: 14px; margin: 0; font-weight: 600; }
-    button {
-      border: 1px solid var(--border);
-      background: var(--card);
-      color: var(--fg);
-      border-radius: 6px;
-      padding: 4px 10px;
-      font-size: 12px;
-      cursor: pointer;
-    }
-    button.primary {
-      background: var(--accent);
-      color: var(--accent-fg);
-      border-color: transparent;
-    }
-    .section { margin-bottom: 14px; }
-    .section-title {
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: var(--muted);
-      margin-bottom: 6px;
-    }
-    .card {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 8px 10px;
-      margin-bottom: 8px;
-    }
-    .row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-    }
-    .mono {
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 12px;
-    }
-    .badge {
-      display: inline-block;
-      padding: 1px 6px;
-      border-radius: 999px;
-      font-size: 11px;
-      border: 1px solid var(--border);
-    }
-    .ok { color: var(--ok); }
-    .err { color: var(--err); }
-    .muted { color: var(--muted); font-size: 12px; }
-    .actions { display: flex; gap: 6px; margin-top: 6px; }
+    [hidden] { display: none !important; }
+    body { margin: 0; padding: 14px; background: var(--background); color: var(--text);
+      font: 13px/1.5 var(--font-sans, system-ui, sans-serif); overflow-wrap: anywhere; }
+    header, .row, .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+    header, .row { justify-content: space-between; }
+    h1, h2, h3, p { margin: 0; }
+    h1 { font-size: 16px; } h2 { font-size: 14px; } h3 { font-size: inherit; }
+    section { margin-top: 18px; }
+    article { margin-top: 6px; padding: 9px 10px; border: 1px solid var(--border);
+      border-radius: var(--border-radius-md, 6px); background: var(--surface); }
+    code, .names { font-family: var(--font-mono, ui-monospace, monospace); white-space: pre-wrap; }
+    code { display: block; margin-top: 4px; }
+    button, select { padding: 3px 8px; font: inherit; background: var(--background); color: var(--text);
+      border: 1px solid var(--border); border-radius: var(--border-radius-sm, 4px); }
+    button:enabled { cursor: pointer; } button:disabled { opacity: .6; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .muted, label { font-size: 12px; color: var(--muted); }
+    .actions, .notice, .names { margin-top: 6px; }
+    .error { color: var(--color-text-danger, var(--vscode-errorForeground, light-dark(#a42121, #ffaaaa))); }
   </style>
 </head>
 <body>
   <header>
     <h1>Python REPL Workbench</h1>
-    <button id="refreshBtn" class="primary">Refresh</button>
+    <div class="actions"><button id="attach" hidden>Attach kernel summary to chat</button><button id="refresh" disabled>Refresh</button></div>
   </header>
+  <p id="status" role="status" class="notice muted">Connecting to host…</p>
+  <p id="error" role="alert" class="notice error" hidden></p>
+  <section aria-labelledby="kernels-title">
+    <h2 id="kernels-title">Active kernels</h2><div id="kernels"></div>
+  </section>
+  <section aria-labelledby="history-title">
+    <div class="row"><h2 id="history-title">Recent cells</h2>
+      <label id="filter-label" hidden>Kernel <select id="filter"></select></label></div>
+    <div id="history"></div>
+  </section>
+  <script id="mcp-bridge">
+    function panelHost(view, onNotification) {
+      const parent = view.parent;
+      const version = "2026-01-26";
+      const pending = new Map();
+      let nextId = 1;
+      let origin;
+      let ready = false;
+      let capabilities = {};
 
-  <div id="errorBanner" class="card err" style="display:none"></div>
-
-  <div class="section">
-    <div class="section-title">Active Kernels</div>
-    <div id="kernels"><div class="muted">No active kernels yet.</div></div>
-  </div>
-
-  <div class="section">
-    <div class="section-title">Recent Cells</div>
-    <div id="history"><div class="muted">No cells executed yet.</div></div>
-  </div>
-
-  <script>
-    let rpcId = 1;
-    const pending = new Map();
-
-    window.addEventListener("message", (event) => {
-      const msg = event.data;
-      if (!msg || typeof msg !== "object") return;
-      if (msg.id && pending.has(msg.id)) {
-        const { resolve, reject } = pending.get(msg.id);
+      function post(message) {
+        parent.postMessage({ jsonrpc: "2.0", ...message }, origin && origin !== "null" ? origin : "*");
+      }
+      function request(method, params, timeout = 60000) {
+        const id = nextId++;
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            pending.delete(id);
+            reject(new Error(`Host timed out on ${method}.`));
+          }, timeout);
+          pending.set(id, { resolve, reject, timer });
+          try { post({ id, method, params }); }
+          catch (error) { clearTimeout(timer); pending.delete(id); reject(error); }
+        });
+      }
+      view.addEventListener("message", (event) => {
+        const msg = event.data;
+        if (event.source !== parent || (origin !== undefined && event.origin !== origin) || msg?.jsonrpc !== "2.0") return;
+        if (typeof msg.method === "string") {
+          if (!ready) return;
+          if (msg.id === undefined) onNotification(msg.method, msg.params);
+          else if (msg.method === "ping" || msg.method === "ui/resource-teardown") post({ id: msg.id, result: {} });
+          else post({ id: msg.id, error: { code: -32601, message: "Method not found" } });
+          return;
+        }
+        const entry = pending.get(msg.id);
+        if (!entry || (Object.hasOwn(msg, "result") === Object.hasOwn(msg, "error"))) return;
+        origin = event.origin;
+        clearTimeout(entry.timer);
         pending.delete(msg.id);
-        if (msg.error) reject(new Error(msg.error.message || JSON.stringify(msg.error)));
-        else resolve(msg.result);
-      }
-    });
-
-    function notifyHost(method, params = {}) {
-      window.parent.postMessage({ jsonrpc: "2.0", method, params }, "*");
-    }
-
-    function callHost(method, params) {
-      const id = rpcId++;
-      return new Promise((resolve, reject) => {
-        pending.set(id, { resolve, reject });
-        window.parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+        if (msg.error) entry.reject(new Error(msg.error.message || "Host request failed."));
+        else entry.resolve(msg.result);
       });
-    }
-
-    function showError(err) {
-      const banner = document.getElementById("errorBanner");
-      banner.style.display = "block";
-      banner.textContent = err instanceof Error ? err.message : String(err);
-    }
-
-    function clearError() {
-      const banner = document.getElementById("errorBanner");
-      banner.style.display = "none";
-      banner.textContent = "";
-    }
-
-    async function initMcpApp() {
-      await callHost("ui/initialize", {
-        protocolVersion: "2026-01-26",
-        appInfo: { name: "agy-python-repl-panel", version: "0.1.0" },
-        appCapabilities: {},
-      });
-      notifyHost("ui/notifications/initialized", {});
-    }
-
-    async function callTool(name, args = {}) {
-      const res = await callHost("tools/call", { name, arguments: args });
-      if (res && res.structuredContent) return res.structuredContent;
-      if (res && Array.isArray(res.content) && res.content[0]?.text) {
-        try { return JSON.parse(res.content[0].text); } catch { return { text: res.content[0].text }; }
+      function supports(name, format) {
+        const value = format ? capabilities[name]?.[format] : capabilities[name];
+        return value !== null && typeof value === "object" && !Array.isArray(value);
       }
-      return res || {};
+      return {
+        supports,
+        async initialize() {
+          if (!parent || parent === view) throw new Error("Open this panel inside an MCP Apps host.");
+          const result = await request("ui/initialize", {
+            protocolVersion: version, appCapabilities: {}, appInfo: { name: "agy-python-repl-panel", version: "0.2.0" }
+          }, 15000);
+          if (result?.protocolVersion !== version) throw new Error("The host does not support the panel’s MCP Apps protocol version.");
+          capabilities = result.hostCapabilities || {};
+          ready = true;
+          post({ method: "ui/notifications/initialized", params: {} });
+          return result.hostContext || {};
+        },
+        tool(name, args = {}) {
+          if (!supports("serverTools")) throw new Error("This host does not provide kernel controls.");
+          return request("tools/call", { name, arguments: args });
+        },
+        sendText(capability, method, text) {
+          if (!supports(capability, "text")) throw new Error("This host does not accept text for this action.");
+          const params = { content: [{ type: "text", text }] };
+          if (method === "ui/message") params.role = "user";
+          return request(method, params);
+        },
+        resize(height) { if (ready) post({ method: "ui/notifications/size-changed", params: { height } }); }
+      };
     }
+  </script>
+  <script>
+    const byId = (id) => document.getElementById(id);
+    const refreshButton = byId("refresh");
+    const attachButton = byId("attach");
+    const filter = byId("filter");
+    const host = panelHost(window, receive);
+    const busy = new Set();
+    let overview = null;
+    let revision = 0;
 
-    function escapeHtml(s) {
-      return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    function element(tag, text, className) {
+      const node = document.createElement(tag);
+      if (text !== undefined) node.textContent = text;
+      if (className) node.className = className;
+      return node;
     }
-
+    function button(label, action) {
+      const node = element("button", label);
+      node.addEventListener("click", () => handle(action));
+      return node;
+    }
+    function showError(error) {
+      byId("error").textContent = error.message || String(error);
+      byId("error").hidden = false;
+    }
+    async function handle(action) {
+      byId("error").hidden = true;
+      try { await action(); } catch (error) { showError(error); }
+    }
+    function unpack(result) {
+      const text = result?.content?.find((part) => part.type === "text")?.text;
+      if (result?.isError) throw new Error(text || "Kernel tool failed.");
+      const payload = result?.structuredContent ?? (text ? JSON.parse(text) : null);
+      if (!payload) throw new Error("The kernel tool returned no data.");
+      if (payload.status === "error") throw new Error(payload.error || payload.reason || "Kernel action failed.");
+      return payload;
+    }
+    function theme(context) {
+      const style = document.documentElement.style;
+      if (context.theme === "dark" || context.theme === "light") style.colorScheme = context.theme;
+      for (const [key, value] of Object.entries(context.styles?.variables || {})) {
+        if (/^--(?:color-|font-|border-radius-)/.test(key) && typeof value === "string") style.setProperty(key, value);
+      }
+    }
+    function receive(method, params) {
+      if (method === "ui/notifications/host-context-changed") theme(params || {});
+      if (method === "ui/notifications/tool-result") handle(() => renderOverview(unpack(params)));
+      if (method === "ui/notifications/tool-cancelled") byId("status").textContent = params?.reason || "Tool call cancelled.";
+    }
+    function kernelCard(kernel) {
+      const card = element("article");
+      const heading = element("div", undefined, "row");
+      heading.append(element("h3", kernel.name), element("span", `${kernel.alive ? "Alive" : "Stopped"} · Python ${kernel.python || "?"}`, "muted"));
+      card.append(heading, element("p", `Skills: ${kernel.skills_loaded.join(", ") || "none"}`, "muted"));
+      if (!host.supports("serverTools")) return card;
+      const actions = element("div", undefined, "actions");
+      const detail = element("div", undefined, "names");
+      detail.setAttribute("aria-live", "polite");
+      async function run(action) {
+        if (busy.has(kernel.name)) return;
+        busy.add(kernel.name);
+        for (const item of actions.children) item.disabled = true;
+        try {
+          const result = unpack(await host.tool("app_kernel_action", { action, kernel: kernel.name }));
+          if (action === "vars") { detail.textContent = `Variables: ${result.names.join(", ") || "(empty)"}`; return; }
+          let message;
+          if (action === "snapshot") message = `Snapshot · ${result.saved.length} saved · ${result.skipped.length} skipped`;
+          if (action === "restore") message = `${result.status === "partial" ? "Partial restore" : "Restore"} · ${result.restored.length} restored · ${result.failed.length} failed`;
+          if (action === "reset") message = `Reset ${kernel.name}.`;
+          await refresh();
+          byId("status").textContent = message;
+        } finally {
+          busy.delete(kernel.name);
+          for (const item of actions.children) item.disabled = false;
+        }
+      }
+      function confirm(action) {
+        const prompt = action === "reset" ? "Delete this kernel and its saved snapshot?" : "Restore saved variables into this kernel?";
+        const choices = element("div", undefined, "actions");
+        choices.append(button("Cancel", () => { detail.replaceChildren(); actions.querySelector(`[data-action=${action}]`).focus(); }),
+          button(`Confirm ${action}`, () => { detail.replaceChildren(); return run(action); }));
+        detail.replaceChildren(element("span", prompt), choices);
+        choices.firstChild.focus();
+      }
+      for (const [name, label] of [["vars", "Variables"], ["snapshot", "Snapshot"], ["restore", "Restore"], ["reset", "Reset"]]) {
+        const control = button(label, () => {
+          if (name === "restore" || name === "reset") return confirm(name);
+          detail.replaceChildren();
+          return run(name);
+        });
+        control.dataset.action = name;
+        actions.append(control);
+      }
+      card.append(actions, detail);
+      return card;
+    }
+    function renderHistory() {
+      const rows = overview.history.filter((cell) => !filter.value || cell.kernel === filter.value);
+      byId("history").replaceChildren(...rows.map((cell) => {
+        const card = element("article");
+        const heading = element("div", undefined, "row");
+        heading.append(element("strong", cell.kernel), element("span", `${cell.status} · ${cell.duration_ms} ms${cell.truncated ? " · output truncated" : ""}`, "muted"));
+        card.append(heading, element("code", cell.code_preview || "(empty)"));
+        if (host.supports("message", "text")) card.append(button("Ask about this cell", () => host.sendText("message", "ui/message",
+          `Explain this ${cell.status} Python cell on ${cell.kernel}: ${cell.code_preview}`)));
+        return card;
+      }));
+      if (!rows.length) byId("history").append(element("p", "No cells executed yet.", "muted"));
+    }
+    function renderOverview(data) {
+      if (!Array.isArray(data.kernels) || !Array.isArray(data.history)) throw new Error("The tool did not return a kernel overview.");
+      revision++;
+      overview = data;
+      byId("kernels").replaceChildren(...data.kernels.map(kernelCard));
+      if (!data.kernels.length) byId("kernels").append(element("p", "No active kernels yet.", "muted"));
+      const names = [...new Set(data.history.map((cell) => cell.kernel))];
+      const selected = filter.value;
+      filter.replaceChildren(new Option("All kernels", ""), ...names.map((name) => new Option(name, name)));
+      if (names.includes(selected)) filter.value = selected;
+      byId("filter-label").hidden = names.length < 2;
+      attachButton.hidden = !host.supports("updateModelContext", "text");
+      byId("status").textContent = host.supports("serverTools") ? "" : "The host provides this overview in read-only mode.";
+      renderHistory();
+    }
     async function refresh() {
-      const data = await callTool("app_kernel_overview");
-      const kernelsEl = document.getElementById("kernels");
-      const historyEl = document.getElementById("history");
-
-      const kernels = data.kernels || [];
-      if (!kernels.length) {
-        kernelsEl.innerHTML = '<div class="muted">No active kernels yet.</div>';
-      } else {
-        kernelsEl.innerHTML = kernels.map((k) => `
-          <div class="card">
-            <div class="row">
-              <span class="mono"><strong>${escapeHtml(k.name)}</strong></span>
-              <span class="badge ${k.alive ? "ok" : "err"}">${k.alive ? "alive" : "stopped"} · Py ${escapeHtml(k.python || "?")}</span>
-            </div>
-            <div class="muted" style="margin-top:4px">Skills: ${(k.skills_loaded || []).map(escapeHtml).join(", ") || "none"}</div>
-            <div class="actions">
-              <button onclick="doAction('vars', '${escapeHtml(k.name)}')">Vars</button>
-              <button onclick="doAction('snapshot', '${escapeHtml(k.name)}')">Snapshot</button>
-              <button onclick="doAction('restore', '${escapeHtml(k.name)}')">Restore</button>
-              <button onclick="doAction('reset', '${escapeHtml(k.name)}')">Reset</button>
-            </div>
-            <div id="vars-${escapeHtml(k.name)}" class="muted mono" style="margin-top:6px"></div>
-          </div>
-        `).join("");
-      }
-
-      const history = data.history || [];
-      if (!history.length) {
-        historyEl.innerHTML = '<div class="muted">No cells executed yet.</div>';
-      } else {
-        historyEl.innerHTML = history.map((h) => `
-          <div class="card">
-            <div class="row">
-              <span class="mono">${escapeHtml(h.kernel)} · ${escapeHtml(h.code_preview || "(empty)")}</span>
-              <span class="badge ${h.status === "ok" ? "ok" : "err"}">${escapeHtml(h.status)} · ${h.duration_ms}ms</span>
-            </div>
-          </div>
-        `).join("");
-      }
+      const before = ++revision;
+      const data = unpack(await host.tool("app_kernel_overview"));
+      if (before === revision) renderOverview(data);
     }
-
-    window.doAction = async (action, kernel) => {
-      const res = await callTool("app_kernel_action", { action, kernel });
-      if (action === "vars") {
-        const el = document.getElementById(`vars-${kernel}`);
-        if (el) el.textContent = "Vars: " + ((res.names || []).join(", ") || "(empty)");
-      } else {
-        await refresh();
-      }
-    };
-
-    document.getElementById("refreshBtn").addEventListener("click", () => {
-      clearError();
-      refresh().catch(showError);
-    });
-
-    initMcpApp()
-      .then(() => refresh())
-      .catch(showError);
+    filter.addEventListener("change", renderHistory);
+    refreshButton.addEventListener("click", () => handle(refresh));
+    attachButton.addEventListener("click", () => handle(async () => {
+      const summary = overview.kernels.map((kernel) => `${kernel.name} (${kernel.alive ? "alive" : "stopped"}, Python ${kernel.python || "?"})`).join(", ");
+      await host.sendText("updateModelContext", "ui/update-model-context", `Active Python kernels: ${summary || "none"}.`);
+      byId("status").textContent = "Kernel summary attached to chat.";
+    }));
+    handle(async () => {
+      theme(await host.initialize());
+      refreshButton.disabled = !host.supports("serverTools");
+      byId("status").textContent = "Waiting for the kernel overview…";
+      if (typeof ResizeObserver === "function") new ResizeObserver(() => host.resize(Math.ceil(document.body.getBoundingClientRect().height))).observe(document.body);
+      if (host.supports("serverTools") && !overview) await refresh();
+    }).then(() => { if (!byId("error").hidden && !overview) byId("status").textContent = ""; });
   </script>
 </body>
 </html>

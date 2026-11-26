@@ -280,7 +280,7 @@ export class PythonReplRuntime extends PtcRuntime {
   private readonly interpreters = new Map<string, Promise<ResolvedInterpreter>>()
   private readonly rawConfig: Config
   private readonly skillRootBase = process.cwd()
-  private readonly discoveries = new Map<string, SkillDiscovery>()
+  /** Kernels keep their startup skills. Before startup and in settings, read the current roots. */
   private readonly sessionDiscoveries = new Map<string, SkillDiscovery>()
   /** One notice for background jobs a cell left running that end close together (src/bash-jobs.ts). */
   readonly jobNotices: JobNotices
@@ -406,6 +406,7 @@ export class PythonReplRuntime extends PtcRuntime {
     if (live.some((other) => sessionKeyOf(other) === key)) return
     const session = this.sessions.get(key)
     this.sessions.delete(key)
+    this.sessionDiscoveries.delete(key)
     if (session === undefined) return
     try {
       await session.dispose()
@@ -574,7 +575,7 @@ export class PythonReplRuntime extends PtcRuntime {
 
   /** Configured skills, with the skills of the project holding `cwd` in front. */
   private discoveryAt(cwd?: string): SkillDiscovery {
-    const configured = this.configuredDiscovery()
+    const configured = discoverSkills(this.config.skillRoots, this.skillRootBase)
     if (cwd === undefined || cwd === '') return configured
     const real = (path: string) => { try { return realpathSync(path) } catch { return path } }
     const trusted = new Set(configured.roots.map(real))
@@ -583,25 +584,7 @@ export class PythonReplRuntime extends PtcRuntime {
     // directory without .git is its own project, and its `.agents/skills` is the configured root.
     const roots = this.config.projectSkillRoots.map((root) => join(project, root))
       .filter((root) => { try { return statSync(root).isDirectory() && !trusted.has(real(root)) } catch { return false } })
-    const cacheKey = `project:${JSON.stringify(roots)}`
-    let discovery = this.discoveries.get(cacheKey)
-    if (discovery === undefined) {
-      discovery = discoverSkills(roots)
-      this.discoveries.set(cacheKey, discovery)
-    }
-    return withProjectSkills(configured, discovery)
-  }
-
-  /** Every skill under the configured roots, before any workspace switches one off. */
-  private configuredDiscovery(): SkillDiscovery {
-    const roots = resolveSkillRoots(this.config.skillRoots, this.skillRootBase)
-    const cacheKey = JSON.stringify(roots)
-    let discovery = this.discoveries.get(cacheKey)
-    if (discovery === undefined) {
-      discovery = discoverSkills(roots)
-      this.discoveries.set(cacheKey, discovery)
-    }
-    return discovery
+    return withProjectSkills(configured, discoverSkills(roots))
   }
 
   /**
@@ -619,9 +602,13 @@ export class PythonReplRuntime extends PtcRuntime {
     }
   }
 
-  /** Public assembly context: facts about this session only, never a claim that data was recovered. */
   async stateContext(key?: string, cwd?: string): Promise<string> {
-    if (key === undefined) return ''
+    return (await this.promptContext(key, cwd)).state
+  }
+
+  /** The state and SDK sections of one prompt share the same skill discovery. */
+  async promptContext(key?: string, cwd?: string): Promise<{ state: string; skills: SkillSummary[] }> {
+    if (key === undefined) return { state: '', skills: [] }
     const session = this.sessions.get(key)
     const discovery = this.discoveryFor(key, cwd)
     const saved = existsSync(join(statePath(key), 'kernel-state.dill'))
@@ -668,7 +655,7 @@ export class PythonReplRuntime extends PtcRuntime {
     } else {
       parts.push('No current kernel import/restore result is available. Do not assume old variables exist; inspect the next startup result.')
     }
-    return parts.join('\n')
+    return { state: parts.join('\n'), skills: discovery.skills }
   }
 
   /**
@@ -838,7 +825,6 @@ export class PythonReplRuntime extends PtcRuntime {
     if (existing !== undefined) return existing
     const config = this.config
     const discovery = this.discoveryFor(key, runCwd ?? this.workspaceCwd())
-    this.sessionDiscoveries.set(key, discovery)
     const session = new ReplSession({
       python,
       sessionId: key,
@@ -873,6 +859,7 @@ export class PythonReplRuntime extends PtcRuntime {
       backgroundPipeline: () => this.toolPipeline(),
       subagents: () => this.ctx.get('subagents' as never) as SubagentsLike | undefined,
     })
+    this.sessionDiscoveries.set(key, discovery)
     this.sessions.set(key, session)
     return session
   }
@@ -949,6 +936,7 @@ export class PythonReplRuntime extends PtcRuntime {
     this.jobNotices.dispose()
     const sessions = [...this.sessions.values(), ...this.unclosed]
     this.sessions.clear()
+    this.sessionDiscoveries.clear()
     this.unclosed.clear()
     const results = await Promise.allSettled(sessions.map((s) => s.dispose()))
     const failed = results.flatMap((result, index) => result.status === 'rejected' ? [{ session: sessions[index]!, error: result.reason as unknown }] : [])
@@ -1202,8 +1190,8 @@ export function apply(ctx: Context, config: Config): void {
       guardPresentation(result, context.scope)
       const runtime = ctx.get('ptcRuntime') as unknown as PythonReplRuntime | undefined
       const key = sessionKeyOf(context.scope)
-      const state = await runtime?.stateContext?.(key, scopeCwd(context.scope))
-      if (state) result.contexts.push({ name: 'python-repl:state', text: state })
+      const prompt = await runtime?.promptContext?.(key, scopeCwd(context.scope))
+      if (prompt?.state) result.contexts.push({ name: 'python-repl:state', text: prompt.state })
       // Fixed for a session's life (DSH writes it into the header at creation), so the prefix cache holds.
       const subagent = isSubagentAgent(context.scope)
       for (const section of result.sections) {
@@ -1212,7 +1200,7 @@ export function apply(ctx: Context, config: Config): void {
           // registering a second one: skills are part of "what you can call",
           // and one section keeps the ordering stable across assemblies.
           // A static catalog uses this session's pinned roots, never another kernel's imports.
-          const catalog = renderSkillCatalog(runtime?.knownSkills?.(key, scopeCwd(context.scope)) ?? [])
+          const catalog = renderSkillCatalog(prompt?.skills ?? [])
           const schemas = runtime?.visibleSchemas(context.scope, (context as { toolSet?: unknown }).toolSet) ?? []
           if (schemas.length === 0) {
             // Preserve the host's declarations when introspection is unavailable.

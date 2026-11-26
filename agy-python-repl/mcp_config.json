@@ -3,8 +3,11 @@
     "agy-python-repl": {
       "command": "sh",
       "args": [
-        "scripts/start_mcp.sh"
-      ]
+        "${PLUGIN_ROOT}/scripts/start_mcp.sh"
+      ],
+      "tools": {
+        "run_code": { "eager": true }
+      }
     }
   }
 }

@@ -9,7 +9,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "(mcp_agy-python-repl_.*)?(run_code|kernel_state)|call_mcp_tool",
+        "matcher": "^(mcp_agy-python-repl_agy-python-repl_(run_code|kernel_state)|call_mcp_tool)$",
         "hooks": [
           {
             "type": "command",

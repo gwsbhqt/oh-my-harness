@@ -17,7 +17,7 @@ class _SkillsNamespace:
         self._loaded: dict[str, Any] = {}
         self._entries: dict[str, dict[str, Any]] = {}
         self._failed: dict[str, dict[str, Any]] = {}
-        self._conflicts: set[str] = set()
+        self._conflicts: dict[str, list[dict[str, Any]]] = {}
 
     def _register_all(self, entries: list[dict[str, Any]]) -> dict[str, Any]:
         by_name: dict[str, list[dict[str, Any]]] = {}
@@ -33,7 +33,7 @@ class _SkillsNamespace:
             project_group = [e for e in group if e.get("is_project")]
             chosen_group = project_group if project_group else group
             if len(chosen_group) > 1:
-                self._conflicts.add(imp_name)
+                self._conflicts[imp_name] = chosen_group
                 failed[imp_name] = f"Ambiguous duplicate skill {imp_name!r}"
                 continue
 
@@ -79,16 +79,22 @@ class _SkillsNamespace:
         ]
 
     async def describe(self, import_name: str) -> dict[str, Any]:
-        if import_name not in self._entries:
+        key = import_name.replace("-", "_")
+        conflicts = self._conflicts.get(key, [])
+        if any(import_name in (record["name"], record["import_name"]) for record in conflicts):
+            raise KeyError(f"Skill {import_name!r} was not loaded due to duplicate definitions of {key!r}")
+        entry = self._entries.get(key) or self._failed.get(key)
+        if entry is None or import_name not in (entry["name"], entry["import_name"]):
             raise KeyError(f"Unknown skill {import_name!r}")
-        entry = self._entries[import_name]
-        doc = ""
+        if key in self._failed:
+            raise KeyError(f"Skill {import_name!r} failed to import: {entry['error']}")
+        document = Path(entry["doc_path"])
         try:
-            doc = Path(entry["doc_path"]).read_text(encoding="utf-8")
-        except OSError:
-            pass
+            doc = document.read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeError) as exc:
+            raise RuntimeError(f"Cannot read skill instructions at {document}: {exc}") from exc
         return {
-            "import_name": import_name,
+            "import_name": entry["import_name"],
             "name": entry["name"],
             "directory": entry["directory"],
             "doc_path": entry["doc_path"],

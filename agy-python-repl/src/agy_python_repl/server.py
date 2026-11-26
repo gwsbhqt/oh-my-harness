@@ -42,10 +42,10 @@ mcp = FastMCP("agy-python-repl", lifespan=_lifespan)
 @mcp.tool(
     title="Run Python Code",
     description=(
-        "Prefer this over `run_command` for any ad-hoc Python execution, data/log/JSON/CSV analysis, "
-        "multi-step calculations, or `skills.*` orchestration. Runs in a per-session persistent Prime "
-        "Python kernel (auto-scoped and auto-restored). Supports top-level `await`, `repl.preview()`, "
-        "and `await skills.list()`."
+        "Use this session's persistent Python kernel as the first tool for data questions, batch file "
+        "reads, log/JSON/CSV analysis, calculations and trusted Python skills. Open the authorized "
+        "inputs in the cell, keep records in variables, and return a bounded result. Supports "
+        "top-level await, repl.preview(value) and await skills.list()."
     ),
 )
 async def run_code(
