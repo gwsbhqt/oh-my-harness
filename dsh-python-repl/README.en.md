@@ -124,7 +124,7 @@ Options are stored under the `python-repl` loader id. The plugin settings card e
 | `cellWaitMs` | `5000` | Maximum foreground wait for a bash command or job before it continues in the background. Zero disables this cap. A subagent session waits at least 10 minutes: when a subagent's turn ends, DSH stops its background jobs without a notice, so it has to wait for results in a cell. |
 | `archiveAfterCells` | `100` | Archive unpinned names after this many unused cells. Names sharing an object through a direct reference or a built-in container stay in memory at the archive threshold. Separately named openpyxl workbooks, worksheets and cells that belong to the same in-memory workbook stay together, too. Using an archived name restores it. Zero disables archiving. |
 | `deleteAfterCells` | `200` | Delete unpinned names after this many unused cells. Zero disables deletion. |
-| `idleKernelMinutes` | `60` | Reclaim fully recoverable idle kernels when no tasks, threads, or child processes are active. Zero disables reclaim. |
+| `idleKernelMinutes` | `60` | Reclaim a fully recoverable kernel once its tasks, threads, and child processes finish. Direct children in a separate process group still keep it alive. The caller owns processes detached with `start_new_session=True`. Zero disables reclaim. |
 
 `ptcCreativeMode` defaults to off, so installing this plugin does not change any mode's presentation or name; only setting it to `true` rewrites the shipped Creator mode into PTC Creator (tool presentation, `tool-office`, and the UI labels together), and setting it back to `false` restores the shipped appearance, with the rest of the plugin (cells, skills, tool bridge) unaffected. It is a toggle on the settings card, so users do not type true/false by hand.
 

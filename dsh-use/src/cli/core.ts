@@ -247,21 +247,30 @@ export function createCli(
     httpStatus?: number
   }
 
-  function http(method: 'GET' | 'POST', path: string, body?: unknown, timeoutMs = 180_000): Promise<{ status: number; json: unknown }> {
+  function http(method: 'GET' | 'POST', path: string, body?: unknown, timeoutMs = 180_000, deadline?: number): Promise<{ status: number; json: unknown }> {
     return new Promise((resolve, reject) => {
       if (!existsSync(SOCKET)) {
         reject(new Down(`找不到通信口 ${SOCKET}`))
         return
       }
       const payload = body === undefined ? undefined : JSON.stringify(body)
+      let signal: AbortSignal | undefined
+      if (deadline !== undefined) {
+        timeoutMs = Math.ceil(Math.min(timeoutMs, deadline - performance.now(), 2_147_483_647))
+        if (timeoutMs <= 0) { reject(new Error('已到请求截止时间')); return }
+        // socket 的 timeout 只限制无数据的间隔，有响应数据也必须遵守总时限。
+        signal = AbortSignal.timeout(timeoutMs)
+      }
       const req = request({
         socketPath: SOCKET,
         path,
         method,
         headers: payload === undefined ? {} : { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) },
         timeout: timeoutMs,
+        signal,
       }, (res) => {
         const chunks: Buffer[] = []
+        res.on('error', reject)
         res.on('data', (c: Buffer) => chunks.push(c))
         res.on('end', () => {
           const text = Buffer.concat(chunks).toString('utf8')
@@ -301,8 +310,8 @@ export function createCli(
     throw new CliExit(code, message)
   }
 
-  async function run(command: string, args: string[], options: Record<string, unknown>, timeoutMs?: number): Promise<RunResponse> {
-    const { status, json } = await http('POST', '/v1/run', { command, args, options }, timeoutMs)
+  async function run(command: string, args: string[], options: Record<string, unknown>, timeoutMs?: number, deadline?: number): Promise<RunResponse> {
+    const { status, json } = await http('POST', '/v1/run', { command, args, options }, timeoutMs, deadline)
     return { ...(json as RunResponse), httpStatus: status }
   }
 
@@ -1454,53 +1463,75 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
     return restartLog() !== '' ? `Log: ${restartLog()}. ` : ''
   }
 
-  /**
-   * 给会话送一段话：先用插件通知（界面一行通知，模型知道不是用户说的），宿主不支持通知时退回普通消息。
-   * DSH 刚起来时会话服务可能还没好，没送进去就隔 300 毫秒再试，最多试 30 秒。返回送没送进去。
-   */
+  async function hostOnlySupportsSend(deadline: number): Promise<boolean> {
+    try {
+      const { status, json } = await http('GET', '/v1/commands', undefined, 5000, deadline)
+      const catalog = json as { ok?: boolean; commands?: { name?: string }[] } | null
+      if (status !== 200 || catalog?.ok !== true || !Array.isArray(catalog.commands)) return false
+      const names = catalog.commands.map((entry) => entry?.name)
+      return names.every((name) => typeof name === 'string' && name.length > 0) && names.includes('send') && !names.includes('notice')
+    } catch {
+      return false
+    }
+  }
+
+  /** 给会话送重启结果；只有确认尚未投递的失败才可再次写入。 */
   async function tell(session: string | undefined, text: string, summary: string): Promise<boolean> {
     if (session === undefined) return false
-    let viaSend = false
+    let command: 'notice' | 'send' = 'notice'
     notificationState = 'failed'
-    const deadline = Date.now() + 30_000
-    for (;;) {
+    const rawTimeout = Number(env['DSH_USE_TELL_TIMEOUT_MS'])
+    const timeoutMs = Number.isFinite(rawTimeout) && rawTimeout > 0 ? rawTimeout : 30_000
+    const deadline = performance.now() + timeoutMs
+    let reason = '已到通知截止时间'
+    while (performance.now() < deadline) {
       try {
-        const res = viaSend
-          ? await run('send', [session, text], {}, 30_000)
-          : await run('notice', [session, text], { summary }, 30_000)
+        const res = await run(command, [session, text], command === 'notice' ? { summary } : {}, timeoutMs, deadline)
         if (res.ok) {
           const receipt = res.data as { scheduled?: boolean } | undefined
           let scheduled = receipt?.scheduled === true
           if (!scheduled) {
             // 旧通知回执只证明已记录；只读查询，不重发可能已经接收的消息。
             try {
-              const state = await run('status', [session], {}, 5000)
+              const state = await run('status', [session], {}, 5000, deadline)
               scheduled = state.ok && (state.data as { running?: boolean } | undefined)?.running === true
             } catch { /* 无法确认调度，保留未确认状态。 */ }
           }
           notificationState = scheduled ? 'scheduled' : 'recorded-unconfirmed'
-          stamp(scheduled ? `已给会话 ${shortId(session)} 送${viaSend ? '消息' : '通知'}并确认已安排执行；尚未确认模型回复` : `会话 ${shortId(session)} 的消息已记录，但未确认安排执行；不会重复发送`)
+          stamp(scheduled ? `已给会话 ${shortId(session)} 送${command === 'notice' ? '通知' : '消息'}并确认已安排执行；尚未确认模型回复` : `会话 ${shortId(session)} 的消息已记录，但未确认安排执行；不会重复发送`)
           return scheduled
         }
-        const code = res.error?.code ?? ''
+        const code = res.error?.code
+        reason = res.error?.message ?? '未知'
         if (code === 'notice-wakeup-unconfirmed') {
           notificationState = 'recorded-unconfirmed'
           stamp(`会话 ${shortId(session)} 的通知已记录，但未确认安排执行；不会重复发送`)
           return false
         }
-        // 旧版插件没有 notice 命令（报「没有命令」），或宿主拿不到会话控制器：都退回普通消息。
-        if (!viaSend && (code === 'notice-unsupported' || /没有命令 "notice"/.test(res.error?.message ?? ''))) { viaSend = true; continue }
-        // 刚起来时会话服务还没注册，接口报 service-unavailable：这是暂时的，接着试。
-        if (res.httpStatus === 400 && !/unavailable/.test(`${code} ${res.error?.message ?? ''}`)) {
-          stamp(`给会话 ${shortId(session)} 送消息被拒：${res.error?.message ?? '未知'}`)
+        // 旧插件把未注册命令也报为 usage，须用这个宿主的命令目录核实。
+        if (command === 'notice' && (code === 'notice-unsupported' ||
+            (code === 'usage' && res.httpStatus === 400 && await hostOnlySupportsSend(deadline)))) {
+          command = 'send'
+          continue
+        }
+        if (code !== 'gateway/service-unavailable') {
+          const rejected = res.httpStatus === 400 || code === 'not-found' || code === 'read-only'
+          stamp(`给会话 ${shortId(session)} ${rejected ? '送消息被拒' : '未确认消息送达'}：${reason}`)
           return false
         }
-        if (Date.now() >= deadline) { stamp(`给会话 ${shortId(session)} 送消息一直不成：${res.error?.message ?? '未知'}`); return false }
       } catch (error) {
-        if (Date.now() >= deadline) { stamp(`给会话 ${shortId(session)} 送消息失败：${error instanceof Error ? error.message : String(error)}`); return false }
+        reason = error instanceof Error ? error.message : String(error)
+        if (!(error instanceof Down)) {
+          stamp(`给会话 ${shortId(session)} 未确认消息送达：${reason}；不会重复发送`)
+          return false
+        }
       }
-      await sleep(300)
+      const remaining = deadline - performance.now()
+      await sleep(Math.max(0, Math.ceil(Math.min(300, remaining))))
+      if (remaining <= 300) break
     }
+    stamp(`给会话 ${shortId(session)} 送消息一直不成：${reason}`)
+    return false
   }
 
 

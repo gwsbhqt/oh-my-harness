@@ -51,7 +51,7 @@
  */
 
 import fsp from 'node:fs/promises'
-import { readdirSync, watch, type FSWatcher } from 'node:fs'
+import fs, { readdirSync, type FSWatcher } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { syncBuiltinESMExports } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
@@ -538,13 +538,75 @@ export async function normalizePathInPlace(path: string): Promise<void> {
   }
 }
 
+const WATCH_RETRY_DELAYS = [250, 1000, 4000] as const
+
+function watchPatchDirectory(ctx: Context, directory: string, schedule: (path: string) => void): () => void {
+  let active = true
+  let watcher: FSWatcher | undefined
+  let timer: ReturnType<typeof setTimeout> | undefined
+
+  function open(attempt: number): void {
+    if (!active) return
+    timer = undefined
+    const startedAt = Date.now()
+    let lastError: Error | undefined
+    let retired = false
+    const retry = (error: unknown): void => {
+      if (!active || retired) return
+      retired = true
+      // A stable watcher starts a new retry budget. Repeated immediate closes must exhaust it.
+      const stable = watcher !== undefined && Date.now() - startedAt >= 4000
+      watcher?.close()
+      watcher = undefined
+      const failures = stable ? 0 : attempt
+      const delay = WATCH_RETRY_DELAYS[failures]
+      if (delay === undefined) {
+        ctx.logger.warn('配置目录 %s 的监听重试 %d 次仍失败，已停止自动重试。%o', directory, failures, error)
+        return
+      }
+      if (failures === 0) ctx.logger.warn('配置目录 %s 的监听中断，将重试。%o', directory, error)
+      timer = setTimeout(() => open(failures + 1), delay)
+    }
+    const changed = (name: string): void => {
+      if (active && !retired && PATCH_FILE.test(name)) schedule(join(directory, name))
+    }
+    try {
+      if (!fs.statSync(directory).isDirectory()) {
+        if (attempt) ctx.logger.warn('配置路径 %s 已不再是目录，已停止监听', directory)
+        return
+      }
+      watcher = fs.watch(directory, (_event, filename) => { if (filename !== null) changed(String(filename)) })
+      watcher.on('error', error => {
+        lastError = error
+        retry(error)
+      })
+      watcher.once('close', () => queueMicrotask(() => retry(lastError ?? new Error('文件监听已关闭'))))
+      if (attempt) {
+        // Attach first so a write during the scan will also reach the normal change handler.
+        for (const name of readdirSync(directory)) changed(name)
+        ctx.logger.info('配置目录 %s 的监听已恢复，已重新扫描现有补丁', directory)
+      }
+    } catch (error) {
+      retry(error)
+    }
+  }
+
+  open(0)
+  return () => {
+    active = false
+    clearTimeout(timer)
+    watcher?.close()
+  }
+}
+
 /** 启动时归一化已有补丁文件，并监听 profile 目录里它们的外部改动。 */
 export function applyPatchWatcher(ctx: Context): void {
   ctx.effect(() => {
     const home = dshHomeDir()
     const profiles = join(home, 'profiles')
     const pending = new Map<string, ReturnType<typeof setTimeout>>()
-    const watchers: FSWatcher[] = []
+    const stopWatching: Array<() => void> = []
+    let disposed = false
     const schedule = (path: string): void => {
       const prev = pending.get(path)
       if (prev !== undefined) clearTimeout(prev)
@@ -554,24 +616,16 @@ export function applyPatchWatcher(ctx: Context): void {
       }, 150))
     }
     collectPatchPaths(home)
-      .then(paths => Promise.all(paths.map(p => normalizePathInPlace(p).catch(() => {}))))
+      .then(paths => { if (!disposed) return Promise.all(paths.map(p => normalizePathInPlace(p).catch(() => {}))) })
       .catch(() => {})
     try {
-      for (const dir of readdirSync(profiles)) {
-        try {
-          watchers.push(watch(join(profiles, dir), (_event, filename) => {
-            const name = filename === null ? '' : String(filename)
-            if (PATCH_FILE.test(name)) schedule(join(profiles, dir, name))
-          }))
-        } catch {
-          // 某个 profile 目录不可监听不影响其他目录
-        }
-      }
+      for (const dir of readdirSync(profiles)) stopWatching.push(watchPatchDirectory(ctx, join(profiles, dir), schedule))
     } catch {
       // profiles 目录不存在：没什么可监听
     }
     return () => {
-      for (const watcher of watchers) watcher.close()
+      disposed = true
+      for (const stop of stopWatching) stop()
       for (const timer of pending.values()) clearTimeout(timer)
       pending.clear()
     }

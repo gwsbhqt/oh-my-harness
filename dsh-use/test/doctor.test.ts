@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { invokeCli } from './cli-fixture.ts'
 import { startServer } from '../src/server.ts'
 import { tmpdir } from 'node:os'
@@ -155,4 +155,120 @@ test('输出逐条带错误和修复办法', () => {
   assert.match(reportText('离线', bad), /失败.*坏 profile/)
   assert.match(reportText('离线', bad), /修复：修复 profile/)
   assert.match(reportText('离线', { ...good, unverified: ['远程政策'] }), /未验证：远程政策/)
+})
+
+test('离线 CLI 超时后向整个进程组升级 SIGKILL，回收忽略 SIGTERM 的子进程与孙进程', { skip: process.platform === 'win32' }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-use-doctor-pgid-'))
+  const entry = join(dir, 'stubborn-doctor.mjs')
+  const pidsFile = join(dir, 'pids.json')
+  try {
+    writeFileSync(entry, [
+      `import { spawn } from 'node:child_process'`,
+      `import { writeFileSync } from 'node:fs'`,
+      `process.on('SIGTERM', () => {})`,
+      `const grand = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: 'inherit' })`,
+      `writeFileSync(${JSON.stringify(pidsFile)}, JSON.stringify({ child: process.pid, grand: grand.pid }))`,
+      `setInterval(() => {}, 1000)`,
+    ].join('\n'))
+    const report = await offlineDoctor({ home: dir, app: dir, entry, processTimeoutMs: 500 })
+    assert.equal(report.ok, false)
+    assert.match(report.checks[0]?.message ?? '', /超时/)
+    const { child, grand } = JSON.parse(readFileSync(pidsFile, 'utf8')) as { child: number; grand: number }
+    for (const pid of [child, grand]) {
+      assert.throws(() => process.kill(pid, 0), /ESRCH/, `进程 ${pid} 应已被进程组 SIGKILL 回收`)
+    }
+  } finally {
+    try {
+      const { child, grand } = JSON.parse(readFileSync(pidsFile, 'utf8')) as { child: number; grand: number }
+      for (const pid of [grand, child]) { try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ } }
+    } catch { /* no pids file */ }
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('离线 CLI 完整解析大于 8 MiB 的有效报告，并忽略成功检查的进度流', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-use-doctor-large-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const entry = join(dir, 'doctor.mjs')
+  const size = 8 * 1024 * 1024 + 1
+  const padding = Buffer.byteLength(JSON.stringify(good))
+  writeFileSync(entry, `const report = ${JSON.stringify(good)}; report.checks[0].message += 'x'.repeat(${size - padding}); process.stdout.write(JSON.stringify(report))`)
+  const large = await offlineDoctor({ home: dir, app: dir, entry })
+  assert.equal(large.ok, true)
+  assert.equal(Buffer.byteLength(JSON.stringify(large)), size)
+  assert.equal(large.checks[0]?.message === good.checks[0]!.message + 'x'.repeat(size - padding), true)
+
+  writeFileSync(entry, `process.stderr.write('x'.repeat(${size})); process.stdout.write(JSON.stringify(${JSON.stringify(good)}))`)
+  assert.deepEqual(await offlineDoctor({ home: dir, app: dir, entry }), good)
+})
+
+test('无效的大输出和异常退出保留真实错误、完整长度与结尾预览', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-use-doctor-preview-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const entry = join(dir, 'doctor.mjs')
+  const middle = 8 * 1024 * 1024
+  const message = '开始' + 'x'.repeat(middle) + '最后一条🚦'
+  for (const stream of ['stdout', 'stderr'] as const) {
+    writeFileSync(entry, `process.${stream}.write('开始'+'x'.repeat(${middle})+'最后一条🚦');` +
+      (stream === 'stderr' ? `console.log(JSON.stringify(${JSON.stringify(good)})); process.exitCode = 7` : ''))
+    const result = await offlineDoctor({ home: dir, app: dir, entry })
+    assert.equal(result.ok, false)
+    const diagnostic = result.checks.find((c) => !c.ok)?.message ?? ''
+    assert.match(diagnostic, stream === 'stderr' ? /退出码 7/ : /未正常完成/)
+    assert.ok(diagnostic.includes(`共 ${Buffer.byteLength(message)} 字节，仅显示末尾`))
+    assert.match(diagnostic, /最后一条🚦$/)
+    assert.ok(diagnostic.length < 20000)
+  }
+  writeFileSync(entry, `process.stderr.write(Buffer.alloc(${middle}, 0xff)); process.stderr.write('真实字节'); process.exitCode=2`)
+  const invalidUtf8 = await offlineDoctor({ home: dir, app: dir, entry })
+  assert.ok(invalidUtf8.checks[0]?.message.includes(`共 ${middle + Buffer.byteLength('真实字节')} 字节`))
+  assert.match(invalidUtf8.checks[0]?.message ?? '', /真实字节$/)
+})
+
+for (const timedOut of [false, true]) {
+  test(`进程组收尾覆盖${timedOut ? '超时父进程退出' : '父进程正常退出'}时已经关闭管道的子进程`, { skip: process.platform === 'win32' }, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-use-doctor-no-pipe-'))
+    t.after(() => rmSync(dir, { recursive: true, force: true }))
+    const entry = join(dir, 'doctor.mjs'), pids = join(dir, 'owned-group.json')
+    const worker = `process.on('SIGTERM', () => {}); process.send('ready'); process.disconnect(); setTimeout(() => {}, 15000)`
+    writeFileSync(entry, `import {spawn} from 'node:child_process'; import {writeFileSync} from 'node:fs';
+      const child = spawn(process.execPath, ['-e', ${JSON.stringify(worker)}], {stdio:['ignore','ignore','ignore','ipc']});
+      child.once('message', () => {
+        writeFileSync(${JSON.stringify(pids)}, JSON.stringify({group:process.pid, helper:child.pid}));
+        console.log(JSON.stringify(${JSON.stringify(good)}));
+        ${timedOut ? 'setInterval(() => {}, 1000)' : 'child.unref()'};
+      })`)
+    const result = await offlineDoctor({ home: dir, app: dir, entry, processTimeoutMs: timedOut ? 1000 : 5000 })
+    const { group, helper } = JSON.parse(readFileSync(pids, 'utf8')) as { group: number; helper: number }
+    try {
+      assert.equal(result.ok, !timedOut)
+      if (timedOut) assert.match(result.checks[0]?.message ?? '', /超时/)
+      assert.throws(() => process.kill(helper, 0), { code: 'ESRCH' })
+      assert.throws(() => process.kill(-group, 0), { code: 'ESRCH' })
+    } finally {
+      try { process.kill(-group, 'SIGKILL') } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error }
+    }
+  })
+}
+
+test('诊断组外的专用夹具占着输出流时，有限等待并报告输出完整性未知', { skip: process.platform === 'win32' }, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-use-doctor-open-pipe-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const entry = join(dir, 'doctor.mjs'), owned = join(dir, 'helper.json')
+  writeFileSync(entry, `import {spawn} from 'node:child_process'; import {writeFileSync} from 'node:fs';
+    const worker = spawn(process.execPath, ['-e', "process.send('ready'); process.disconnect(); setTimeout(() => {}, 15000)"],
+      {detached:true, stdio:['ignore','inherit','ignore','ipc']});
+    worker.once('message', () => { writeFileSync(${JSON.stringify(owned)}, JSON.stringify(worker.pid));
+      console.log(JSON.stringify(${JSON.stringify(good)})); worker.unref() })`)
+  const start = performance.now()
+  const result = await offlineDoctor({ home: dir, app: dir, entry, processTimeoutMs: 8000 })
+  const helper = Number(JSON.parse(readFileSync(owned, 'utf8')))
+  try {
+    assert.equal(result.ok, false)
+    assert.match(result.checks[0]?.message ?? '', /无法确认输出完整/)
+    assert.ok(performance.now() - start < 7000)
+    assert.equal(process.kill(helper, 0), true)
+  } finally {
+    try { process.kill(-helper, 'SIGKILL') } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error }
+  }
 })

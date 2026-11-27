@@ -46,6 +46,75 @@ describe('idle kernel reclaim', () => {
     assert.equal(s.kernelAlive, true)
   })
 
+  it('keeps a kernel with a running child process', { timeout: 120_000 }, async () => {
+    const s = session()
+    const start = await s.runCell('import subprocess, sys\n_child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])', new Map())
+    assert.equal(start.error, undefined, text(start))
+    try {
+      assert.match(await s.reclaimIfIdle(0) ?? '', /child processes running in the kernel/)
+      assert.equal(s.kernelAlive, true)
+    } finally {
+      const cleanup = await s.runCell('_child.terminate()\n_child.wait(timeout=5)', new Map())
+      assert.equal(cleanup.error, undefined, text(cleanup))
+    }
+  })
+
+  it('keeps a direct child in a new process group until it exits', { timeout: 120_000 }, async () => {
+    const s = session()
+    const start = await s.runCell([
+      'import os, subprocess, sys',
+      '_child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(20)"], process_group=0,',
+      '                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)',
+      'assert os.getpgid(_child.pid) != os.getpgrp() and os.getsid(_child.pid) == os.getsid(0)',
+    ].join('\n'), new Map())
+    assert.equal(start.error, undefined, text(start))
+    try {
+      assert.match(await s.reclaimIfIdle(0) ?? '', /child processes running in the kernel/)
+      assert.equal(s.kernelAlive, true)
+    } finally {
+      if (s.kernelAlive) {
+        const cleanup = await s.runCell('_child.terminate()\n_child.wait(timeout=5)\ndel _child', new Map())
+        assert.equal(cleanup.error, undefined, text(cleanup))
+      }
+    }
+    assert.equal(await s.reclaimIfIdle(0), undefined)
+    assert.equal(s.kernelAlive, false)
+  })
+
+  it('reclaims a kernel when its direct child has explicitly started a separate session', { timeout: 120_000 }, async () => {
+    const s = session()
+    const start = await s.runCell([
+      'import os, subprocess, sys',
+      '_pid = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(20)"], start_new_session=True,',
+      '                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).pid',
+      'assert os.getsid(_pid) == _pid and os.getsid(_pid) != os.getsid(0)',
+      'print(_pid)',
+    ].join('\n'), new Map())
+    assert.equal(start.error, undefined, text(start))
+    const pid = Number(start.logs.find(line => /^\s*\d+\s*$/.test(line)))
+    assert.ok(Number.isSafeInteger(pid) && pid > 0, text(start))
+    try {
+      assert.equal(await s.reclaimIfIdle(0), undefined)
+      assert.equal(s.kernelAlive, false)
+      process.kill(pid, 0)
+    } finally {
+      process.kill(pid, 'SIGTERM')
+    }
+  })
+
+  it('keeps a kernel with a running non-daemon thread', { timeout: 120_000 }, async () => {
+    const s = session()
+    const start = await s.runCell('import threading\n_stop = threading.Event()\n_t = threading.Thread(target=_stop.wait, args=(60,), daemon=False)\n_t.start()', new Map())
+    assert.equal(start.error, undefined, text(start))
+    try {
+      assert.match(await s.reclaimIfIdle(0) ?? '', /^1 thread\(s\) still running/)
+      assert.equal(s.kernelAlive, true)
+    } finally {
+      const cleanup = await s.runCell('_stop.set()\n_t.join(timeout=5)', new Map())
+      assert.equal(cleanup.error, undefined, text(cleanup))
+    }
+  })
+
   it('keeps a kernel whose snapshot cannot hold a name', { timeout: 120_000 }, async () => {
     const s = session()
     assert.equal((await s.runCell('import threading\nlock_holder = [threading.Lock()]\ngen = (i for i in range(3))', new Map())).error, undefined)
