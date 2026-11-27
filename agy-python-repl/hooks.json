@@ -7,6 +7,13 @@
         "timeout": 5
       }
     ],
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "python3 ./hooks/session_start.py --pre-invocation",
+        "timeout": 5
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "^(mcp_agy-python-repl_agy-python-repl_(run_code|kernel_state)|call_mcp_tool)$",

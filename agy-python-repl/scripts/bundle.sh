@@ -17,7 +17,7 @@ for existing in "$DEST"/* "$DEST"/.[!.]* "$DEST"/..?*; do
 done
 
 cp "$REPO_ROOT/LICENSE" "$DEST/LICENSE"
-for item in plugin.json mcp_config.json pyproject.toml uv.lock README.md hooks.json rules ui hooks; do
+for item in plugin.json mcp_config.json pyproject.toml uv.lock README.md hooks.json rules ui hooks sidecars; do
   cp -R "$PLUGIN_ROOT/$item" "$DEST/$item"
 done
 mkdir -p "$DEST/scripts" "$DEST/src"

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -10,15 +11,18 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from agy_python_repl.snapshot_paths import kernel_identity, snapshot_paths
-from python_repl_core.snapshot_store import open_snapshot, read_manifest
 
 
 START_GUIDANCE = (
-    "For data analysis, batch file reads, calculations or trusted Python skills, start with the "
-    "Python REPL's run_code. Open the requested inputs in the first cell and keep the data there. "
-    "Call the advertised tool directly, or read its MCP schema and use call_mcp_tool with the "
-    "listed ServerName and ToolName run_code."
+    "Start reviews across source files, docs or implementations with the persistent Python REPL's run_code. "
+    "Read any required SKILL.md with read_file and use rg if required to locate paths. Then load the related "
+    "files together in one cell, limited to the paths the task calls for. "
+    "Keep paths, text and matches in variables for comparisons and follow-up checks. For citations and "
+    "line numbers use enumerate(text.splitlines(), 1) on the saved text; reread a file only if it changed, "
+    "was incomplete, or a native tool needs a read before an edit. Start data analysis, "
+    "batch reads, calculations and trusted Python skills in run_code too. Use native tools for a single "
+    "lookup, edits, images, Git, builds and tests. If run_code is deferred, read its MCP schema and use "
+    "call_mcp_tool with the listed ServerName and ToolName run_code."
 )
 
 
@@ -29,38 +33,63 @@ def _data_dir() -> Path:
     return Path.home() / ".gemini" / "antigravity" / "plugin_data" / "agy-python-repl"
 
 
+def _claim_guidance(data: Path, conversation: str) -> bool:
+    # A changed instruction must also reach conversations opened before the update.
+    key = hashlib.sha256((conversation + "\0" + START_GUIDANCE).encode()).hexdigest()
+    directory = data / "routing-guidance"
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        (directory / key).touch(mode=0o600, exist_ok=False)
+    except FileExistsError:
+        return False
+    return True
+
+
+def _snapshot_hint(data: Path, conversation: str) -> str:
+    from agy_python_repl.snapshot_paths import kernel_identity, snapshot_paths
+    from python_repl_core.snapshot_store import open_snapshot, read_manifest
+
+    try:
+        _, storage = kernel_identity(data, conversation)
+        with open_snapshot(*snapshot_paths(data, storage), wait=False) as pair:
+            if pair is None:
+                return ""
+            manifest = read_manifest(pair)
+    except BlockingIOError:
+        # Keep the hook within its deadline. The first cell waits for the snapshot.
+        return ""
+    except (OSError, ValueError):
+        return "The saved Python REPL snapshot could not be read. The first cell will report its restore status."
+
+    msg = "Saved Python REPL snapshot ready. The first run_code cell will restore it."
+    saved_names = manifest.get("savedNames")
+    if isinstance(saved_names, list) and saved_names:
+        preview_names = ", ".join(str(n) for n in saved_names[:12])
+        more = f" (+{len(saved_names) - 12} more)" if len(saved_names) > 12 else ""
+        msg += f" Saved variables include {preview_names}{more}."
+    return msg
+
+
 def main() -> None:
     try:
         payload = json.load(sys.stdin)
-    except Exception:
-        print(json.dumps({}))
-        return
-
+    except ValueError:
+        payload = None
     conv_id = payload.get("conversationId") if isinstance(payload, dict) else None
     if not isinstance(conv_id, str) or not conv_id:
-        print(json.dumps({}))
+        print("{}")
         return
 
-    msg = START_GUIDANCE
+    starting = "--pre-invocation" not in sys.argv[1:]
+    data = _data_dir()
+    hint = _snapshot_hint(data, conv_id) if starting else ""
     try:
-        data = _data_dir()
-        _, storage = kernel_identity(data, conv_id)
-        with open_snapshot(*snapshot_paths(data, storage), wait=False) as pair:
-            if pair is not None:
-                manifest = read_manifest(pair)
-                msg += " Saved Python REPL snapshot ready. The first cell will restore it."
-                saved_names = manifest.get("savedNames")
-                if isinstance(saved_names, list) and saved_names:
-                    preview_names = ", ".join(str(n) for n in saved_names[:12])
-                    more = f" (+{len(saved_names) - 12} more)" if len(saved_names) > 12 else ""
-                    msg += f" Saved variables include {preview_names}{more}."
-    except BlockingIOError:
-        # The hook deadline also applies to the routing guidance; the first cell will wait for the snapshot.
-        pass
-    except (OSError, ValueError):
-        msg += " The saved Python REPL snapshot could not be read. The first cell will report its restore status."
-
-    print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": msg}}]}))
+        first = _claim_guidance(data, conv_id)
+    except OSError:
+        # Without a receipt only SessionStart is known to run once.
+        first = starting
+    msg = " ".join(filter(None, (START_GUIDANCE if first else "", hint)))
+    print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": msg}}]} if msg else {}))
 
 
 if __name__ == "__main__":

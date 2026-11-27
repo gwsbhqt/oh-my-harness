@@ -59,13 +59,13 @@ class SnapshotPublicationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "ok", result)
         return result
 
-    def hook(self, kernel):
+    def hook(self, kernel, *, data=None):
         config = json.loads((ROOT / "hooks.json").read_text())["agy-python-repl-session"]["SessionStart"][0]
         proc = subprocess.run(shlex.split(config["command"]), cwd=ROOT, timeout=config["timeout"], check=True,
                               input=json.dumps({"conversationId": kernel}), capture_output=True, text=True,
-                              env={"HOME": str(self.root), "PLUGIN_DATA": str(self.data), "PYTHONDONTWRITEBYTECODE": "1",
-                                   "PATH": os.pathsep.join((str(Path(sys.executable).parent), os.defpath))})
-        return json.loads(proc.stdout)["injectSteps"][0]["systemMessage"]["systemMessage"]
+                              env={"HOME": str(self.root), "PLUGIN_DATA": str(data if data is not None else self.data),
+                                   "PYTHONDONTWRITEBYTECODE": "1", "PATH": os.pathsep.join((str(Path(sys.executable).parent), os.defpath))})
+        return " ".join(step["systemMessage"]["systemMessage"] for step in json.loads(proc.stdout).get("injectSteps", []))
 
     def fail_publication(self):
         # Deny just the final publish on each layout. Encoding and writes to private temps still succeed.
@@ -85,16 +85,19 @@ class SnapshotPublicationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_busy_snapshot_still_gives_full_start_guidance_before_unlock(self):
         guidance = self.hook("new-conversation")
+        self.assertIn("run_code", guidance)
         async with self.server() as writer:
             await self.cell(writer, "first, second = 7, 11")
             state = await self.call(writer, "kernel_state", action="snapshot")
         payload = Path(state["snapshot_path"])
         for directory in (payload.parent, payload.resolve(strict=True).parent):
-            with self.subTest(directory=directory.name):
+            with self.subTest(directory=directory.name), tempfile.TemporaryDirectory(dir=self.root) as fresh:
+                data = Path(fresh)
+                (data / "snapshots").symlink_to(self.snapshots, target_is_directory=True)
                 fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
                 try:
                     fcntl.flock(fd, fcntl.LOCK_EX)
-                    self.assertEqual(self.hook("default"), guidance)
+                    self.assertEqual(self.hook("default", data=data), guidance)
                 finally:
                     os.close(fd)
         self.assertIn("first, second", self.hook("default"))

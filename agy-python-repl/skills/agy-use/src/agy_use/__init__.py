@@ -1,182 +1,891 @@
-"""在本机用官方 Antigravity CLI 查询模型和插件、安装本地插件和执行单次会话。"""
+"""通过 Antigravity App 官方 Sidecar 桥接控制桌面会话，并与 agy CLI 工具明确区分。"""
 from __future__ import annotations
 
 import asyncio
-import json
-import math
-import os
 from pathlib import Path
-import shutil
-import signal
+import time
 from typing import Any
 
-__all__ = ["status", "models", "plugins", "validate_plugin", "install_plugin", "run"]
+from ._cli_backend import (
+    cli_install_plugin,
+    cli_models,
+    cli_plugins,
+    cli_run,
+    cli_status,
+    cli_validate_plugin,
+)
+from ._client import (
+    call_bridge,
+    has_truncated_fields,
+    is_final_planner_response,
+    is_input_or_receipt_step,
+    last_model_response,
+    normalize_conversation,
+    receipt_matches,
+    resolve_conversation,
+    step_text,
+    steps_after,
+    validate_seconds,
+)
+
+__all__ = [
+    "health",
+    "sessions",
+    "get",
+    "new",
+    "send",
+    "wait",
+    "read",
+    "last",
+    "rename",
+    "archive",
+    "update",
+    "delete",
+    "cli_status",
+    "cli_models",
+    "cli_plugins",
+    "cli_validate_plugin",
+    "cli_install_plugin",
+    "cli_run",
+]
 
 
-def _seconds(timeout: float, *, allow_zero: bool = False) -> float:
-    if (isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and math.isfinite(timeout)
-            and (timeout > 0 or (allow_zero and timeout == 0))):
-        return float(timeout)
-    expected = "非负" if allow_zero else "正"
-    raise ValueError(f"timeout 必须是{expected}的有限秒数")
+async def health(*, socket_path: str | Path | None = None, timeout: float = 10) -> dict[str, Any]:
+    """检查 Antigravity App Sidecar 桥接、ConversationService 和 agentapi 状态。"""
+    return await call_bridge("health", socket_path=socket_path, timeout=validate_seconds(timeout))
 
 
-def _local_path(value: str | Path, *, directory: bool = False) -> Path:
-    if not isinstance(value, (str, Path)) or not str(value).strip():
-        raise ValueError("请指定本地路径")
-    path = Path(value).expanduser().resolve(strict=True)
-    if directory and not path.is_dir():
-        raise NotADirectoryError(str(path))
-    return path
+async def sessions(
+    *,
+    query: str | None = None,
+    project_id: str | None = None,
+    tags: list[str] | None = None,
+    include_archived: bool = False,
+    limit: int = 20,
+    socket_path: str | Path | None = None,
+    timeout: float = 15,
+) -> dict[str, Any]:
+    """列出或按关键词筛选 Antigravity App 桌面会话。limit=0 返回全部已扫描会话。"""
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+        raise ValueError("limit 必须是非负整数")
+    if not isinstance(include_archived, bool):
+        raise ValueError("include_archived 必须是布尔值")
+    needle = query.strip().lower() if isinstance(query, str) and query.strip() else None
+    params: dict[str, Any] = {
+        "include_archived": include_archived,
+        "limit": 0 if needle else limit,
+        "scan_all": bool(needle) or limit == 0 or limit > 100,
+    }
+    if project_id is not None:
+        if not isinstance(project_id, str) or not project_id.strip():
+            raise ValueError("project_id 不能为空")
+        params["project_id"] = project_id.strip()
+    if tags is not None:
+        params["tags"] = [str(t) for t in tags]
+
+    resp = await call_bridge("list_conversations", params, socket_path=socket_path, timeout=validate_seconds(timeout))
+    if not resp.get("ok"):
+        return resp
+    items = [normalize_conversation(c) for c in resp.get("conversations", []) if isinstance(c, dict)]
+    if needle:
+        items = [
+            item
+            for item in items
+            if needle in (item.get("id") or "").lower()
+            or needle in (item.get("title") or "").lower()
+            or needle in (item.get("summary") or "").lower()
+        ]
+    matched = len(items)
+    shown_items = items if limit == 0 else items[:limit]
+    return {
+        "ok": True,
+        "timed_out": False,
+        "socket": resp.get("socket"),
+        "sessions": shown_items,
+        "meta": {
+            "shown": len(shown_items),
+            "matched": matched,
+            "include_archived": include_archived,
+            "next_page_token": resp.get("next_page_token"),
+        },
+    }
 
 
-def _stop(process: asyncio.subprocess.Process) -> None:
+async def get(
+    conversation_id: str,
+    *,
+    include_archived: bool = True,
+    include_metadata: bool = True,
+    socket_path: str | Path | None = None,
+    timeout: float = 15,
+) -> dict[str, Any]:
+    """定位并读取指定 Antigravity App 桌面会话的状态、元数据和本地转录摘要。"""
+    seconds = validate_seconds(timeout)
+    resolved = await resolve_conversation(
+        conversation_id,
+        include_archived=include_archived,
+        include_metadata=include_metadata,
+        socket_path=socket_path,
+        timeout=seconds,
+    )
+    if not resolved.get("ok"):
+        return resolved
+    exact_id = resolved["conversation_id"]
+    transcript = await call_bridge(
+        "read_transcript",
+        {"conversation_id": exact_id, "full": False, "include_steps": False},
+        socket_path=socket_path,
+        timeout=seconds,
+    )
+    return {
+        "ok": True,
+        "timed_out": False,
+        "socket": resolved.get("socket"),
+        "conversation_id": exact_id,
+        "conversation": normalize_conversation(resolved["conversation"]),
+        "raw_conversation": resolved["conversation"],
+        "metadata": resolved.get("metadata"),
+        "transcript": {
+            "exists": bool(transcript.get("exists", False)),
+            "path": transcript.get("path"),
+            "total_steps": transcript.get("total_steps", 0),
+            "last_step_index": transcript.get("last_step_index"),
+            "last_response_preview": transcript.get("last_response_preview", "") if transcript.get("ok") else "",
+        },
+    }
+
+
+async def _load_full_if_truncated(
+    exact_id: str,
+    steps: list[dict[str, Any]],
+    candidate_steps: list[dict[str, Any]],
+    *,
+    from_step: int = 0,
+    last_reply_only: bool = False,
+    socket_path: str | Path | None,
+    timeout: float,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    if not any(has_truncated_fields(s) for s in candidate_steps):
+        return steps, None
+    full_res = await call_bridge(
+        "read_transcript",
+        {"conversation_id": exact_id, "full": True, "from_step": from_step, "last_reply_only": last_reply_only},
+        socket_path=socket_path,
+        timeout=timeout,
+    )
+    if not full_res.get("ok"):
+        return steps, full_res
+    if full_res.get("exists") and isinstance(full_res.get("steps"), list):
+        return full_res["steps"], None
+    return steps, {"ok": False, "error_code": "transcript-incomplete", "error": "完整转录尚不可用，暂时无法核实全文"}
+
+
+async def wait(
+    conversation_id: str,
+    *,
+    since_step: int | None = None,
+    since_time: str | None = None,
+    expected_prompt: str | None = None,
+    allow_user_input: bool = False,
+    timeout: float = 120,
+    poll_interval: float = 0.5,
+    socket_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """等待指定的 Antigravity App 桌面会话完成收件与非空最终答复。"""
+    seconds = validate_seconds(timeout, allow_zero=True)
+    interval = validate_seconds(poll_interval, name="poll_interval")
+    if since_step is not None and (isinstance(since_step, bool) or not isinstance(since_step, int)):
+        raise ValueError("since_step 必须是整数")
+    if expected_prompt is not None and (not isinstance(expected_prompt, str) or not expected_prompt.strip()):
+        raise ValueError("expected_prompt 不能为空")
+    if not isinstance(allow_user_input, bool):
+        raise ValueError("allow_user_input 必须是布尔值")
+
+    resolved = await resolve_conversation(
+        conversation_id,
+        include_archived=True,
+        include_metadata=False,
+        socket_path=socket_path,
+        timeout=min(15.0, seconds) if seconds else 15.0,
+    )
+    if not resolved.get("ok"):
+        return resolved
+    exact_id = resolved["conversation_id"]
+    socket_used = resolved.get("socket")
+
+    deadline = None if seconds == 0 else (time.monotonic() + seconds)
+    seen_running = False
+    idle_grace_used = False
+    last_run_state = ""
+    last_update_time = ""
+    last_step_index: int | None = None
+    last_events: list[dict[str, Any]] = []
+    last_conv = resolved["conversation"]
+
     try:
-        if os.name == "posix":
-            os.killpg(process.pid, signal.SIGKILL)
-        else:
-            process.kill()
-    except ProcessLookupError:
-        pass
+        while True:
+            step_timeout = 10.0 if deadline is None else max(0.5, min(10.0, deadline - time.monotonic()))
+            current = await call_bridge(
+                "get_conversation",
+                {"conversation_id": exact_id, "include_metadata": False},
+                socket_path=socket_path,
+                timeout=step_timeout,
+            )
+            if not current.get("ok"):
+                current["conversation_id"] = exact_id
+                current["events"] = last_events
+                return current
 
+            last_conv = current["conversation"]
+            state_obj = last_conv.get("state") if isinstance(last_conv.get("state"), dict) else {}
+            last_run_state = str(state_obj.get("runState") or "")
+            last_update_time = str(state_obj.get("updateTime") or "")
+            if last_run_state in ("RUN_STATE_RUNNING", "RUN_STATE_CANCELLING"):
+                seen_running = True
+                idle_grace_used = False
 
-async def _command(args: list[str], *, timeout: float | None, cwd: Path | None = None) -> dict[str, Any]:
-    installed = shutil.which("agy")
-    executable = str(Path(installed).absolute() if installed else Path.home() / ".local/bin/agy")
-    receipt = {"executable": executable, "ok": False, "exit_code": None, "timed_out": False,
-               "stdout": "", "stderr": ""}
-    launch = asyncio.create_task(asyncio.create_subprocess_exec(
-        executable, *args, cwd=cwd, stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        start_new_session=os.name == "posix",
-    ))
-    output = None
-    try:
-        process = await asyncio.shield(launch)
-        output = asyncio.create_task(process.communicate())
-        try:
-            stdout, stderr = await asyncio.wait_for(asyncio.shield(output), timeout)
-        except TimeoutError:
-            receipt["timed_out"] = True
-            receipt["error"] = f"等待 AGY 超过 {timeout:g} 秒"
-            _stop(process)
-            stdout, stderr = await output
+            first_step = max(0, since_step + 1) if since_step is not None else 0
+            transcript = await call_bridge(
+                "read_transcript",
+                {"conversation_id": exact_id, "full": False, "from_step": first_step},
+                socket_path=socket_path,
+                timeout=step_timeout,
+            )
+            if not transcript.get("ok"):
+                transcript["conversation_id"] = exact_id
+                transcript["events"] = last_events
+                return transcript
+
+            steps = transcript.get("steps", [])
+            last_step_index = transcript.get("last_step_index")
+            new_steps = steps_after(steps, since_step)
+            steps, full_err = await _load_full_if_truncated(
+                exact_id, steps, new_steps, from_step=first_step, socket_path=socket_path, timeout=step_timeout,
+            )
+            if full_err is not None:
+                full_err["conversation_id"] = exact_id
+                full_err["events"] = last_events
+                return full_err
+            new_steps = steps_after(steps, since_step)
+            last_events = new_steps
+
+            if expected_prompt is not None:
+                matching = [
+                    s for s in new_steps
+                    if receipt_matches(s, expected_prompt, exact_id, allow_user_input=allow_user_input)
+                ]
+                if len(matching) > 1:
+                    return {
+                        "ok": False,
+                        "timed_out": False,
+                        "status": "ambiguous",
+                        "error_code": "ambiguous-reply",
+                        "error": f"基线之后出现 {len(matching)} 条同正文收件步骤，存在并发歧义，拒绝确认回复",
+                        "socket": socket_used,
+                        "conversation_id": exact_id,
+                        "run_state": last_run_state,
+                        "update_time": last_update_time,
+                        "last_step_index": last_step_index,
+                        "matching_receipt_steps": [s.get("step_index") for s in matching],
+                        "events": new_steps,
+                        "conversation": normalize_conversation(last_conv),
+                    }
+                if len(matching) == 1:
+                    receipt_step = matching[0]
+                    receipt_idx = receipt_step.get("step_index")
+                    segment: list[dict[str, Any]] = []
+                    bounded_by_next_input = False
+                    for s in new_steps:
+                        idx = s.get("step_index")
+                        if isinstance(idx, int) and isinstance(receipt_idx, int) and idx > receipt_idx:
+                            if is_input_or_receipt_step(s, exact_id):
+                                bounded_by_next_input = True
+                                break
+                            segment.append(s)
+
+                    finals = [s for s in segment if is_final_planner_response(s)]
+                    non_empty = [s for s in finals if step_text(s).strip()]
+                    if last_run_state == "RUN_STATE_IDLE":
+                        if non_empty:
+                            reply_step = non_empty[-1]
+                            return {
+                                "ok": True,
+                                "timed_out": False,
+                                "status": "completed",
+                                "socket": socket_used,
+                                "conversation_id": exact_id,
+                                "run_state": last_run_state,
+                                "update_time": last_update_time,
+                                "last_step_index": last_step_index,
+                                "receipt_step_index": receipt_idx,
+                                "reply_step_index": reply_step.get("step_index"),
+                                "events": new_steps,
+                                "response": step_text(reply_step),
+                                "conversation": normalize_conversation(last_conv),
+                            }
+                        if finals:
+                            return {
+                                "ok": False,
+                                "timed_out": False,
+                                "status": "failed",
+                                "error_code": "empty-response",
+                                "error": "目标会话在收到消息后返回了空回复",
+                                "socket": socket_used,
+                                "conversation_id": exact_id,
+                                "run_state": last_run_state,
+                                "update_time": last_update_time,
+                                "last_step_index": last_step_index,
+                                "receipt_step_index": receipt_idx,
+                                "events": new_steps,
+                                "conversation": normalize_conversation(last_conv),
+                            }
+                        if seen_running or bounded_by_next_input or bool(segment):
+                            if idle_grace_used or bounded_by_next_input:
+                                return {
+                                    "ok": False,
+                                    "timed_out": False,
+                                    "status": "cancelled",
+                                    "error_code": "cancelled-without-response",
+                                    "error": "目标会话已结束或取消，但收件步骤之后未出现非空最终 PLANNER_RESPONSE",
+                                    "socket": socket_used,
+                                    "conversation_id": exact_id,
+                                    "run_state": last_run_state,
+                                    "update_time": last_update_time,
+                                    "last_step_index": last_step_index,
+                                    "receipt_step_index": receipt_idx,
+                                    "events": new_steps,
+                                    "conversation": normalize_conversation(last_conv),
+                                }
+                            idle_grace_used = True
+            else:
+                finals = [s for s in new_steps if is_final_planner_response(s)]
+                non_empty = [s for s in finals if step_text(s).strip()]
+                if last_run_state == "RUN_STATE_IDLE":
+                    if since_step is not None:
+                        if non_empty:
+                            reply_step = non_empty[-1]
+                            return {
+                                "ok": True,
+                                "timed_out": False,
+                                "status": "completed",
+                                "socket": socket_used,
+                                "conversation_id": exact_id,
+                                "run_state": last_run_state,
+                                "update_time": last_update_time,
+                                "last_step_index": last_step_index,
+                                "reply_step_index": reply_step.get("step_index"),
+                                "events": new_steps,
+                                "response": step_text(reply_step),
+                                "conversation": normalize_conversation(last_conv),
+                            }
+                        if finals:
+                            return {
+                                "ok": False,
+                                "timed_out": False,
+                                "status": "failed",
+                                "error_code": "empty-response",
+                                "error": "目标会话返回了空回复",
+                                "socket": socket_used,
+                                "conversation_id": exact_id,
+                                "run_state": last_run_state,
+                                "update_time": last_update_time,
+                                "last_step_index": last_step_index,
+                                "events": new_steps,
+                                "conversation": normalize_conversation(last_conv),
+                            }
+                        if seen_running:
+                            if idle_grace_used:
+                                return {
+                                    "ok": False,
+                                    "timed_out": False,
+                                    "status": "cancelled",
+                                    "error_code": "cancelled-without-response",
+                                    "error": "目标会话已结束或取消，未产生非空最终 PLANNER_RESPONSE",
+                                    "socket": socket_used,
+                                    "conversation_id": exact_id,
+                                    "run_state": last_run_state,
+                                    "update_time": last_update_time,
+                                    "last_step_index": last_step_index,
+                                    "events": new_steps,
+                                    "conversation": normalize_conversation(last_conv),
+                                }
+                            idle_grace_used = True
+                    elif since_time is not None:
+                        if (last_update_time > since_time) or seen_running:
+                            if non_empty:
+                                reply_step = non_empty[-1]
+                                return {
+                                    "ok": True,
+                                    "timed_out": False,
+                                    "status": "completed",
+                                    "socket": socket_used,
+                                    "conversation_id": exact_id,
+                                    "run_state": last_run_state,
+                                    "update_time": last_update_time,
+                                    "last_step_index": last_step_index,
+                                    "reply_step_index": reply_step.get("step_index"),
+                                    "events": new_steps,
+                                    "response": step_text(reply_step),
+                                    "conversation": normalize_conversation(last_conv),
+                                }
+                            if finals:
+                                return {
+                                    "ok": False,
+                                    "timed_out": False,
+                                    "status": "failed",
+                                    "error_code": "empty-response",
+                                    "error": "目标会话返回了空回复",
+                                    "socket": socket_used,
+                                    "conversation_id": exact_id,
+                                    "run_state": last_run_state,
+                                    "update_time": last_update_time,
+                                    "last_step_index": last_step_index,
+                                    "events": new_steps,
+                                    "conversation": normalize_conversation(last_conv),
+                                }
+                    else:
+                        reply_step = last_model_response(steps)
+                        return {
+                            "ok": True,
+                            "timed_out": False,
+                            "status": "completed",
+                            "socket": socket_used,
+                            "conversation_id": exact_id,
+                            "run_state": last_run_state,
+                            "update_time": last_update_time,
+                            "last_step_index": last_step_index,
+                            "events": new_steps,
+                            "response": step_text(reply_step) if reply_step else "",
+                            "conversation": normalize_conversation(last_conv),
+                        }
+
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return {
+                        "ok": False,
+                        "timed_out": True,
+                        "status": "timeout",
+                        "error_code": "wait-timeout",
+                        "error": f"等待会话 {exact_id} 完成超过 {seconds:g} 秒",
+                        "socket": socket_used,
+                        "conversation_id": exact_id,
+                        "run_state": last_run_state,
+                        "update_time": last_update_time,
+                        "last_step_index": last_step_index,
+                        "events": last_events,
+                        "conversation": normalize_conversation(last_conv),
+                    }
+                await asyncio.sleep(min(interval, remaining))
+            else:
+                await asyncio.sleep(interval)
     except asyncio.CancelledError as cancelled:
-        try:
-            process = await launch
-        except OSError:
-            raise cancelled
-        _stop(process)
-        stdout, stderr = await (output if output is not None else process.communicate())
-        receipt.update(cancelled=True, exit_code=process.returncode, stdout=stdout.decode(errors="replace"),
-                       stderr=stderr.decode(errors="replace"))
-        cancelled.receipt = receipt
+        cancelled.receipt = {  # type: ignore[attr-defined]
+            "ok": False,
+            "cancelled": True,
+            "timed_out": False,
+            "status": "cancelled",
+            "socket": socket_used,
+            "conversation_id": exact_id,
+            "run_state": last_run_state,
+            "update_time": last_update_time,
+            "last_step_index": last_step_index,
+            "events": last_events,
+        }
         raise
-    except OSError as error:
-        receipt["error"] = str(error)
-        return receipt
-    receipt.update(exit_code=process.returncode, stdout=stdout.decode(errors="replace"),
-                   stderr=stderr.decode(errors="replace"),
-                   ok=process.returncode == 0 and not receipt["timed_out"])
-    return receipt
 
 
-def _json_output(receipt: dict[str, Any], expected: type) -> dict[str, Any]:
-    try:
-        data = json.loads(receipt["stdout"])
-        if not isinstance(data, expected):
-            raise ValueError(f"期待 {expected.__name__}，收到 {type(data).__name__}")
-        receipt["data"] = data
-    except ValueError as error:
-        receipt["ok"] = False
-        receipt["output_error"] = str(error)
-    return receipt
+async def new(
+    prompt: str = "",
+    *,
+    project_id: str | None = None,
+    environment_id: str | None = None,
+    title: str | None = None,
+    model: str | None = None,
+    tags: list[str] | None = None,
+    wait: bool = False,
+    timeout: float = 120,
+    poll_interval: float = 0.5,
+    socket_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """在 Antigravity App 中创建一个新的桌面会话，可选发送首条提示并等待完成。"""
+    if not isinstance(prompt, str):
+        raise ValueError("prompt 必须是字符串")
+    if not isinstance(wait, bool):
+        raise ValueError("wait 必须是布尔值")
+    seconds = validate_seconds(timeout, allow_zero=wait)
+
+    params: dict[str, Any] = {}
+    if project_id is not None:
+        params["project_id"] = str(project_id)
+    if environment_id is not None:
+        params["environment_id"] = str(environment_id)
+    if title is not None:
+        params["title"] = str(title)
+    if model is not None:
+        params["model"] = str(model)
+    if tags is not None:
+        params["tags"] = [str(t) for t in tags]
+    has_prompt = bool(prompt.strip())
+    if has_prompt:
+        params["prompt"] = prompt
+
+    created = await call_bridge(
+        "create_conversation",
+        params,
+        socket_path=socket_path,
+        timeout=min(30.0, seconds) if seconds else 30.0,
+    )
+    if not created.get("ok"):
+        return created
+
+    conv = created["conversation"]
+    conv_id = conv.get("id")
+    receipt = {
+        "conversation_id": conv_id,
+        "created": True,
+        "sent": has_prompt,
+        "since_step": -1,
+    }
+    if not wait or not has_prompt or not isinstance(conv_id, str):
+        return {
+            "ok": True,
+            "timed_out": False,
+            "status": "created",
+            "socket": created.get("socket"),
+            "conversation_id": conv_id,
+            "conversation": normalize_conversation(conv),
+            "receipt": receipt,
+        }
+
+    waited = await globals()["wait"](
+        conv_id,
+        since_step=-1,
+        expected_prompt=prompt,
+        allow_user_input=True,
+        timeout=seconds,
+        poll_interval=poll_interval,
+        socket_path=socket_path,
+    )
+    return {**waited, "created": True, "sent": True, "receipt": receipt}
 
 
-async def status(*, timeout: float = 10) -> dict[str, Any]:
-    """运行 agy --version。executable 是所选入口，版本原文在 stdout。"""
-    return await _command(["--version"], timeout=_seconds(timeout))
-
-
-async def models(*, timeout: float = 30) -> dict[str, Any]:
-    """读取 AGY 可用模型的 ID 和显示名称。stdout 保留目录原文。"""
-    return await _command(["models"], timeout=_seconds(timeout))
-
-
-async def plugins(*, timeout: float = 30) -> dict[str, Any]:
-    """读取已安装插件及其启用状态。data 为 AGY 的原始 JSON 数组。"""
-    return _json_output(await _command(["plugin", "list", "--json"], timeout=_seconds(timeout)), list)
-
-
-async def validate_plugin(path: str | Path, *, strict: bool = False, timeout: float = 30) -> dict[str, Any]:
-    """检查本地插件目录、plugin.json 或 ZIP。strict 也将警告视为失败。"""
-    if not isinstance(strict, bool):
-        raise ValueError("strict 必须是布尔值")
-    args = ["plugin", "validate", str(_local_path(path)), "--json"]
-    if strict:
-        args.append("--strict")
-    return _json_output(await _command(args, timeout=_seconds(timeout)), dict)
-
-
-async def install_plugin(path: str | Path, *, timeout: float = 60) -> dict[str, Any]:
-    """按已有授权安装指定的本地插件目录一次，返回安装命令的回执。"""
-    return await _command(["plugin", "install", str(_local_path(path, directory=True))], timeout=_seconds(timeout))
-
-
-async def run(prompt: str, workspace: str | Path, *, conversation_id: str | None = None,
-              model: str | None = None, allow_repl: bool = False, timeout: float = 120) -> dict[str, Any]:
-    """在指定目录发一次提示。指定编号可续聊。timeout=0 等待这一轮自然结束，返回原始事件和官方结果。"""
-    cwd = _local_path(workspace, directory=True)
-    seconds = _seconds(timeout, allow_zero=True)
+async def send(
+    conversation_id: str,
+    prompt: str,
+    *,
+    title: str | None = None,
+    wait: bool = False,
+    timeout: float = 120,
+    poll_interval: float = 0.5,
+    socket_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """向 Antigravity App 中指定的已有会话发送消息，返回回执并可选等待本轮回复。"""
     if not isinstance(prompt, str) or not prompt.strip():
-        raise ValueError("提示不能为空")
-    duration = f"{max(1, round(seconds * 1000))}ms" if seconds else "0"
-    args = ["--output-format=stream-json", f"--print-timeout={duration}"]
-    for flag, value in (("conversation", conversation_id), ("model", model)):
-        if value is not None:
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError(f"{flag} 不能为空")
-            args.append(f"--{flag}={value}")
-    if not isinstance(allow_repl, bool):
-        raise ValueError("allow_repl 必须是布尔值")
-    if allow_repl:
-        settings = {"permissions": {"allow": ["mcp(agy-python-repl_agy-python-repl/run_code)"]}}
-        args.append("--settings=" + json.dumps(settings, separators=(",", ":")))
-    args.append(f"--print={prompt}")
-    # 有期限时，留两秒让宿主写回原生超时结果并退出。
-    receipt = await _command(args, cwd=cwd, timeout=seconds + 2 if seconds else None)
-    receipt["workspace"] = str(cwd)
-    events = []
-    receipt["events"] = events
-    try:
-        for line in receipt["stdout"].split("\n"):
-            if not line.strip():
-                continue
-            event = json.loads(line)
-            if not isinstance(event, dict) or not isinstance(event.get("event"), str):
-                raise ValueError("AGY 输出缺少事件名")
-            events.append(event)
-        results = [event.get("result") for event in events if event["event"] == "result"]
-        if len(results) != 1 or events[-1]["event"] != "result" or not isinstance(results[0], dict):
-            raise ValueError("AGY 未以唯一的 result 事件结束")
-        result = results[0]
-        receipt["result"] = result
-        native_error = result.get("error")
-        if isinstance(native_error, str) and native_error.strip():
-            receipt["ok"] = False
-            receipt.setdefault("error", native_error)
-        elif result.get("denied_actions"):
-            receipt["ok"] = False
-            receipt.setdefault("error", "AGY 拒绝了操作，详情见 result.denied_actions")
-        elif result.get("status") != "SUCCESS":
-            receipt["ok"] = False
-        elif conversation_id is not None and result.get("conversation_id") != conversation_id:
-            receipt["ok"] = False
-            receipt.setdefault("error", "AGY 返回的会话编号与指定编号不一致")
-        elif not isinstance(result.get("response"), str) or not result["response"].strip():
-            receipt["ok"] = False
-            receipt.setdefault("error", "AGY 结束了本轮，但没有返回答复")
-    except ValueError as error:
-        receipt["ok"] = False
-        receipt["output_error"] = str(error)
-    return receipt
+        raise ValueError("prompt 不能为空")
+    if not isinstance(wait, bool):
+        raise ValueError("wait 必须是布尔值")
+    seconds = validate_seconds(timeout, allow_zero=wait)
+
+    pre_timeout = max(5.0, min(15.0, seconds)) if (wait and seconds) else (min(15.0, seconds) if seconds else 15.0)
+    resolved = await resolve_conversation(
+        conversation_id,
+        include_archived=True,
+        include_metadata=False,
+        socket_path=socket_path,
+        timeout=pre_timeout,
+    )
+    if not resolved.get("ok"):
+        return {**resolved, "sent": False}
+
+    exact_id = resolved["conversation_id"]
+    conv = resolved["conversation"]
+    state_obj = conv.get("state") if isinstance(conv.get("state"), dict) else {}
+    transcript = await call_bridge(
+        "read_transcript",
+        {"conversation_id": exact_id, "full": False, "include_steps": False},
+        socket_path=socket_path,
+        timeout=pre_timeout,
+    )
+    if not transcript.get("ok"):
+        return {**transcript, "conversation_id": exact_id, "sent": False}
+
+    baseline = {
+        "last_step_index": transcript.get("last_step_index"),
+        "total_steps": transcript.get("total_steps", 0),
+        "update_time": str(state_obj.get("updateTime") or ""),
+        "run_state": str(state_obj.get("runState") or ""),
+    }
+
+    send_params: dict[str, Any] = {"conversation_id": exact_id, "prompt": prompt}
+    if title is not None:
+        send_params["title"] = str(title)
+    send_timeout = max(5.0, min(30.0, seconds)) if (wait and seconds) else (min(30.0, seconds) if seconds else 30.0)
+    sent = await call_bridge(
+        "send_message",
+        send_params,
+        socket_path=socket_path,
+        timeout=send_timeout,
+    )
+    if not sent.get("ok"):
+        return {
+            **sent,
+            "conversation_id": exact_id,
+            "baseline": baseline,
+        }
+
+    since_step = baseline["last_step_index"] if baseline["last_step_index"] is not None else -1
+    receipt = {
+        "conversation_id": exact_id,
+        "sent": True,
+        "since_step": since_step,
+        "prompt": prompt,
+        "baseline": baseline,
+        "agentapi": sent.get("agentapi"),
+    }
+    if not wait:
+        return {
+            "ok": True,
+            "timed_out": False,
+            "status": "sent",
+            "socket": sent.get("socket"),
+            "conversation_id": exact_id,
+            "sent": True,
+            "baseline": baseline,
+            "receipt": receipt,
+        }
+
+    waited = await globals()["wait"](
+        exact_id,
+        since_step=since_step,
+        since_time=baseline["update_time"] or None,
+        expected_prompt=prompt,
+        timeout=seconds,
+        poll_interval=poll_interval,
+        socket_path=socket_path,
+    )
+    return {**waited, "sent": True, "baseline": baseline, "receipt": receipt}
+
+
+async def read(
+    conversation_id: str,
+    *,
+    from_step: int = 0,
+    limit: int = 50,
+    full: bool = False,
+    socket_path: str | Path | None = None,
+    timeout: float = 15,
+) -> dict[str, Any]:
+    """读取指定 Antigravity App 桌面会话的转录步骤和当前运行状态。"""
+    if isinstance(from_step, bool) or not isinstance(from_step, int) or from_step < 0:
+        raise ValueError("from_step 必须是非负整数")
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+        raise ValueError("limit 必须是非负整数")
+    if not isinstance(full, bool):
+        raise ValueError("full 必须是布尔值")
+    seconds = validate_seconds(timeout)
+
+    resolved = await resolve_conversation(
+        conversation_id,
+        include_archived=True,
+        include_metadata=False,
+        socket_path=socket_path,
+        timeout=seconds,
+    )
+    if not resolved.get("ok"):
+        return resolved
+    exact_id = resolved["conversation_id"]
+    transcript = await call_bridge(
+        "read_transcript",
+        {"conversation_id": exact_id, "full": full, "from_step": from_step, "limit": limit},
+        socket_path=socket_path,
+        timeout=seconds,
+    )
+    if not transcript.get("ok"):
+        return {**transcript, "conversation_id": exact_id}
+
+    return {
+        "ok": True,
+        "timed_out": False,
+        "socket": resolved.get("socket"),
+        "conversation_id": exact_id,
+        "conversation": normalize_conversation(resolved["conversation"]),
+        "transcript_path": transcript.get("path"),
+        "exists": bool(transcript.get("exists", False)),
+        "total_steps": transcript.get("total_steps", 0),
+        "last_step_index": transcript.get("last_step_index"),
+        "has_more": transcript["has_more"],
+        "steps": transcript["steps"],
+    }
+
+
+async def last(
+    conversation_id: str,
+    *,
+    chars: int = 4000,
+    socket_path: str | Path | None = None,
+    timeout: float = 15,
+) -> dict[str, Any]:
+    """读取指定 Antigravity App 桌面会话的最近一条助手回复与当前状态。"""
+    if isinstance(chars, bool) or not isinstance(chars, int) or chars < 0:
+        raise ValueError("chars 必须是非负整数")
+    seconds = validate_seconds(timeout)
+
+    resolved = await resolve_conversation(
+        conversation_id,
+        include_archived=True,
+        include_metadata=False,
+        socket_path=socket_path,
+        timeout=seconds,
+    )
+    if not resolved.get("ok"):
+        return resolved
+    exact_id = resolved["conversation_id"]
+    transcript = await call_bridge(
+        "read_transcript",
+        {"conversation_id": exact_id, "full": False, "last_reply_only": True},
+        socket_path=socket_path,
+        timeout=seconds,
+    )
+    if not transcript.get("ok"):
+        return {**transcript, "conversation_id": exact_id}
+
+    steps = transcript.get("steps", [])
+    reply_step = last_model_response(steps)
+    if reply_step is not None and has_truncated_fields(reply_step):
+        steps, full_err = await _load_full_if_truncated(
+            exact_id, steps, [reply_step], last_reply_only=True, socket_path=socket_path, timeout=seconds,
+        )
+        if full_err is not None:
+            return {**full_err, "conversation_id": exact_id}
+        reply_step = last_model_response(steps)
+    full_text = step_text(reply_step) if reply_step else ""
+    truncated = chars > 0 and len(full_text) > chars
+    shown = full_text[:chars] if truncated else full_text
+    return {
+        "ok": True,
+        "timed_out": False,
+        "socket": resolved.get("socket"),
+        "conversation_id": exact_id,
+        "conversation": normalize_conversation(resolved["conversation"]),
+        "last_step_index": transcript.get("last_step_index"),
+        "reply_step_index": reply_step.get("step_index") if reply_step else None,
+        "model": reply_step.get("model") if reply_step else None,
+        "created_at": reply_step.get("created_at") if reply_step else None,
+        "response": shown,
+        "total_chars": len(full_text),
+        "truncated": truncated,
+    }
+
+
+async def update(
+    conversation_id: str,
+    *,
+    title: str | None = None,
+    archived: bool | None = None,
+    pinned: bool | None = None,
+    starred: bool | None = None,
+    tags: list[str] | None = None,
+    group_id: str | None = None,
+    socket_path: str | Path | None = None,
+    timeout: float = 15,
+) -> dict[str, Any]:
+    """更新指定 Antigravity App 桌面会话的标题、归档、置顶、加星、标签或分组。"""
+    annotations: dict[str, Any] = {}
+    if title is not None:
+        annotations["title"] = str(title)
+    if archived is not None:
+        if not isinstance(archived, bool):
+            raise ValueError("archived 必须是布尔值")
+        annotations["archived"] = archived
+    if pinned is not None:
+        if not isinstance(pinned, bool):
+            raise ValueError("pinned 必须是布尔值")
+        annotations["pinned"] = pinned
+    if starred is not None:
+        if not isinstance(starred, bool):
+            raise ValueError("starred 必须是布尔值")
+        annotations["starred"] = starred
+    if tags is not None:
+        annotations["tags"] = [str(t) for t in tags]
+    if group_id is not None:
+        annotations["conversationGroupId"] = str(group_id)
+    if not annotations:
+        raise ValueError("至少需要指定一项要更新的属性")
+
+    seconds = validate_seconds(timeout)
+    resolved = await resolve_conversation(
+        conversation_id,
+        include_archived=True,
+        include_metadata=False,
+        socket_path=socket_path,
+        timeout=seconds,
+    )
+    if not resolved.get("ok"):
+        return resolved
+    exact_id = resolved["conversation_id"]
+    updated = await call_bridge(
+        "update_conversation",
+        {"conversation_id": exact_id, "annotations": annotations},
+        socket_path=socket_path,
+        timeout=seconds,
+    )
+    if not updated.get("ok"):
+        return updated
+    return {
+        "ok": True,
+        "timed_out": False,
+        "socket": updated.get("socket"),
+        "conversation_id": exact_id,
+        "conversation": normalize_conversation(updated["conversation"]),
+    }
+
+
+async def rename(
+    conversation_id: str,
+    title: str,
+    *,
+    socket_path: str | Path | None = None,
+    timeout: float = 15,
+) -> dict[str, Any]:
+    """重命名指定 Antigravity App 桌面会话。"""
+    if not isinstance(title, str) or not title.strip():
+        raise ValueError("title 不能为空")
+    return await update(conversation_id, title=title.strip(), socket_path=socket_path, timeout=timeout)
+
+
+async def archive(
+    conversation_id: str,
+    *,
+    archived: bool = True,
+    socket_path: str | Path | None = None,
+    timeout: float = 15,
+) -> dict[str, Any]:
+    """归档或取消归档指定 Antigravity App 桌面会话。"""
+    return await update(conversation_id, archived=archived, socket_path=socket_path, timeout=timeout)
+
+
+async def delete(
+    conversation_id: str,
+    *,
+    socket_path: str | Path | None = None,
+    timeout: float = 15,
+) -> dict[str, Any]:
+    """永久删除指定 Antigravity App 桌面会话（不可撤销）。"""
+    seconds = validate_seconds(timeout)
+    resolved = await resolve_conversation(
+        conversation_id,
+        include_archived=True,
+        include_metadata=False,
+        socket_path=socket_path,
+        timeout=seconds,
+    )
+    if not resolved.get("ok"):
+        return resolved
+    exact_id = resolved["conversation_id"]
+    return await call_bridge(
+        "delete_conversation",
+        {"conversation_id": exact_id},
+        socket_path=socket_path,
+        timeout=seconds,
+    )

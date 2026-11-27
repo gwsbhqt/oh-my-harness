@@ -1,73 +1,57 @@
 ---
 name: agy-use
-description: 通过本机 Antigravity CLI 查看版本、可用模型和插件，验证或安装已授权的本地插件，在专用工作目录新开或续接一轮会话并核对原始事件。
+description: 通过官方 Sidecar 桥接控制正在运行的 Antigravity App（列出、定位、新建、向指定已有桌面会话发消息、等待并读取转录回复，以及重命名、归档和删除），并把 agy CLI 命令明确区分为 cli-* 独立入口。
 ---
 
 # agy-use
 
-有 Python 技能内核时读取 [Python 使用说明](PYSKILL.md)，直接调用 `skills.agy_use`。传统命令行读取[标准使用说明](SKILL.md)，使用 `agy-use`。加载或调用失败时按原错误排查。函数、命令、超时和权限的完整约定见[参数与回执](references/commands.md)。
+有 Python 技能内核时读取 [Python 使用说明](PYSKILL.md)，直接调用 `skills.agy_use` 完整下划线入口；无内核的传统代理读取 [标准使用说明](SKILL.md)，使用 `agy-use`。读取、导入或调用失败时先报告并定位，不得换方式绕过接口。完整参数、套接字约定、退出码和异常边界见 [参数与回执](references/commands.md)。
 
-## 查看本机状态
+本技能默认面向 **正在运行的 Antigravity App 桌面会话**，通过随插件提供的官方 Sidecar（`agy-python-repl/app-bridge`）连接本机当前账户可访问的 Unix 套接字。`agy` CLI 的独立命令与桌面会话不共享编号，全部归在 `cli-*`（Python 为 `cli_*`）子命令下。
 
-`status` 返回实际使用的 AGY 路径和版本。`models` 的 `stdout` 列出可用模型的 ID 和显示名称，ID 可用于选择本轮模型。`plugins` 读取当前账号安装的插件及启用状态。插件列入清单后，还可用一次专用会话检查工具能否实际运行。
+## 检查桌面 Sidecar 与定位会话
 
-```python
-state = await skills.agy_use.status()
-models = await skills.agy_use.models()
-installed = await skills.agy_use.plugins()
-state["stdout"], models["stdout"], installed.get("data")
-```
-
-## 校验和安装本地插件
-
-先检查目标目录、清单或 ZIP。查看回执的 `data.findings`，需要把警告也列为失败时使用 `strict`。
+先确认桌面 App 正在运行且 `agy-python-repl/app-bridge` Sidecar 已启用，再列出或按关键词筛选桌面会话。`sessions` 默认隐藏已归档会话；全量扫描传 `limit=0`（命令行 `--limit 0`）。目标可传完整编号或至少 4 位的唯一前缀，歧义或不存在时直接报错，不猜替代会话。
 
 ```python
-check = await skills.agy_use.validate_plugin("./demo-plugin")
-check["ok"], check.get("data")
+state = await skills.agy_use.health()
+listed = await skills.agy_use.sessions(query="demo", limit=20)
+detail = await skills.agy_use.get("11112222")
 ```
 
-获得安装这个本地插件的授权后，交给 AGY 的安装入口须是插件目录。安装会影响此账号的新会话。安装后按名称、启用状态、来源和版本核对清单。
+## 新建与向指定已有会话发消息
+
+`send` 先核对当前桌面会话并保存发送前的步号。启用等待后，它按收件正文找到这一条消息，再读取同一轮的最终答复。若先发送、稍后再等，请保留回执中的会话编号、`since_step` 和 `prompt`。
 
 ```python
-install = await skills.agy_use.install_plugin("./demo-plugin")
-installed = await skills.agy_use.plugins()
-install["ok"], installed.get("data")
+created = await skills.agy_use.new("请只回复 READY。", title="smoke-check", wait=True, timeout=60)
+sent = await skills.agy_use.send("11112222", "请继续核对上一轮结果。", wait=True, timeout=120)
+receipt = sent["receipt"]
+waited = await skills.agy_use.wait(receipt["conversation_id"], since_step=receipt["since_step"],
+                                   expected_prompt=receipt["prompt"], timeout=120)
 ```
 
-## 在专用目录发起一轮会话
+发送或等待超时、断开或取消时，保留已有回执。用回执中的 `since_step` 和原正文继续等，或用 `read` 检查同一会话里的后续事件。
 
-准备只含本次任务材料的工作目录，示例使用 `./demo-workspace`。提示将发送给当前 AGY 配置的模型，工具沿用宿主权限。目录用于划分会话上下文，文件访问范围由宿主的权限和沙箱设置决定。
+## 读取回复与管理桌面会话
+
+`read` 读取同一 `conversation_id` 对应的本地 `transcript.jsonl`（或完整转录）及实时 `run_state`，`last` 返回最近一条助手回复并标明是否截断。`rename`、`archive`、`update` 和 `delete` 只在用户明确授权时对指定会话执行；`delete` 不可撤销。
 
 ```python
-reply = await skills.agy_use.run("只回复 READY。", workspace="./demo-workspace", timeout=60)
-reply["ok"], reply.get("result"), reply.get("error")
+steps = await skills.agy_use.read("11112222", from_step=0, limit=20)
+reply = await skills.agy_use.last("11112222", chars=4000)
+renamed = await skills.agy_use.rename("11112222", "新的会话标题")
+archived = await skills.agy_use.archive("11112222")
 ```
 
-一轮默认限时 120 秒。长任务可把 `timeout` 设为 `0`，命令行使用 `--timeout 0`。这会等待当前这一轮自然结束。运行期间可取消 Python 任务或在终端按 `Ctrl-C`，取消回执保留已经收到的输出。
+## 独立 `agy` CLI 入口
 
-新会话的编号在 `result.conversation_id`。用户明确要求续接时，在原工作目录中传入这个编号。下面的示例需要先把示例编号换成实际值。
+下列入口只操作独立安装的 `agy` 命令行工具，**不能**用于读取或续接 Antigravity App 桌面会话（CLI 传入桌面会话编号会报 `trajectory not found`）。仅在明确需要查询 CLI 版本、CLI 模型目录、插件列表、校验/安装本地插件或跑一轮非交互 CLI 会话时使用。
 
 ```python
-reply = await skills.agy_use.run("用一句话总结上轮。", workspace="./demo-workspace",
-                                 conversation_id="conversation-id")
-reply["ok"], reply.get("result"), reply.get("error")
+version = await skills.agy_use.cli_status()
+models = await skills.agy_use.cli_models()
+plugins = await skills.agy_use.cli_plugins()
+checked = await skills.agy_use.cli_validate_plugin("./demo-plugin", strict=True)
+ran = await skills.agy_use.cli_run("只回复 READY。", workspace="./demo-workspace", timeout=60)
 ```
-
-## 本轮允许工作台执行 Python
-
-任务已授权在本机运行 Python，并且 `agy-python-repl` 已启用时，可显式开启 `allow_repl`。AGY 在本轮允许工作台的 `run_code` 执行模型写的 Python 代码，作用于整个工具。其他工具继续由 AGY 按当前设置审批。默认沿用宿主设置；遇到拒绝时保留原始回执。
-
-```python
-reply = await skills.agy_use.run("用 Python 计算 21 × 2 并给出结果。", workspace="./demo-workspace",
-                                 allow_repl=True)
-reply["ok"], reply.get("result"), reply.get("error")
-```
-
-## 核对结果和工具调用
-
-先看技能回执的 `ok`、`exit_code`、`timed_out` 和宿主返回的 `result`。即使 AGY 退出码为 0，`result.denied_actions` 也可能有被拒绝的操作。`events` 保留每个原始事件，包括失败步骤和已有的部分输出。一轮取得答复后，仍需按任务要求核对实际产物。
-
-核对工具调用时查看 `step_update` 的 `conversation_id`、`step_index`、`step_type`、`state` 和 `tool_info`。同一步可能先报告 `ACTIVE` 再报告 `DONE`。对于 `call_mcp_tool`，还要从 `tool_info.parameters` 核实被调用的具体工具，并检查输出或错误。`init.tools` 只描述可见的工具，模型自述只属于答复内容。
-
-超时或取消后，已发生的安装和模型请求仍可能生效。保留原回执，用插件清单或原工作区的 `/resume` 核对。确认结果前停止重复发送。专用目录和会话由调用者管理。

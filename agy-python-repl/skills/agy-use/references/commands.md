@@ -1,36 +1,59 @@
 # 参数与回执
 
-## 运行条件
+## 架构与运行条件
 
-技能使用 Python 3.11 或更新版本和 Google 官方 `agy`。按 `PATH` 定位 CLI，未找到时尝试 macOS 和 Linux 的官方默认位置 `~/.local/bin/agy`。安装 CLI 和首次交互登录由使用者完成。技能调用沿用 AGY 的登录和权限。专用目录适合放入虚构样例或经授权的材料。[官方安装说明](https://antigravity.google/docs/getting-started?tab=cli)
+`agy-use` 默认控制正在运行的 **Antigravity App**，依赖随 `agy-python-repl` 插件提供的官方 Sidecar（`sidecars/app-bridge/sidecar.json`）。
 
-## 函数与命令
+- Sidecar 由 Antigravity App 启动并注入 `ANTIGRAVITY_LS_ADDRESS`、`ANTIGRAVITY_CSRF_TOKEN`、`ANTIGRAVITY_APP_DATA_DIR` 和 `agentapi` 入口；CSRF 令牌只保留在 Sidecar 进程内存中，不写入磁盘，也不通过套接字返回。
+- 外部进程（如终端、其他代理或 `agy-python-repl` 内核）仅连接当前本机账户可访问的 Unix 套接字：优先读取 `AGY_USE_SOCKET`（或 `--socket` / `socket_path`），未指定时使用 `${XDG_STATE_HOME:-~/.local/state}/agy-use/bridge.sock`（目录权限 `0700`，套接字与元数据 `0600`）。
+- 只有 **CLI 独立入口**（`cli_*` / `cli-*`）直接调用本地 `agy` 可执行文件（`PATH` 或 `~/.local/bin/agy`）。Antigravity App 与 `agy` CLI 的会话彼此隔离。
 
-所有 Python 函数都使用 `await skills.agy_use.<函数>(...)`。本表中的 `timeout` 以秒计。`run` 接受有限的非负数，其他操作接受有限的正数。路径支持字符串和 Python `Path`，在调用时解析为本机绝对路径。`--help` 显示命令参数。
+## Antigravity App 函数与命令
 
-| Python 函数 | 命令参数 | 官方操作 |
+所有 Python 函数均为异步函数，使用 `await skills.agy_use.<函数>(...)`。`timeout` 单位均为秒，`wait`、`new`、`send` 支持 `timeout=0` 表示一直等待到本轮结束；其余操作要求有限正数秒。
+
+| Python 函数 | CLI 子命令 | 底层官方入口 |
 | --- | --- | --- |
-| `status(*, timeout=10)` | `status [--timeout 秒]` | `agy --version` |
-| `models(*, timeout=30)` | `models [--timeout 秒]` | `agy models`，`stdout` 按原格式列出可用模型的 ID 和显示名称 |
-| `plugins(*, timeout=30)` | `plugins [--timeout 秒]` | `agy plugin list --json` |
-| `validate_plugin(path, *, strict=False, timeout=30)` | `validate-plugin 路径 [--strict] [--timeout 秒]` | `agy plugin validate 路径 --json`，可加 `--strict` |
-| `install_plugin(path, *, timeout=60)` | `install-plugin 插件目录 [--timeout 秒]` | `agy plugin install 插件目录` |
-| `run(prompt, workspace, *, conversation_id=None, model=None, allow_repl=False, timeout=120)` | `run --workspace 目录 [--conversation-id 编号] [--model 模型] [--allow-repl] [--timeout 秒] -- 提示` | `agy --print`，使用 `--output-format=stream-json` 和 `--print-timeout`；按需加 `--conversation`、`--model` |
+| `health(*, socket_path=None, timeout=10)` | `health [--socket PATH] [--timeout 秒]` | Sidecar `ConversationService/ListConversations` + `agentapi` 检查 |
+| `sessions(*, query=None, project_id=None, tags=None, include_archived=False, limit=20, ...)` | `sessions [--query 词] [--project-id ID] [--tag T] [--include-archived] [--limit N]` | `ConversationService/ListConversations`（按需自动翻页） |
+| `get(conversation_id, *, include_archived=True, include_metadata=True, ...)` | `get 会话编号 [--active-only] [--no-metadata]` | `ConversationService/GetConversation` + `agentapi get-conversation-metadata` + 本地 `transcript.jsonl` 摘要 |
+| `new(prompt="", *, project_id=None, environment_id=None, title=None, model=None, tags=None, wait=False, timeout=120, poll_interval=0.5, ...)` | `new [提示] [--project-id ID] [--title 标题] [--model 模型] [--tag T] [--wait] [--timeout 秒]` | `ConversationService/CreateConversation`，可选轮询等待完成 |
+| `send(conversation_id, prompt, *, title=None, wait=False, timeout=120, poll_interval=0.5, ...)` | `send 会话编号 提示 [--title 标题] [--wait] [--timeout 秒]` | 先 `GetConversation` 确认目标存在，再调用 `agentapi send-message` |
+| `wait(conversation_id, *, since_step=None, since_time=None, expected_prompt=None, timeout=120, poll_interval=0.5, ...)` | `wait 会话编号 [--since-step N] [--since-time ISO] [--expected-prompt 正文] [--timeout 秒]` | 轮询 `GetConversation` 与 `transcript.jsonl`（含截断回落 `transcript_full.jsonl`） |
+| `read(conversation_id, *, from_step=0, limit=50, full=False, ...)` | `read 会话编号 [--from-step N] [--limit N] [--full]` | 读取本地 `transcript.jsonl`（或 `transcript_full.jsonl`）与 `GetConversation` |
+| `last(conversation_id, *, chars=4000, ...)` | `last 会话编号 [--chars N]` | 提取最近一条 `PLANNER_RESPONSE` |
+| `rename(conversation_id, title, ...)` | `rename 会话编号 新标题` | `ConversationService/UpdateConversation` |
+| `archive(conversation_id, *, archived=True, ...)` | `archive 会话编号 [--unarchive]` | `ConversationService/UpdateConversation` |
+| `update(conversation_id, *, title=None, archived=None, pinned=None, starred=None, tags=None, group_id=None, ...)` | `update 会话编号 [属性选项...]` | `ConversationService/UpdateConversation` |
+| `delete(conversation_id, ...)` | `delete 会话编号` | `ConversationService/DeleteConversation` |
 
-`validate_plugin` 只读，可验证本地 ZIP。`install_plugin` 调用一次官方安装命令。安装本地插件前应核实其来源，插件可包含启动钩子和工具程序。若宿主要求配置变量或交互确认，通过宿主完成。[官方插件管理](https://antigravity.google/docs/plugins) · [官方验证说明](https://antigravity.google/docs/build-plugins)
+### 目标定位与送达核实约定
 
-`run` 要求已有工作目录和非空提示。默认开启新会话，只有显式指定 `conversation_id` 才续接。`model` 只影响本次调用。命令行会话可在原工作目录使用 `/resume` 查找。桌面会话在桌面端续接。用桌面会话编号续接时，实测 CLI 1.5.18 返回 `trajectory not found`。官方编辑器协议的会话清单在 AGY 1.5.18 可能返回其他目录的记录，本技能读取本次运行的会话状态。[会话范围](https://antigravity.google/docs/cli/conversations) · [按编号续接](https://antigravity.google/docs/cli/commands/resume) · [编辑器协议](https://antigravity.google/docs/cli/acp)
+- **精确目标**：`get`、`send`、`wait`、`read`、`last`、`rename`、`archive`、`update`、`delete` 传入完整 UUID 时直接通过 `GetConversation` 核对；传入至少 4 个字符的不完整前缀时执行列表扫描，若匹配到 0 个返回 `target-not-found`，匹配到多个返回 `ambiguous-target`，若 `next_page_token` 非空（扫描未完成）则一律拒绝判唯并返回 `incomplete-prefix-scan`，绝不自动猜测。
+- **先验后发**：`agentapi send-message` 在某些不存在的会话编号上可能仍退出 0，因此 Sidecar 会在调用 `agentapi send-message` 前先向 `ConversationService/GetConversation` 确认目标存在。
+- **防重发与不确定投递**：`send` 在发送前记录 `baseline`（`last_step_index`、`total_steps`、`update_time`、`run_state`）。返回字段 `sent` 为 `True` 表示 `agentapi` 退出 0，`False` 表示未发起或明确失败，`None` 且 `uncertain=True` 表示写入套接字后超时或断连、投递结果未知。超时、断连或取消后不要自动重发，应先用 `read`/`last` 核对同一 `conversation_id` 的转录变化。
+- **严格完成判定**：`send(..., wait=True)`（或带 `expected_prompt` 的 `wait`）只有在目标会话回到 `RUN_STATE_IDLE`、在 `since_step` 之后唯一出现包含本次正文的 App 收件步骤、且其后（下一条输入之前）存在非空的最终 `PLANNER_RESPONSE`（不含 `tool_calls`）时才判成功。中途工具调用、其他无关输入、旧轮结束、单独返回空闲、空回复（`empty-response`）、取消无最终答复（`cancelled-without-response`）以及同正文并发重复收件（`ambiguous-reply`）均不判成功，并保留回执绝不重发。若 `transcript.jsonl` 步骤含 `truncated_fields`，客户端自动读取 `transcript_full.jsonl` 校验完整正文与回复。
 
-`allow_repl=True` 或 `--allow-repl` 只为此次 AGY 进程传入本轮设置 `{"permissions":{"allow":["mcp(agy-python-repl_agy-python-repl/run_code)"]}}`。默认省略 `--settings`。此许可针对工作台的 Python 执行工具，具体 Python 代码使用该工具已有的本机访问权限。登录、工具可用性和宿主其他审批规则照常生效。[官方权限语法](https://antigravity.google/docs/permissions)
+### 退出码（App 入口）
 
-## 结果、超时和取消
+- `0`：成功（`ok: true`）。
+- `2`：参数校验失败、`ValueError`/`OSError`、`invalid-argument`、`target-not-found`、`ambiguous-target` 或 `incomplete-prefix-scan`。
+- `69`：`sidecar-unavailable` 或 `ls-unreachable`（Sidecar 未运行或宿主语言服务不可达）。
+- `124`：本地等待超时（`timed_out: true`）。
+- `130`：键盘中断或任务取消（已取得的取消回执保留在 `cancelled.receipt` 并输出到 stdout）。
+- `1`：其他运行时错误。
 
-Python 返回字典，命令将同一回执作为 JSON 写到标准输出。`executable` 是选中的 AGY 入口，`exit_code` 保留子进程的实际退出码，`stdout` 和 `stderr` 分别保留宿主输出。`error` 给出本地启动或等待失败的说明，也会保留 AGY 返回的错误原文，例如额度用尽。被拒绝的操作和缺少答复也会注明原因。JSON 缺失、损坏或缺少结束事件时，`output_error` 给出解析原因，原文可供核对。参数或本地路径错误发生在发起请求之前，Python 抛 `ValueError` 或 `OSError`，命令退出 2。
+## `agy` CLI 独立入口
 
-`plugins` 和 `validate_plugin` 把原生 JSON 放在 `data`，校验失败的报告也保留。`install_plugin` 的 `ok` 表示安装命令成功退出；确认插件可用还需核对清单并检查新会话里的实际操作。`run` 的 `events` 保留按顺序读到的事件，完整的结束事件存为 `result`。成功需要进程正常退出、本轮得到 `SUCCESS` 和非空答复，且宿主没有报告被拒绝的动作。续接时还核对结果中的会话编号。工具失败的详情见对应步骤的 `state` 和 `tool_info.error`。[官方非交互模式与事件字段](https://antigravity.google/docs/cli/headless)
+以下入口只调用本机 `agy` CLI，与桌面 App 会话完全独立：
 
-`run` 默认限时 120 秒。设为 `0` 时，技能传入 `--print-timeout=0`，持续等待当前一轮结束。正数期限先交给 AGY，再留两秒让它写回结果。若本地等待也到期，技能终止自己启动的进程，在 POSIX 系统上终止该进程组，返回当时已收到的输出并标记 `timed_out=true`。宿主先返回的错误或中断保留其原生状态。
+| Python 函数 | CLI 子命令 | 底层命令 |
+| --- | --- | --- |
+| `cli_status(*, timeout=10)` | `cli-status [--timeout 秒]` | `agy --version` |
+| `cli_models(*, timeout=30)` | `cli-models [--timeout 秒]` | `agy models` |
+| `cli_plugins(*, timeout=30)` | `cli-plugins [--timeout 秒]` | `agy plugin list --json` |
+| `cli_validate_plugin(path, *, strict=False, timeout=30)` | `cli-validate-plugin 路径 [--strict]` | `agy plugin validate 路径 --json` |
+| `cli_install_plugin(path, *, timeout=60)` | `cli-install-plugin 插件目录` | `agy plugin install 插件目录` |
+| `cli_run(prompt, workspace, *, conversation_id=None, model=None, allow_repl=False, timeout=120)` | `cli-run --workspace 目录 [--conversation-id ID] [--model 模型] [--allow-repl] [--timeout 秒] 提示` | `agy --output-format=stream-json --print-timeout=... --print=...` |
 
-取消 Python 任务或在终端按 `Ctrl-C` 时，技能回收本次进程。取得的取消回执带 `cancelled=true`，保留原生退出码、部分 `stdout` 和 `stderr`。Python 传播 `asyncio.CancelledError`，从异常的 `receipt` 属性可取回这份回执。命令行会将已取得的回执写到标准输出并退出 130。取消、超时和断连后，远端请求可能已经执行，检查原会话或安装状态后再决定下一步。
-
-命令保留宿主的非零退出码；信号按 `128 + 信号编号` 返回，本地超时退出 124，键盘中断退出 130。AGY 未能启动，或宿主退出 0 但回执未达到成功条件时，命令退出 1。原生退出码和错误始终保留在回执中。
+`cli_run` 默认以 `120` 秒超时运行，`timeout=0` 持续等待本轮自然结束；允许工作台 Python 时传入 `--allow-repl`。即使 `agy` 进程退出码为 0，若 `result.denied_actions` 非空、`result.status != "SUCCESS"`、`result.response` 为空或续接编号不一致，仍标记 `ok=False`。

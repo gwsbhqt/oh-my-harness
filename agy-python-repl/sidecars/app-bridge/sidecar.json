@@ -1,0 +1,7 @@
+{
+  "display_name": "AGY App Bridge",
+  "description": "Local Unix socket bridge exposing Antigravity App ConversationService and agentapi to authorized agy-use calls.",
+  "command": "python3",
+  "args": ["bridge.py"],
+  "restart_policy": "always"
+}
