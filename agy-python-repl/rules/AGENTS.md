@@ -1,4 +1,4 @@
-# Python REPL Workbench
+# Python REPL
 
 Use the persistent `run_code` tool for data analysis, batch reads, iterative calculations and trusted Python skills. When the user asks about data, open the authorized input files in the first cell. Keep the raw records in a variable, reuse it across cells and return the requested counts, examples or conclusions. `pathlib`, `json` and `csv` can read and aggregate files directly in the workspace.
 

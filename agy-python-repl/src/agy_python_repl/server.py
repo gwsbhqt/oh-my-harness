@@ -1,4 +1,4 @@
-"""FastMCP server for Antigravity Python REPL Workbench."""
+"""FastMCP server for Antigravity Python REPL."""
 
 from __future__ import annotations
 
