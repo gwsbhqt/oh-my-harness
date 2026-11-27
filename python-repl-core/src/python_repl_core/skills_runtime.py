@@ -136,20 +136,48 @@ class _SkillsNamespace:
 
 
 def install_skills_import_guard(ns: dict[str, Any], skills_ns: _SkillsNamespace) -> None:
-    """Ensure `import skills` inside a cell returns the live `skills` namespace."""
+    """Ensure `import skills` / `import skills.<name>` inside a cell uses the live `skills` namespace."""
     original = getattr(builtins.__import__, "__repl_core_original__", builtins.__import__)
 
-    def __import__(name: str, globals: dict[str, Any] | None = None, locals: dict[str, Any] | None = None, fromlist: tuple[str, ...] = (), level: int = 0) -> Any:
-        if name != "skills" or level != 0 or globals is not ns:
+    def _resolve_dotted(name: str) -> Any:
+        target: Any = skills_ns
+        for part in name.split(".")[1:]:
+            try:
+                target = getattr(target, part)
+            except AttributeError:
+                if hasattr(target, "__path__") and getattr(target, "__name__", None):
+                    target = importlib.import_module(f"{target.__name__}.{part}")
+                    continue
+                raise
+        return target
+
+    def __import__(
+        name: str,
+        globals: dict[str, Any] | None = None,
+        locals: dict[str, Any] | None = None,
+        fromlist: tuple[str, ...] | None = (),
+        level: int = 0,
+    ) -> Any:
+        if (name != "skills" and not name.startswith("skills.")) or level != 0 or globals is not ns:
             return original(name, globals, locals, fromlist, level)
+        try:
+            target = _resolve_dotted(name)
+        except AttributeError as exc:
+            raise ModuleNotFoundError(f"No module named {name!r}: {exc}", name=name) from None
         for item in fromlist or ():
             if item == "*":
                 continue
             try:
-                getattr(skills_ns, item)
+                getattr(target, item)
             except AttributeError as exc:
-                raise ImportError(f"cannot import name {item!r} from 'skills': {exc}", name="skills") from None
-        return skills_ns
+                if hasattr(target, "__path__") and getattr(target, "__name__", None):
+                    try:
+                        importlib.import_module(f"{target.__name__}.{item}")
+                        continue
+                    except ImportError:
+                        pass
+                raise ImportError(f"cannot import name {item!r} from {name!r}: {exc}", name=name) from None
+        return skills_ns if not fromlist else target
 
     __import__.__repl_core_original__ = original  # type: ignore[attr-defined]
     builtins.__import__ = __import__
