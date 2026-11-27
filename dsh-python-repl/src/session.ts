@@ -17,7 +17,7 @@ import { withFileSource } from './panel-source.ts'
 import type { PanelState, PanelSkillReport, PanelName, PanelPreview, PanelCell, PanelControlAction, PanelControlResult, PanelNameAction, PanelNameResult } from './panel-types.ts'
 import { CellLog } from './cell-log.ts'
 import { callsReport, newCall, traceNotes, withWaitCap, type CellTrace } from './cell-trace.ts'
-import { withJobBash, type HostJobs } from './bash-jobs.ts'
+import { BashOutputReceipts, withJobBash, type HostJobs } from './bash-jobs.ts'
 import { waitCapFor } from './subagent.ts'
 import { estimateTokens, SOFT_NOTE_EVERY, SOFT_OUTPUT_TOKENS, softOutputNote, wasCut } from './output-budget.ts'
 
@@ -143,6 +143,7 @@ export interface CellResult {
  * `asyncio.gather`) is unaffected.
  */
 export class ReplSession {
+  readonly #bashOutputs = new BashOutputReceipts()
   #queuedCells = 0
   #panelCounter = 0
   /** Kernel-tab history; never read back by the kernel or the model. */
@@ -712,8 +713,8 @@ export class ReplSession {
         const cap = this.#waitCap()
         const fixed = withArgumentFix(name, withPythonSkillDocument(name, fn, this.#options.skills ?? []), byName.get(name)?.parameters)
         const capped = withWaitCap(name, fixed, byName.get(name), cap)
-        bound.set(name, name === 'bash' ? withJobBash(fixed, byName.get(name), cap, host, signal, capped)
-          : host === undefined ? capped : withCollected(name, capped, host))
+        const execute = name === 'bash' ? withJobBash(fixed, byName.get(name), cap, host, signal, capped) : capped
+        bound.set(name, host === undefined ? execute : withCollected(name, execute, host, this.#bashOutputs))
       }
     }
     // Meta lookups run against the SAME per-cell grant as business calls, so
@@ -1590,7 +1591,7 @@ export class ReplSession {
     const tools = new Map(recipe.catalog)
     for (const name of recipe.names) {
       const fixed = withArgumentFix(name, withPythonSkillDocument(name, grant.bind(name), this.#options.skills ?? []), recipe.byName.get(name)?.parameters)
-      tools.set(name, withCollected(name, fixed, host))
+      tools.set(name, withCollected(name, fixed, host, this.#bashOutputs))
     }
     return { grant, tools }
   }
@@ -1856,14 +1857,19 @@ export class ReplSession {
 const SUBAGENTS_KEPT = 50
 
 /** A finished job_output or a job_kill means the model has that job's end: no completion notice for it. */
-function withCollected(tool: string, fn: BoundTool, host: HostJobs): BoundTool {
+function withCollected(tool: string, fn: BoundTool, host: HostJobs, receipts: BashOutputReceipts): BoundTool {
+  if (tool === 'bash') return async (args) => {
+    const result = await fn(args)
+    receipts.started(result, host.owner)
+    return result
+  }
   if (tool !== 'job_output' && tool !== 'job_kill') return fn
   return async (args) => {
     const result = await fn(args)
     const id = (args as { job_id?: unknown } | null)?.job_id
     const status = (result as { job?: { status?: unknown } } | null)?.job?.status
     if (typeof id === 'string' && (tool === 'job_kill' || (status !== 'running' && status !== 'stopping'))) host.notices.collected(id)
-    return result
+    return tool === 'job_output' ? receipts.collected(args, result, host) : result
   }
 }
 

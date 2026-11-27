@@ -21,16 +21,21 @@ import type { BoundTool } from './lease.ts'
 import type { ToolSchemaLike } from './catalog.ts'
 
 /** The slice of DSH's `jobs` service this file uses (dsh-jobs). */
+interface JobChunk { at?: number; channel?: string; text: string; gapBefore?: true }
 export interface JobView {
   id: string
+  owner?: string
+  kind?: string
   label?: string
   status: string
   detail?: string
-  output?: { spillPaths?: string[] }
+  output?: { total?: number; spillPaths?: readonly string[] }
 }
 export interface JobsService {
   wait(id: string, timeoutMs: number, caller: string, signal?: AbortSignal): Promise<JobView>
-  read(id: string, caller: string): { chunks: Array<{ channel?: string; text: string; gapBefore?: true }>; lossy: boolean; job: JobView }
+  read(id: string, caller: string): { chunks: readonly JobChunk[]; lossy: boolean; job: JobView }
+  get?(id: string, caller: string): JobView
+  readAt?(id: string, from: number, caller: string): { chunks: readonly JobChunk[]; next: number; lossy: boolean }
   remove(id: string, caller: string): unknown
   /** Jobs visible to `caller` (dsh-jobs-local `list`); used to see when a job slot is free again. */
   list?(caller: string): JobView[]
@@ -62,13 +67,79 @@ function split(chunks: ReadonlyArray<{ channel?: string; text: string }>): { out
 }
 
 /** Gaps can originate in a source or in the ring; neither identifies every affected stream. */
-function outputInfo(read: ReturnType<JobsService['read']>): { truncated: boolean; spillPaths: string[]; notice: string } {
+function outputInfo(read: ReturnType<JobsService['read']>): { truncated: boolean; spillPaths: readonly string[]; notice: string } {
   const truncated = read.lossy || read.chunks.some((chunk) => chunk.gapBefore === true)
   const spillPaths = read.job.output?.spillPaths ?? []
   const location = spillPaths.length > 0
     ? `available output files (stream mapping unavailable): ${spillPaths.join(', ')}`
     : 'full output: (unavailable)'
   return { truncated, spillPaths, notice: truncated ? `[some output was dropped from memory; ${location}]` : '' }
+}
+
+interface StreamRange {
+  from: number
+  next: number
+  stdoutBytes: number
+  stderrBytes: number
+}
+
+/** Only describe bytes that the authorized call actually returned, including any literal separator in stdout. */
+function streamRange(from: number, next: number | undefined, chunks: readonly JobChunk[], lossy: boolean, text: string): StreamRange | undefined {
+  if (lossy || next === undefined) return undefined
+  let offset = from
+  for (const chunk of chunks) {
+    if (chunk.at !== offset || chunk.gapBefore || (chunk.channel !== 'stdout' && chunk.channel !== 'stderr')) return undefined
+    offset += Buffer.byteLength(chunk.text)
+  }
+  if (offset !== next) return undefined
+  const { out, err } = split(chunks)
+  const rendered = out + (err === '' ? '' : `${out === '' || out.endsWith('\n') ? '' : '\n'}[stderr]\n${err}`)
+  if (rendered !== text) return undefined
+  return { from, next, stdoutBytes: Buffer.byteLength(out), stderrBytes: Buffer.byteLength(err) }
+}
+
+/** Remember only the caller and verified cursor of bash receipts issued through this session. */
+export class BashOutputReceipts {
+  private readonly pending = new Map<string, { owner: string; next: number | undefined }>()
+
+  started(value: unknown, owner: string): void {
+    const receipt = value as { kind?: string; jobId?: string; output?: string; bashOutput?: { range?: StreamRange } } | null
+    if (!receipt || (receipt.kind !== 'background' && receipt.kind !== 'promoted') || typeof receipt.jobId !== 'string') return
+    const next = receipt.kind === 'background' || !receipt.output ? 0 : receipt.bashOutput?.range?.next
+    this.pending.set(receipt.jobId, { owner, next })
+    if (this.pending.size > 256) this.pending.delete(this.pending.keys().next().value!)
+  }
+
+  collected(args: unknown, value: unknown, host: HostJobs): unknown {
+    const id = (args as { job_id?: string } | null)?.job_id
+    const result = value as { text?: string; job?: JobView } | null
+    if (typeof id !== 'string' || result?.job?.id !== id || result.job.kind !== 'bash' || typeof result.text !== 'string') return value
+    const issued = this.pending.get(id)
+    if (!issued || issued.owner !== host.owner || !host.jobs.get) return value
+    const terminal = !LIVE.has(result.job.status)
+    try {
+      const view = host.jobs.get(id, host.owner)
+      if (view.id !== id || view.owner !== host.owner || view.kind !== 'bash' || !view.output || (terminal && result.job.status !== view.status)) return value
+      let range: StreamRange | undefined
+      let gap = false
+      const from = issued.next
+      if (from !== undefined && host.jobs.readAt) {
+        const read = host.jobs.readAt(id, from, host.owner)
+        if (read.next === view.output.total) {
+          gap = !read.lossy && read.chunks.some((chunk) => chunk.gapBefore === true && chunk.at !== undefined && chunk.at >= from)
+          range = streamRange(from, read.next, read.chunks, read.lossy, result.text)
+        }
+      }
+      issued.next = range?.next
+      return { ...result, bashOutput: { range, ...(gap ? { truncated: true } : {}), ...(terminal ? { spillPaths: view.output.spillPaths ?? [] } : {}) } }
+    } catch {
+      // A removed job or unavailable observation must not turn a successful authorized read into a failure.
+      issued.next = undefined
+      return value
+    } finally {
+      if (terminal) this.pending.delete(id)
+    }
+  }
 }
 
 /** DSH's foreground bash result, rebuilt from a settled job (dsh-tool-bash canonicalBashResult). */
@@ -208,8 +279,11 @@ export function withJobBash(fn: BoundTool, schema: ToolSchemaLike | undefined, c
       const { out, err } = split(read.chunks)
       const output = outputInfo(read)
       const text = out + (err === '' ? '' : `${out === '' || out.endsWith('\n') ? '' : '\n'}[stderr]\n${err}`)
+      const range = read.job.owner === owner && read.job.kind === 'bash'
+        ? streamRange(0, read.job.output?.total, read.chunks, output.truncated, text) : undefined
       return {
         kind: 'promoted', cwd: receipt['cwd'], jobId: id, timeoutMs: wanted,
+        ...(range ? { bashOutput: { range } } : {}),
         output: text + (output.notice === '' ? '' : `${text === '' || text.endsWith('\n') ? '' : '\n'}${output.notice}\n`),
         truncated: output.truncated,
         ...(output.spillPaths.length > 0 ? { spillPaths: output.spillPaths } : {}),

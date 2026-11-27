@@ -7,7 +7,7 @@ from pathlib import Path
 
 __all__ = ["__version__"]
 
-__version__ = "0.2.7"
+__version__ = "0.2.8"
 
 _PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 for _candidate in (

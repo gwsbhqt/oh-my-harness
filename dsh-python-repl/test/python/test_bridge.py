@@ -1031,8 +1031,8 @@ class BashJobs(unittest.IsolatedAsyncioTestCase):
         result = await job
         self.assertEqual(result["exitCode"], 2)
         self.assertEqual(result["text"], "a\nb\n[stderr]\nboom\n")
-        self.assertEqual(result.stdout.text, "a\nb\n")
-        self.assertEqual(result.stderr.text, "boom\n")
+        self.assertEqual(result.stdout.text, "")
+        self.assertEqual(result.stderr.text, "", "unstructured mixed text stays available in result.text")
         self.assertIsNone(result.stdout.truncated)
         self.assertIsNone(result.stderr.truncated)
         self.assertIsInstance(result.stdout, dict)
@@ -1041,6 +1041,32 @@ class BashJobs(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([tool for tool, _ in sent], ["bash", "job_output", "job_output"])
         self.assertIs(await job, result)
         self.assertIn("exitCode=2", repr(result))
+
+    async def test_gap_and_foreign_byte_ranges_do_not_certify_partial_or_misordered_data(self) -> None:
+        for id, start, gap in [("outside", 10, False), ("source-gap", 0, True)]:
+            async def host(payload):
+                return {"status": "ok", "result": {"job": {"id": id, "status": "completed", "detail": "exit code: 0"},
+                    "text": "tail", "bashOutput": {"range": {"from": start, "next": start + 4, "stdoutBytes": 4, "stderrBytes": 0},
+                                                   "truncated": gap, "spillPaths": []}}}
+
+            use_cell(id, host=host)
+            receipt = dsh_kernel._BashResult(kind="promoted", jobId=id, output="", truncated=False, spillPaths=["/fixture/old.log"])
+            result = await receipt
+            self.assertEqual(result.text, "tail")
+            self.assertEqual(result.spillPaths, [], "a final empty list withdraws the old file")
+            with self.assertRaises(ValueError):
+                dsh_kernel.require_complete(result)
+
+    async def test_verified_failure_keeps_the_exit_gate_and_the_exact_stream_text(self) -> None:
+        async def host(payload):
+            return {"status": "ok", "result": {"job": {"id": "fails", "status": "completed", "detail": "exit code: 4"},
+                "text": "[stderr]\nerr", "bashOutput": {"range": {"from": 0, "next": 3, "stdoutBytes": 0, "stderrBytes": 3}, "spillPaths": []}}}
+
+        use_cell("fails", host=host)
+        result = await dsh_kernel.BashJob("fails", "fixture")
+        with self.assertRaisesRegex(ValueError, "exitCode=4"):
+            dsh_kernel.require_complete(result)
+        self.assertEqual(dsh_kernel.require_complete(result, "stderr", check_exit=False), "err")
 
     async def test_user_message_ends_the_wait_after_one_call(self) -> None:
         # Pending user steering makes DSH return waits immediately. Stop

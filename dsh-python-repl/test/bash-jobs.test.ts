@@ -7,7 +7,7 @@ import { strict as assert } from 'node:assert'
 import { after, describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { JobNotices, NOTICE_WINDOW_MS, foregroundResult, withJobBash, type JobView, type JobsService } from '../src/bash-jobs.ts'
+import { BashOutputReceipts, JobNotices, NOTICE_WINDOW_MS, foregroundResult, withJobBash, type JobView, type JobsService } from '../src/bash-jobs.ts'
 import { ReplSession } from '../src/session.ts'
 import type { BoundTool } from '../src/lease.ts'
 
@@ -76,6 +76,37 @@ function harness(cap = 300) {
   const fallback: BoundTool = async () => { throw new Error('fallback used') }
   return { jobs, sent, notices, bash: (signal?: AbortSignal) => withJobBash(fn, SCHEMA, cap, { jobs, owner: 'agent-1', notices }, signal, fallback) }
 }
+
+it('observes only issued jobs of the original owner and never certifies a different consumer’s bytes', () => {
+  const h = harness()
+  const receipts = new BashOutputReceipts()
+  const id = 'bash-receipt'
+  const owner = 'same-agent'
+  let observed = 0
+  let viewOwner = owner
+  const jobs = Object.assign(h.jobs, {
+    get: () => { observed++; return { id, kind: 'bash', owner: viewOwner, status: 'completed', output: { total: 6, spillPaths: ['/fixture/final.log'] } } },
+    readAt: () => ({ next: 6, lossy: false, chunks: [{ at: 0, channel: 'stdout', text: 'before' }] }),
+  })
+  const host = { jobs, owner, notices: h.notices }
+  const args = { job_id: id }
+  const first = { text: '', job: { id, kind: 'bash', status: 'completed' } }
+  receipts.started({ kind: 'background', jobId: id }, owner)
+  try {
+    assert.equal(receipts.collected(args, first, { ...host, owner: 'other-agent' }), first)
+    const other = { text: '', job: { ...first.job, id: 'other' } }
+    assert.equal(receipts.collected(args, other, host), other)
+    assert.equal(observed, 0)
+    viewOwner = 'other-agent'
+    assert.equal(receipts.collected(args, first, host), first)
+    viewOwner = owner
+    receipts.started({ kind: 'background', jobId: id }, owner)
+    const result = receipts.collected(args, first, host) as { text: string; bashOutput: { range?: unknown; spillPaths?: string[] } }
+    assert.equal(result.text, '', 'the original call consumed no bytes')
+    assert.equal(result.bashOutput.range, undefined, 'a second consumer cannot claim what the first received')
+    assert.deepEqual(result.bashOutput.spillPaths, ['/fixture/final.log'])
+  } finally { h.notices.dispose() }
+})
 
 describe('bash runs as a job the cell waits on', () => {
   it('a finished command has the foreground shape and leaves the panel', async () => {
@@ -308,7 +339,73 @@ describe('a still-running bash result in the kernel', () => {
     }
   })
 
-  it('is awaitable and gives stdout and stderr like a finished call', async () => {
+  it('recovers authorized native streams across promotion and direct output reads', async () => {
+    const owner = 'test-agent'
+    for (const promoted of [false, true]) {
+      const id = `bash-streams-${promoted}`
+      const chunks: Array<{ channel: string; at: number; text: string }> = []
+      let total = 0, consumed = 0, reads = 0, done = false
+      let settle!: () => void
+      const settled = new Promise<void>(resolve => { settle = resolve })
+      function append(channel: string, text: string) {
+        chunks.push({ channel, at: total, text })
+        total += Buffer.byteLength(text)
+      }
+      function view() {
+        return { id, kind: 'bash', owner, status: done ? 'completed' : 'running', detail: 'exit code: 0', output: {
+          total, spillPaths: done ? ['/fixture/one.log', '/fixture/two.log'] : [],
+        } }
+      }
+      const h = harness()
+      const jobs = Object.assign(h.jobs, {
+        wait: async (_id: string, timeout: number) => {
+          if (timeout > 400) await settled
+          return view()
+        },
+        get: () => view(),
+        read: () => { const part = chunks.slice(consumed); consumed = chunks.length; return { chunks: part, lossy: false, job: view() } },
+        readAt: (_id: string, from: number, caller: string) => {
+          assert.equal(_id, id); assert.equal(caller, owner)
+          return { chunks: chunks.filter(c => c.at >= from), next: total, lossy: false }
+        },
+      })
+      const tools = new Map<string, BoundTool>([
+        ['bash', async () => {
+          if (promoted) { append('stdout', 'early'); append('stderr', 'warn\n') }
+          return { kind: 'background', jobId: id, cwd: '/fixture' }
+        }],
+        ['job_output', async () => {
+          reads++
+          if (reads === 1) {
+            append('stdout', 'seen\n')
+            jobs.read()
+            return { text: 'seen\n', job: view() }
+          }
+          append('stdout', '界\n[stderr]\nstill stdout'); append('stderr', 'actual error')
+          done = true
+          settle()
+          jobs.read()
+          return { text: '界\n[stderr]\nstill stdout\n[stderr]\nactual error', job: view() }
+        }],
+      ])
+      try {
+        const script = `r = await bash('fixture', 'inspect fixture', run_in_background=${promoted ? 'False' : 'True'})
+assert r.kind == '${promoted ? 'promoted' : 'background'}'
+assert (await tools.job_output(job_id=r.jobId)).text == 'seen\\n'
+assert 'actual error' in await r.peek()
+result = await r
+assert await repl.require_complete(result) == ${JSON.stringify((promoted ? 'early' : '') + 'seen\n界\n[stderr]\nstill stdout')}
+assert await repl.require_complete(result, stream='stderr') == ${JSON.stringify((promoted ? 'warn\n' : '') + 'actual error')}
+assert result.spillPaths == ['/fixture/one.log', '/fixture/two.log']
+assert result.text.count('[stderr]') == ${promoted ? 3 : 2}`
+        const cell = await session.runCell(script, tools, undefined, [SCHEMA], undefined, { jobs, owner, notices: h.notices })
+        assert.equal(cell.error, undefined, JSON.stringify(cell.error))
+        assert.equal(reads, 2)
+      } finally { settle(); h.notices.dispose() }
+    }
+  })
+
+  it('keeps the original job text when the host supplies no channel metadata', async () => {
     let reads = 0
     const tools = new Map<string, BoundTool>([
       ['bash', async () => ({ kind: 'promoted', cwd: '/w', jobId: 'job-9', timeoutMs: 400, output: 'early\n' })],
@@ -316,9 +413,9 @@ describe('a still-running bash result in the kernel', () => {
         ? { text: '', job: { id: 'job-9', kind: 'bash', label: 'x', status: 'running', startedAt: 1 } }
         : { text: 'late\n[stderr]\noops\n', job: { id: 'job-9', kind: 'bash', label: 'x', status: 'completed', detail: 'exit code: 3', startedAt: 1 } } }],
     ])
-    const cell = await session.runCell('r = await bash("make", "build")\nfirst = r["kind"]\ndone = await r\nassert done.stdout is done["stdout"]\nassert done.stderr is done["stderr"]\n(first, done.exitCode, done.stdout.text, done.stderr.text)', tools)
+    const cell = await session.runCell('r = await bash("make", "build")\nfirst = r["kind"]\ndone = await r\nassert done.stdout is done["stdout"]\nassert done.stderr is done["stderr"]\n(first, done.exitCode, done.text, done.stdout.text, done.stderr.text)', tools)
     assert.equal(cell.error, undefined, JSON.stringify(cell))
-    assert.match(cell.logs.join('\n'), /\('promoted', 3, 'early\\nlate\\n', 'oops\\n'\)/)
+    assert.match(cell.logs.join('\n'), /\('promoted', 3, 'early\\nlate\\n\[stderr\]\\noops\\n', '', ''\)/)
   })
 })
 

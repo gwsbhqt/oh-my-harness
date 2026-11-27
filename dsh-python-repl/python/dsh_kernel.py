@@ -193,7 +193,13 @@ def require_complete(result: Any, stream: str = "stdout", *, check_exit: bool = 
     if isinstance(result, _BashJobResult):
         if result.get("truncated") is True:
             raise ValueError(f"collected bash output was truncated ({_bash_output_location(result, stream)}); do not parse or count it as complete")
-        raise ValueError("job_output does not supply reliable structured truncation metadata; completeness is unknown")
+        if result.get("streamsVerified") is not True:
+            raise ValueError("job_output does not supply reliable structured truncation metadata for this receipt; completeness is unknown")
+        if result.get("status") != "completed" or type(result.get("exitCode")) is not int:
+            raise ValueError("bash did not finish normally; do not treat its output as a complete result")
+        if check_exit and result["exitCode"] != 0:
+            raise ValueError(f"bash exitCode={result['exitCode']}; inspect stderr or use check_exit=False deliberately")
+        return result[stream]["text"]
     if not isinstance(result, dict) or result.get("kind") != "foreground":
         raise ValueError("require_complete needs a foreground bash result; collect background/promoted jobs without re-running them")
     output = result.get(stream)
@@ -297,7 +303,8 @@ class _BashResult(_ToolResult):
             if handle is None:
                 handle = self._pending = BashJob(job_id, "")
                 if self.get("kind") == "promoted":
-                    handle._append_output(self.get("output") or "", truncated=self.get("truncated"), spill_paths=self.get("spillPaths"))
+                    handle._append_output(self.get("output") or "", truncated=self.get("truncated"),
+                                          spill_paths=self.get("spillPaths"), native=self.get("bashOutput"))
                 _BASH_JOBS[job_id] = self
         return handle
 
@@ -963,8 +970,8 @@ class _BashJobResult(_ToolResult):
         out = [f"── bash job {self['jobId']} · {status} (view of a dict) ──"]
         if self.get("truncated") is True:
             out.append("[output truncated; collected text is incomplete]")
-        else:
-            out.append("[output completeness is unknown: job_output does not supply structured truncation metadata]")
+        elif self.get("streamsVerified") is not True:
+            out.append("[output completeness is unknown; the original job output is in r.text]")
         if self.get("spillPaths"):
             out.append(f"[{_bash_output_location(self, 'stdout')}]")
         text = self["text"]
@@ -998,11 +1005,18 @@ def _finished(handle: "BashJob") -> None:
         del _RELEASED[next(iter(_RELEASED))]
 
 
-def _streams(text: str, truncated: bool | None) -> dict:
-    """A job's text and its known gap state; None means completeness is unknown."""
-    head, sep, tail = text.partition("\n[stderr]\n") if not text.startswith("[stderr]\n") else ("", "x", text[len("[stderr]\n"):])
-    return {"stdout": {"text": head + ("\n" if sep and head and not head.endswith("\n") else ""), "truncated": truncated},
-            "stderr": {"text": tail if sep else "", "truncated": truncated}}
+def _job_streams(parts: list[str], sizes: list[tuple[int, int]], text: str, verified: bool) -> tuple[str, str]:
+    if not verified:
+        # DSH may insert this line, but the command can print exactly the same text.
+        ambiguous = text.startswith("[stderr]\n") or "\n[stderr]\n" in text
+        return ("" if ambiguous else text), ""
+    stdout, stderr = [], []
+    for part, (out_len, err_len) in zip(parts, sizes, strict=True):
+        raw = part.encode("utf-8")
+        stdout.append(raw[:out_len].decode("utf-8"))
+        if err_len:
+            stderr.append(raw[-err_len:].decode("utf-8"))
+    return "".join(stdout), "".join(stderr)
 
 #: A stream read consumes its delta. Route it back to the live receipt (or a standalone
 #: BashJob from bash.start) without keeping an abandoned command's output alive.
@@ -1016,13 +1030,13 @@ def _keep_job_text(args: Any, result: Any) -> None:
     if owner is None or not isinstance(result, dict):
         return
     handle = owner._pending if isinstance(owner, _BashResult) else owner
-    if handle._result is not None:
-        return
-    # The public job_output result supplies text/job, not a structured gap flag.
-    handle._append_output(result.get("text") or "")
     job = result.get("job")
-    if isinstance(job, dict) and job.get("status") in ("completed", "failed", "killed"):
-        handle._finish(job)
+    if handle._result is not None or not isinstance(job, dict) or job.get("id") != job_id:
+        return
+    native = result.pop("bashOutput", None)
+    handle._append_output(result.get("text") or "", native=native)
+    if job.get("status") in ("completed", "failed", "killed"):
+        handle._finish(job, final_range=isinstance(native, dict) and isinstance(native.get("range"), dict) and "spillPaths" in native)
         if isinstance(owner, _BashResult):
             del owner._pending
             del _BASH_JOBS[job_id]
@@ -1042,7 +1056,7 @@ class BashJob:
     `detail` and stays None when the job did not report one.
     """
 
-    __slots__ = ("id", "command", "_text", "_result", "_truncated", "_spill_paths", "__weakref__")
+    __slots__ = ("id", "command", "_text", "_result", "_truncated", "_spill_paths", "_offset", "_sizes", "__weakref__")
 
     def __init__(self, job_id: str, command: str) -> None:
         self.id = job_id
@@ -1051,6 +1065,8 @@ class BashJob:
         self._result: _BashJobResult | None = None
         self._truncated: bool | None = False
         self._spill_paths: list[str] = []
+        self._offset: int | None = 0
+        self._sizes: list[tuple[int, int]] = []
         _BASH_JOBS[job_id] = self
 
     def __setstate__(self, state: tuple[None, dict]) -> None:
@@ -1062,6 +1078,9 @@ class BashJob:
             self._truncated = True if self._result is not None and self._result.get("truncated") is True else None
         if "_spill_paths" not in fields:
             self._spill_paths = []
+        if "_offset" not in fields:
+            self._offset = None if self._text or self._result is not None else 0
+            self._sizes = []
         if legacy and self._result is not None:
             self._result["truncated"] = self._truncated
             self._result["spillPaths"] = list(self._spill_paths)
@@ -1070,14 +1089,26 @@ class BashJob:
                     self._result[channel]["truncated"] = self._truncated
         _BASH_JOBS[self.id] = self
 
-    def _append_output(self, text: str, *, truncated: bool | None = None, spill_paths: Any = ()) -> None:
+    def _append_output(self, text: str, *, truncated: bool | None = None, spill_paths: Any = (), native: Any = None) -> None:
         if text:
             self._text.append(text)
-        if truncated is True:
+        native = native if isinstance(native, dict) else {}
+        span = native.get("range")
+        if isinstance(span, dict) and self._offset is not None and span.get("from") == self._offset:
+            out_len, err_len = span["stdoutBytes"], span["stderrBytes"]
+            if text:
+                self._sizes.append((out_len, err_len))
+            self._offset = span["next"]
+        elif text or truncated is not False:
+            self._offset = None
+            self._sizes.clear()
+        if truncated is True or native.get("truncated") is True:
             self._truncated = True
-        elif self._truncated is not True and truncated is not False:
-            self._truncated = None
-        if isinstance(spill_paths, (list, tuple)):
+        elif self._truncated is not True:
+            self._truncated = False if self._offset is not None else None
+        if "spillPaths" in native:
+            self._spill_paths = list(native["spillPaths"])
+        elif isinstance(spill_paths, (list, tuple)):
             for path in spill_paths:
                 if isinstance(path, str) and path and path not in self._spill_paths:
                     self._spill_paths.append(path)
@@ -1111,6 +1142,8 @@ class BashJob:
                 args["timeout_ms"] = 600_000
             got = await call_tool("job_output", args)
             job = got.get("job", {})
+            if job.get("id") != self.id:
+                raise RuntimeError("job_output returned a different job id")
             if job.get("status") in _JOB_LIVE and "user steered" in (job.get("detail") or ""):
                 # DSH ends waits while user steering is pending; retrying here
                 # would busy-loop until the agent reads that message.
@@ -1126,10 +1159,14 @@ class BashJob:
             if deadline is not None and time.monotonic() >= deadline:
                 raise self._still_running(timeout_ms)
 
-    def _finish(self, job: dict) -> _BashJobResult:
+    def _finish(self, job: dict, *, final_range: bool = False) -> _BashJobResult:
         if self._result is None:
+            if not final_range and self._truncated is False:
+                self._truncated = None
             match = _JOB_EXIT.search(job.get("detail") or "")
             text = "".join(self._text)
+            verified = self._truncated is False and self._offset is not None
+            out, err = _job_streams(self._text, self._sizes, text, verified)
             self._result = _BashJobResult(
                 jobId=self.id,
                 status=job.get("status"),
@@ -1138,9 +1175,12 @@ class BashJob:
                 detail=job.get("detail"),
                 truncated=self._truncated,
                 spillPaths=list(self._spill_paths),
-                **_wrap_nested(_streams(text, self._truncated)),
+                streamsVerified=verified,
+                stdout=_wrap_nested({"text": out, "truncated": self._truncated}),
+                stderr=_wrap_nested({"text": err, "truncated": self._truncated}),
             )
             self._text.clear()
+            self._sizes.clear()
         return self._result
 
     def _still_running(self, timeout_ms: float) -> "JobStillRunning":

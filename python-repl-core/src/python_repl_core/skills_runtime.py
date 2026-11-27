@@ -53,7 +53,11 @@ class _SkillsNamespace:
                 continue
             entry = {**chosen[0], "source_root": str(Path(chosen[0]["source_root"]).resolve())}
             self._entries[name] = entry
-            self._import_entry(entry)
+            if reason := entry.get("document_error"):
+                self._failed[name] = (f"{reason}. Fix the instructions and use a new kernel name or reopen the workbench "
+                                      "to discover the skill again.")
+            else:
+                self._import_entry(entry)
         return {"loaded": sorted(self._loaded), "failed": self._failed.copy()}
 
     def __getattr__(self, name: str) -> Any:
@@ -64,8 +68,12 @@ class _SkillsNamespace:
         if name in self._conflicts:
             raise AttributeError(f"Skill {name!r} was not loaded due to duplicate conflict")
         if name in self._failed:
-            raise AttributeError(f"Skill {name!r} failed to import: {self._failed[name]}")
+            raise AttributeError(self._failure(name, name))
         raise AttributeError(f"No Python skill named {name!r}. Call `await skills.list()` to see available skills.")
+
+    def _failure(self, key: str, display_name: str) -> str:
+        status = "has invalid instructions" if self._entries[key].get("document_error") else "failed to import"
+        return f"Skill {display_name!r} {status}: {self._failed[key]}"
 
     def __dir__(self) -> list[str]:
         return sorted([*self._loaded, "list", "describe", "retry"])
@@ -98,6 +106,8 @@ class _SkillsNamespace:
         key = entry["import_name"]
         if key in self._loaded:
             return {"import_name": key, "status": "already_loaded"}
+        if entry.get("document_error"):
+            raise ValueError(f"Cannot retry {import_name!r}: {self._failed[key]}")
         importlib.invalidate_caches()
         error = self._import_entry(entry)
         if self._on_retry:
@@ -110,7 +120,7 @@ class _SkillsNamespace:
         entry = self._lookup(import_name)
         key = entry["import_name"]
         if key in self._failed:
-            raise KeyError(f"Skill {import_name!r} failed to import: {self._failed[key]}")
+            raise KeyError(self._failure(key, import_name))
         document = Path(entry["doc_path"])
         try:
             doc = document.read_text(encoding="utf-8-sig")

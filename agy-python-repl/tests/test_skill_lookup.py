@@ -55,6 +55,89 @@ class SkillLookupTests(unittest.IsolatedAsyncioTestCase):
             True, "fixture_reader", str(project_doc), project_doc.read_text(encoding="utf-8"),
         ))
 
+    async def test_invalid_python_documents_keep_their_errors_without_importing_modules(self) -> None:
+        broken = {
+            "changed": (b"---\nname: another-skill\ndescription: Valid summary\n---\n", "name must remain"),
+            "blank": (b"---\ndescription: '  '\n---\n", "non-empty description"),
+            "null": (b"---\nname: null\ndescription: Valid summary\n---\n", "name must remain"),
+            "boolean": (b"---\ndescription: true\n---\n", "non-empty description"),
+            "mapping": (b"---\ndescription: {nested: value}\n---\n", "non-empty description"),
+            "syntax": (b"---\ndescription: [unfinished\n---\n", "YAML"),
+            "duplicate": (b"---\ndescription: One\ndescription: Two\n---\n", "YAML"),
+            "encoding": (b"---\ndescription: \xff\n---\n", "utf-8"),
+            "link": (None, "No such file"), "directory": (None, "regular file"),
+        }
+        for label, (contents, _) in broken.items():
+            selected = self.add_skill(self.project, name=f"fixture-{label}", code=(
+                f"from pathlib import Path\nPath({str(self.root / label)!r}).touch()"
+            ))
+            if contents is not None:
+                selected.write_bytes(contents)
+            else:
+                selected.unlink()
+                if label == "link":
+                    selected.symlink_to("missing.md")
+                else:
+                    selected.mkdir()
+        self.add_skill(self.first, name="fixture-changed", code="raise AssertionError('shadowed skill ran')")
+        valid = self.add_skill(self.first, name="fixture-valid")
+        valid.write_bytes(b"\xef\xbb\xbf---\r\ndescription: >-\r\n  Python skill\r\n  summary\r\n---\r\nPython body")
+        fallback = self.add_skill(self.first, name="fixture-fallback")
+        fallback.unlink()
+        plain_date = self.add_skill(self.first, name="fixture-date")
+        plain_date.write_text("---\ndescription: 2025-01-01\n---\n")
+        tagged = self.add_skill(self.first, name="fixture-scalar")
+        tagged.write_text("---\ndescription: !!bool yes\n---\n")
+        rows = await self.cell("{r['name']: (r['status'], r['description'], r.get('error')) for r in await skills.list()}")
+        self.assertEqual(rows["status"], "ok", rows)
+        listed = ast.literal_eval(rows["result"])
+        for label, (_, reason) in broken.items():
+            name = f"fixture-{label}"
+            with self.subTest(skill=name):
+                status, _, message = listed[name]
+                self.assertEqual(status, "failed")
+                self.assertIn(str(self.project / name / "PYSKILL.md"), message)
+                self.assertIn(reason, message)
+                self.assertFalse((self.root / label).exists())
+        self.assertEqual(listed["fixture-valid"], ("loaded", "Python skill summary", None))
+        self.assertEqual(listed["fixture-fallback"], ("loaded", "Fixture", None))
+        self.assertEqual(listed["fixture-date"], ("loaded", "2025-01-01", None))
+        self.assertEqual(listed["fixture-scalar"], ("loaded", "yes", None))
+        docs = await self.cell("(skills.fixture_valid.answer, (await skills.describe('fixture-fallback'))['doc_path'])")
+        self.assertEqual(ast.literal_eval(docs["result"]), (42, str(fallback.with_name("SKILL.md"))))
+        for name in ("fixture-changed", "fixture_changed"):
+            failure = await self.cell(f"await skills.describe({name!r})")
+            self.assertIn("name must remain", failure["error"]["evalue"])
+        self.assertIn("fixture_changed", self.manager.get_overview()["kernels"][0]["skills_failed"])
+
+    async def test_wrong_standard_instructions_and_document_retry_keep_other_cells_usable(self) -> None:
+        preferred = self.add_skill(self.project, code="from pathlib import Path\nPath('imported').touch()\nvalue=11")
+        preferred.unlink()
+        standard = preferred.with_name("SKILL.md")
+        standard.write_bytes(b"---\ndescription: \xff\n---\n")
+        self.add_skill(self.first, name="fixture-healthy")
+        response = await self.cell("number=7\n(skills.fixture_healthy.answer, number, "
+                                   "next(r['error'] for r in await skills.list() if r['name']=='fixture-reader'))")
+        self.assertEqual(response["status"], "ok", response)
+        healthy, original, error = ast.literal_eval(response["result"])
+        self.assertEqual((healthy, original), (42, 7))
+        self.assertIn(str(standard), error)
+        standard.write_text("---\nname: fixture-reader\ndescription: Corrected\n---\n")
+        for name in ("fixture-reader", "fixture_reader"):
+            failed = await self.cell(f"await skills.retry({name!r})")
+            self.assertEqual(failed["error"]["ename"], "ValueError")
+            self.assertIn("new kernel", failed["error"]["evalue"])
+            self.assertIn(str(standard), failed["error"]["evalue"])
+        restarted = await self.manager.kernel_state("restart")
+        self.assertEqual(restarted["status"], "ok", restarted)
+        self.assertEqual((await self.cell("number"))["result"], "7")
+        self.assertFalse((self.root / "imported").exists())
+        await self.manager.shutdown_all()
+        self.manager.auto_snapshot = True
+        fresh = await self.cell("(skills.fixture_reader.value, number)")
+        self.assertEqual(ast.literal_eval(fresh["result"]), (11, 7))
+        self.assertTrue((self.root / "imported").exists())
+
     async def test_only_names_recorded_for_the_loaded_skill_match(self) -> None:
         self.add_skill(self.first, name="fixture_reader")
         result = await self.cell("await skills.describe('fixture-reader')")
