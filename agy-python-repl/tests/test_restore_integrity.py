@@ -46,6 +46,76 @@ class RestoreIntegrityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resumed["result"], "[42, False]")
         self.assertNotIn("snapshot_skipped_count", resumed)
 
+    async def test_csv_reader_is_reported_only_when_the_saved_skips_change(self) -> None:
+        (self.root / "readings.csv").write_text("站点,数量\n甲,11\n乙,31\n", encoding="utf-8")
+        manager = self.manager()
+        load = (
+            "from pathlib import Path\nfrom csv import DictReader\n"
+            "with Path('readings.csv').open(encoding='utf-8', newline='') as source:\n"
+            "    reader = DictReader(source)\n    rows = list(reader)\n"
+            "del source\nsum(int(row['数量']) for row in rows)"
+        )
+        first = await manager.run_code(load, cwd=self.root)
+        self.assertEqual((first["result"], first["snapshot_skipped_names"]), ("42", ["reader"]))
+        original = json.loads(self.manifest.read_text(encoding="utf-8"))["skipped"]
+        self.assertEqual([item["name"] for item in original], ["reader"])
+        self.assertIn("_csv.reader", original[0]["reason"])
+
+        other = await manager.run_code(load, kernel="independent", cwd=self.root)
+        self.assertEqual(other["snapshot_skipped_names"], ["reader"])
+        unchanged = await manager.run_code("rows[-1]['站点']")
+        self.assertEqual(unchanged["result"], "'乙'")
+        self.assertNotIn("snapshot_skipped_count", unchanged)
+        for _ in range(2):
+            self.assertEqual((await manager.kernel_state("snapshot"))["skipped"], original)
+        self.assertEqual(json.loads(self.manifest.read_text(encoding="utf-8"))["skipped"], original)
+
+        growing = await manager.run_code("stream = (n for n in range(2))")
+        self.assertEqual(set(growing["snapshot_skipped_names"]), {"reader", "stream"})
+        reordered = await manager.run_code("globals()['reader'] = globals().pop('reader')")
+        self.assertNotIn("snapshot_skipped_count", reordered)
+        changed_reason = await manager.run_code("reader = (n for n in range(3))")
+        self.assertEqual(changed_reason["snapshot_skipped_count"], 2)
+        explicit = await manager.kernel_state("snapshot")
+        reasons = {item["name"]: item["reason"] for item in explicit["skipped"]}
+        self.assertIn("generator", reasons["reader"])
+        self.assertNotIn("snapshot_skipped_count", await manager.run_code("len(rows)"))
+
+        reduced = await manager.run_code("del stream")
+        self.assertEqual(reduced["snapshot_skipped_names"], ["reader"])
+        cleared = await manager.run_code("del reader")
+        self.assertEqual((cleared["snapshot_skipped_count"], cleared["snapshot_skipped_names"]), (0, []))
+        self.assertNotIn("snapshot_skipped_count", await manager.run_code("len(rows)"))
+        returned = await manager.run_code(load)
+        self.assertEqual(returned["snapshot_skipped_names"], ["reader"])
+        self.assertNotIn("snapshot_skipped_count", await manager.run_code("len(rows)", kernel="independent"))
+        await manager.shutdown_all()
+
+        resumed = await self.manager().run_code(load, cwd=self.root)
+        self.assertEqual(resumed["snapshot_skipped_names"], ["reader"])
+        self.assertEqual(resumed["restored"]["skipped"], original)
+        self.assertIn("rows", resumed["restored"]["restored_names"])
+
+    async def test_repeated_snapshot_failures_are_reported_after_an_unchanged_skip(self) -> None:
+        manager = self.manager()
+        first = await manager.run_code("numbers = (n for n in range(2))", cwd=self.root)
+        self.assertEqual(first["snapshot_skipped_names"], ["numbers"])
+        original = self.snapshot.read_bytes(), self.manifest.read_bytes()
+        staging_marker = self.snapshot.resolve(strict=True).parent.parent / ".publishing"
+        staging_marker.write_text("fixture blocking publication", encoding="utf-8")
+        try:
+            for _ in range(2):
+                failed = await manager.run_code("6 * 7")
+                self.assertEqual(failed["result"], "42")
+                self.assertIn(staging_marker.name, failed["snapshot_error"])
+                self.assertEqual((self.snapshot.read_bytes(), self.manifest.read_bytes()), original)
+        finally:
+            staging_marker.unlink()
+        after = await manager.run_code("next(numbers)")
+        self.assertEqual(after["result"], "0")
+        self.assertNotIn("snapshot_error", after)
+        self.assertNotIn("snapshot_skipped_count", after)
+
     async def test_partial_restore_preserves_the_snapshot_until_its_module_returns(self) -> None:
         with_module = self.root / "with-module"
         without_module = self.root / "without-module"
@@ -74,7 +144,9 @@ class RestoreIntegrityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({item["name"] for item in report["failed"]}, {"Meter", "instrument"})
         self.assertTrue(all("fixture_meter" in item["reason"] for item in report["failed"]))
         self.assertEqual([item["name"] for item in report["skipped"]], ["unsaved"])
-        self.assertEqual((await partial.run_code("count + 1"))["result"], "8")
+        next_cell = await partial.run_code("count + 1")
+        self.assertEqual(next_cell["result"], "8")
+        self.assertEqual(next_cell["snapshot_warning"], second["snapshot_warning"])
         await partial.shutdown_all()
         self.assertEqual((self.snapshot.read_bytes(), self.manifest.read_bytes()), original)
 

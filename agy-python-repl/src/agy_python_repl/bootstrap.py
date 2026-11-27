@@ -28,7 +28,8 @@ class _SnapshotSkipNames(set[str]):
 class _ReplHelper:
     """Kernel inspection, package installation and explicit recovery copies for user cells."""
 
-    def __init__(self, copy_session: str | None = None) -> None:
+    def __init__(self, *, kernel: str, copy_session: str | None = None) -> None:
+        self._kernel = kernel
         self._copy_session = copy_session
 
     async def save_copy(self, *names: str) -> dict:
@@ -54,8 +55,14 @@ class _ReplHelper:
         constraints = os.environ.get("AGY_PYTHON_REPL_CONSTRAINTS")
         if not data or not constraints or Path(sys.prefix).resolve() != (Path(data) / "venv").resolve():
             raise RuntimeError("repl.install requires the workbench launcher and its PLUGIN_DATA/venv environment")
-        result = await packages.install(list(specs), upgrade=upgrade, timeout=timeout, constraints=constraints)
-        return dict(result)
+        result = dict(await packages.install(list(specs), upgrade=upgrade, timeout=timeout, constraints=constraints))
+        if result["stale"]:
+            result["next_step"] = {
+                "tool": "kernel_state",
+                "arguments": {"action": "restart", "kernel": self._kernel},
+                "instruction": "Use the same kernel as this run_code call to load the updated modules.",
+            }
+        return result
 
     def vars(self) -> list[str]:
         from rlm import repl as prime
@@ -69,7 +76,8 @@ def _report_skill_retry(name: str, error: str | None) -> None:
     prime.emit({SKILL_RETRY_MIME: {"import_name": name, "error": error[:1024] if error else None}})
 
 
-def install_antigravity_surface(skill_entries: list[dict[str, Any]], *, copy_session: str | None = None) -> dict[str, Any]:
+def install_antigravity_surface(skill_entries: list[dict[str, Any]], *, kernel: str,
+                                copy_session: str | None = None) -> dict[str, Any]:
     """Prepare the cell namespace and return the skill load report."""
     import dill._dill as dill_impl
     from rlm import repl as prime
@@ -81,7 +89,7 @@ def install_antigravity_surface(skill_entries: list[dict[str, Any]], *, copy_ses
     report = skills_ns._register_all(skill_entries)
     install_skills_import_guard(ns, skills_ns)
 
-    bindings = {"skills": skills_ns, "repl": _ReplHelper(copy_session)}
+    bindings = {"skills": skills_ns, "repl": _ReplHelper(kernel=kernel, copy_session=copy_session)}
     ns.update(bindings)
     prelude.install(ns)
     prime._ALWAYS_SKIP = _SnapshotSkipNames(prime._ALWAYS_SKIP, ns)

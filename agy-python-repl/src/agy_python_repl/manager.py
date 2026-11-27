@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -183,6 +184,20 @@ class ManagedKernel:
     skill_report: dict[str, Any] = field(default_factory=dict)
     pending_restore_notice: dict[str, Any] | None = None
     snapshot_protected: bool = False
+    last_skipped_digest: bytes | None = None
+
+    def auto_save_notice_changed(self, skipped: list[dict[str, str]]) -> bool:
+        digest = None
+        if skipped:
+            # Snapshot records follow binding order. The same names and reasons are one notice in any order.
+            summary = hashlib.sha256()
+            for item in sorted(skipped, key=lambda record: record["name"]):
+                pair = json.dumps([item["name"], item["reason"]], ensure_ascii=False)
+                summary.update(pair.encode("utf-8", errors="surrogatepass"))
+            digest = summary.digest()
+        changed = self.last_skipped_digest != digest
+        self.last_skipped_digest = digest
+        return changed
 
     def apply_skill_retry(self, display: dict[str, Any]) -> None:
         update = display.get(SKILL_RETRY_MIME)
@@ -334,7 +349,7 @@ class KernelManager:
             "__import__('rlm.repl', fromlist=['emit']).emit({"
             f"{_BOOTSTRAP_REPORT_MIME!r}: "
             "__import__('agy_python_repl.bootstrap', fromlist=['install_antigravity_surface'])"
-            f".install_antigravity_surface({[asdict(entry) for entry in entries]!r}, "
+            f".install_antigravity_surface({[asdict(entry) for entry in entries]!r}, kernel={key!r}, "
             f"copy_session={str(self.data_dir / 'recovery' / storage)!r})"
             "})"
         )
@@ -417,10 +432,14 @@ class KernelManager:
                 else:
                     if saved.get("status") != "ok":
                         out["snapshot_error"] = saved.get("reason") or "Kernel could not save the snapshot"
-                    elif skipped := saved.get("skipped"):
-                        out["snapshot_skipped_count"] = len(skipped)
-                        out["snapshot_skipped_names"] = [bound_text(item["name"], max_chars=96).text for item in skipped[:3]]
-                        out["snapshot_manifest"] = str(manifest)
+                    else:
+                        skipped = saved.get("skipped", [])
+                        if managed.auto_save_notice_changed(skipped):
+                            out["snapshot_skipped_count"] = len(skipped)
+                            out["snapshot_skipped_names"] = [
+                                bound_text(item["name"], max_chars=96).text for item in skipped[:3]
+                            ]
+                            out["snapshot_manifest"] = str(manifest)
             if managed.pending_restore_notice is not None:
                 out["restored"] = managed.pending_restore_notice
                 managed.pending_restore_notice = None

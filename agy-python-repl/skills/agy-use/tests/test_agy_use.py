@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+import shlex
 import signal
 from pathlib import Path
 import subprocess
@@ -89,8 +90,11 @@ class AgyUseTests(unittest.IsolatedAsyncioTestCase):
         self.workspace = self.directory / "example workspace"
         self.workspace.mkdir()
         self.log = self.directory / "calls.jsonl"
+        script = self.directory / "fake_agy.py"
+        script.write_text(FAKE_AGY, encoding="utf-8")
         command = self.directory / "agy"
-        command.write_text(f"#!{sys.executable}\n" + FAKE_AGY, encoding="utf-8")
+        invocation = shlex.join([sys.executable, str(script)])
+        command.write_text(f'#!/bin/sh\nexec {invocation} "$@"\n', encoding="utf-8")
         command.chmod(0o755)
         self.enterContext(patch.dict(os.environ, {
             "PATH": str(self.directory) + os.pathsep + os.environ["PATH"],

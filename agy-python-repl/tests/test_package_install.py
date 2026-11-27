@@ -74,9 +74,9 @@ class PackageInstallTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as data:
             with patch.dict(os.environ, {"PLUGIN_DATA": data, "AGY_PYTHON_REPL_CONSTRAINTS": "dill==0"}):
                 with self.assertRaisesRegex(RuntimeError, "PLUGIN_DATA/venv"):
-                    await _ReplHelper().install("unused.whl")
+                    await _ReplHelper(kernel="default").install("unused.whl")
 
-    async def cell(self, session, code, kernel="sample"):
+    async def cell(self, session, code, kernel="default"):
         reply = await session.call_tool("run_code", {"code": code, "kernel": kernel})
         self.assertFalse(reply.isError, reply.content)
         result = reply.structuredContent
@@ -93,6 +93,7 @@ class PackageInstallTests(unittest.IsolatedAsyncioTestCase):
         params, data = launcher(root, workspace)
         first = make_wheel(workspace, "sample_analysis_lib", "1.0")
         update = make_wheel(workspace, "sample_analysis_lib", "2.0")
+        latest = make_wheel(workspace, "sample_analysis_lib", "3.0")
         conflict = make_wheel(workspace, "dill", "9999.0")
         indirect = make_wheel(workspace, "sample_conflict", "1.0", f"dill @ {conflict.as_uri()}")
         async with stdio_client(params) as streams, ClientSession(*streams) as session:
@@ -100,12 +101,43 @@ class PackageInstallTests(unittest.IsolatedAsyncioTestCase):
             initial = await self.cell(session, "import importlib.util, os\nfrom importlib.metadata import version\n"
                                       "(importlib.util.find_spec('sample_analysis_lib') is None, version('dill'), os.getpid())")
             self.assertTrue(initial[0])
-            installed = await self.cell(session, f"receipt = await repl.install({first.name!r})\nimport sample_analysis_lib\n"
-                                        "(receipt['environment'], receipt['importable_now'], sample_analysis_lib.VALUE)")
-            self.assertEqual(installed, (str(data / "venv"), ["sample_analysis_lib"], "1.0"))
-            upgraded = await self.cell(session, f"receipt = await repl.install({update.name!r}, upgrade=True)\n"
-                                       "(receipt['stale'], sample_analysis_lib.VALUE)")
-            self.assertEqual(upgraded, (["sample_analysis_lib"], "1.0"))
+            installed = await self.cell(session, f"await repl.install({first.name!r})")
+            self.assertEqual(set(installed), {"environment", "changed", "importable_now", "stale"})
+            self.assertEqual((installed["environment"], installed["importable_now"], installed["stale"]),
+                             (str(data / "venv"), ["sample_analysis_lib"], []))
+            named = "报表 '甲组'"
+            probe = "(sample_analysis_lib.VALUE, os.getpid(), kept)"
+            for kernel, kept in ((named, 41), ("default", 79)):
+                await self.cell(session, f"import os, sample_analysis_lib\nkept = {kept}\n{probe}", kernel=kernel)
+            for kernel, neighbor, wheel, expected in ((named, "default", update, "2.0"),
+                                                      ("default", named, latest, "3.0")):
+                with self.subTest(kernel=kernel):
+                    before = await self.cell(session, probe, kernel=kernel)
+                    untouched = await self.cell(session, probe, kernel=neighbor)
+                    self.assertNotEqual(before[1], untouched[1])
+                    upgraded = await session.call_tool("run_code", {
+                        "kernel": kernel, "code": f"await repl.install({wheel.name!r}, upgrade=True)",
+                    })
+                    self.assertFalse(upgraded.isError, upgraded.content)
+                    self.assertEqual(upgraded.structuredContent["status"], "ok", upgraded.structuredContent)
+                    receipt = ast.literal_eval(upgraded.structuredContent["result"])
+                    self.assertEqual(ast.literal_eval(json.loads(upgraded.content[0].text)["result"]), receipt)
+                    self.assertEqual(receipt["stale"], ["sample_analysis_lib"])
+                    self.assertEqual(await self.cell(session, probe, kernel=kernel), before)
+                    step = receipt["next_step"]
+                    self.assertEqual(step["tool"], "kernel_state")
+                    self.assertIn("same kernel", step["instruction"])
+                    restart = await session.call_tool(step["tool"], step["arguments"])
+                    self.assertEqual(restart.structuredContent["status"], "ok", restart.content)
+                    self.assertEqual(restart.structuredContent["kernel"], kernel)
+                    self.assertEqual(step["arguments"], {"action": "restart", "kernel": kernel})
+                    version, pid, kept = await self.cell(session, probe, kernel=kernel)
+                    self.assertEqual((version, kept), (expected, before[2]))
+                    self.assertNotEqual(pid, before[1])
+                    self.assertEqual(await self.cell(session, probe, kernel=neighbor), untouched)
+            unchanged = await self.cell(session, f"await repl.install({latest.name!r})")
+            self.assertEqual(set(unchanged), set(installed))
+            self.assertEqual((unchanged["changed"], unchanged["stale"]), ([], []))
             for wheel in (conflict, indirect):
                 with self.subTest(wheel=wheel.name):
                     error = await self.cell(session, f"try:\n    await repl.install({wheel.name!r})\n    failure = ''\n"
@@ -117,7 +149,7 @@ class PackageInstallTests(unittest.IsolatedAsyncioTestCase):
             await session.initialize()
             reopened = await self.cell(session, "import os, sample_analysis_lib\nfrom importlib.metadata import version\n"
                                        "(sample_analysis_lib.VALUE, version('dill'), os.getpid())", kernel="fresh")
-        self.assertEqual(reopened[:2], ("2.0", initial[1]))
+        self.assertEqual(reopened[:2], ("3.0", initial[1]))
         self.assertNotEqual(reopened[2], initial[2])
         self.assertFalse(wrong_target.exists())
 
