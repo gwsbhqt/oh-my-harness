@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .snapshot_errors import snapshot_error_reader
+from .snapshot_resources import dimension_type, save_with_dimensions, snapshot_resource_reader
 
 _installed = False
 
@@ -29,8 +30,36 @@ class _SnapshotName(str):
         return str.encode(name, encoding, errors)
 
 
+class _NamedRootToken(int):
+    """Old readers require an exact int. Text pickle cannot decimal-format very long binding names."""
+
+    def __reduce_ex__(self, protocol):
+        if protocol < 2:
+            return int, (format(self, "x"), 16)
+        return int, (int(self),)
+
+
+def _named_token(name: str) -> int:
+    # Negative keys are disjoint from v1 sequence numbers. The leading byte preserves every UTF-8 byte.
+    return -int.from_bytes(b"\x01" + str.encode(name, "utf-8", "surrogatepass"), "big")
+
+
+class _NamedRecords(dict):
+    """Prime iterates (name, blob) pairs. The detached reader requests each blob by name."""
+
+    def items(self):
+        state = _restoring.get()
+        for name, blob in super().items():
+            state.current_name = name
+            yield name, blob
+
+    def __getitem__(self, name):
+        _restoring.get().current_name = name
+        return super().__getitem__(name)
+
+
 def _decode_record_names(records, legacy_names: set[str] | None):
-    decoded = {}
+    decoded = _NamedRecords()
     for name, blob in records.items():
         if isinstance(name, str):
             if name.startswith("__" + _LEGACY_PREFIX):
@@ -55,6 +84,7 @@ _REFERENCE_TAG = "dsh.shared.v1"
 class _RestoreReferences:
     def __init__(self, legacy_underscore_aliases: bool):
         self.legacy_names = set() if legacy_underscore_aliases else None
+        self.current_name = None
         self.reading_header = True  # A legacy snapshot's first unpickle is its outer record dictionary.
         self.values = {}       # wire token -> canonical object from a successfully loaded record
         self.by_root = {}      # staged root identity -> shared object identities in that record
@@ -94,8 +124,16 @@ def _immutable_contents(value) -> bool:
     return True
 
 
-def shared_references(roots: dict, namespace: dict, candidates=None) -> tuple[set[str], dict]:
-    """Names sharing an object and the per-snapshot tokens for those objects."""
+class _PickleReferences(dict):
+    """Targets to recognize during normal pickle traversal of roots with custom state."""
+
+    def __init__(self):
+        super().__init__()
+        self.custom_roots: set[str] = set()
+
+
+def shared_references(roots: dict, namespace: dict, candidates=None, *, for_pickle=None) -> tuple[set[str], dict]:
+    """Return confirmed sharing. Only the writer also tracks names its pickler may encounter in custom state."""
     shared_names: set[str] = set()
     references: dict = {}
     if candidates is not None and all(id(type(roots[n])) in _ATOMS for n in candidates):
@@ -126,12 +164,16 @@ def shared_references(roots: dict, namespace: dict, candidates=None) -> tuple[se
                         if (cls is tuple or cls is frozenset) and identity not in references and _immutable_contents(value):
                             immutable.add(identity)
                             continue
-                        if first[0] != name:
-                            shared_names.update((first[0], name))
                         if identity not in references:
                             references[identity] = (_REFERENCE_TAG, len(references), value)
+                        if first[0] != name:
+                            shared_names.update((first[0], name))
+                            if for_pickle is not None:
+                                for_pickle[identity] = references[identity]
                         continue
                     owners[identity] = (name, value)
+                if for_pickle is not None and kind not in _CHILDREN:
+                    for_pickle.custom_roots.add(name)
                 if kind not in walkers:
                     mro = type.__dict__["__mro__"].__get__(cls)
                     walkers[kind] = next((_CHILDREN[id(t)] for t in mro if id(t) in _CHILDREN), None)
@@ -141,19 +183,34 @@ def shared_references(roots: dict, namespace: dict, candidates=None) -> tuple[se
                     break
             else:
                 stack.pop()
+    if for_pickle is not None and for_pickle.custom_roots:
+        # Ordinary records carry their names in the frame. Only another record that visits the value needs a tag.
+        for name, value in roots.items():
+            identity = id(value)
+            if identity in for_pickle or (type(value) is tuple and not value):
+                continue
+            known = references.get(identity) if name in shared_names else None
+            if known is None:
+                known = (_REFERENCE_TAG, _NamedRootToken(_named_token(name)), value)
+            for_pickle[identity] = known
     return shared_names, references
 
 
 class _SharedRoot:
-    def __init__(self, value, references):
+    def __init__(self, value, references, dimension_cls, *, confirmed=True):
+        self.dimension_cls = dimension_cls
         self.value = value
         self.references = references
+        self.confirmed = confirmed
 
 
 def _save_shared_root(pickler, root):
     # Each record includes its own ordinary value, so it can load even if a
     # different record containing the same object was skipped or fails to load.
     # The pickle memo encodes repeat visits (including cycles) within a record.
+    if root.references is None:
+        save_with_dimensions(pickler, root.value, root.dimension_cls)
+        return
     inline = None
 
     def persistent_id(value):
@@ -162,18 +219,21 @@ def _save_shared_root(pickler, root):
             inline = None
             return None
         reference = root.references.get(id(value))
-        if reference is not None and id(reference) not in pickler.memo:
+        if reference is None or (value is root.value and reference[1] < 0):
+            return None  # The root's name is already in its own frame.
+        pickler.bin = True  # Text-mode persistent ids would format the user value with str().
+        if id(reference) not in pickler.memo:
             inline = value  # the value inside this persistent id uses its ordinary reducer once
         return reference
 
     previous = pickler.persistent_id
     binary = pickler.bin
-    # Text-mode persistent ids call str() on their payload, including user values.
-    # Binary pickle opcodes carry the reference as data in either case.
-    pickler.bin = True
+    if root.confirmed:
+        # Retain the established v1 encoding. An unconfirmed record keeps its exact bytes until a reference occurs.
+        pickler.bin = True
     pickler.persistent_id = persistent_id
     try:
-        pickler.save(root.value)
+        save_with_dimensions(pickler, root.value, root.dimension_cls)
     finally:
         pickler.persistent_id = previous
         pickler.bin = binary
@@ -182,11 +242,13 @@ def _save_shared_root(pickler, root):
 class _SnapshotNames:
     """A read-through view. Prime's optional committed prune still acts on the live name."""
 
-    def __init__(self, ns, roots, shared_names, references):
+    def __init__(self, ns, roots, shared_names, references, for_pickle):
         self.ns = ns
         self.roots = roots
         self.shared_names = shared_names
-        self.references = references
+        self.references = references | for_pickle if for_pickle.custom_roots else references
+        self.for_pickle = for_pickle
+        self.dimension_cls = dimension_type()
 
     def keys(self):
         return (_SnapshotName(name) if name.startswith(("_", _LEGACY_PREFIX)) else name for name in self.roots)
@@ -194,7 +256,11 @@ class _SnapshotNames:
     def get(self, name, default):
         value = self.ns.get(name, default)
         if name in self.shared_names and value is not default:
-            return _SharedRoot(value, self.references)
+            return _SharedRoot(value, self.references, self.dimension_cls)
+        if name in self.for_pickle.custom_roots and value is not default:
+            return _SharedRoot(value, self.for_pickle, self.dimension_cls, confirmed=False)
+        if self.dimension_cls is not None and value is not default and id(type(value)) not in _ATOMS:
+            return _SharedRoot(value, None, self.dimension_cls, confirmed=False)
         return value
 
     def __contains__(self, name):
@@ -273,9 +339,10 @@ def install_snapshot_names(dill_impl: Any, *, legacy_underscore_aliases: bool) -
         if managed and pair.manifest != Path(manifest_path).absolute():
             return {"error": "write failed: incorrect manifest for this session snapshot"}
         roots = {name: value for name, value in ns.copy().items() if user_name(name)}
-        names, refs = shared_references(roots, ns)
+        for_pickle = _PickleReferences()
+        names, refs = shared_references(roots, ns, for_pickle=for_pickle)
         # Prime may remove pruned names once its *private* files are ready. Defer those removals to publication.
-        view = _SnapshotNames(ns.copy() if managed and prune_oversized else ns, roots, names, refs)
+        view = _SnapshotNames(ns.copy() if managed and prune_oversized else ns, roots, names, refs, for_pickle)
 
         def write_pair(data, manifest):
             result = original_snapshot(view, str(data), str(manifest), max_bytes, max_variable_bytes,
@@ -310,7 +377,8 @@ def install_snapshot_names(dill_impl: Any, *, legacy_underscore_aliases: bool) -
         return _decode_record_names(records, state.legacy_names)
 
     def unpickler(dill):
-        base = snapshot_error_reader(guarded_unpickler(dill), dill)
+        resources = snapshot_resource_reader(guarded_unpickler(dill), dill_impl, repl._RestoredFileStub)
+        base = snapshot_error_reader(resources, dill)
         state = _restoring.get()
         if state is None:
             return base
@@ -318,11 +386,14 @@ def install_snapshot_names(dill_impl: Any, *, legacy_underscore_aliases: bool) -
         class Unpickler(base):
             def load(self):
                 self.pending = {}
+                name = state.current_name
                 value = super().load()
                 if state.reading_header:
                     state.reading_header = False
                     if isinstance(value, dict):
                         value = _decode_record_names(value, state.legacy_names)
+                elif type(name) is str:
+                    value = state.values.setdefault(_named_token(name), value)
                 if self.pending:  # a failed record must leave no partial objects behind
                     state.values.update(self.pending)
                     state.by_root.setdefault(id(value), set()).update(id(item) for item in self.pending.values())

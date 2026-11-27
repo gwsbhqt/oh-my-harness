@@ -287,12 +287,52 @@ def _delete(name: str, entry: dict) -> None:
         st.deleted.pop(next(iter(st.deleted)))
 
 
+def _loaded_class(module_name: str, class_name: str):
+    module = sys.modules.get(module_name)
+    if type(module) is types.ModuleType:
+        cls = vars(module).get(class_name)
+        if type(cls) is type:
+            return cls
+    return None
+
+
+def _link_workbook_roots(roots: dict, candidates: list[str]) -> None:
+    if "openpyxl" not in sys.modules:
+        return
+    workbook = _loaded_class("openpyxl.workbook.workbook", "Workbook")
+    worksheet = _loaded_class("openpyxl.worksheet.worksheet", "Worksheet")
+    cell = _loaded_class("openpyxl.cell.cell", "Cell")
+    if workbook is None or worksheet is None or cell is None:
+        return
+    kinds = {id(workbook), id(worksheet), id(cell)}
+    if not any(id(type(roots[name])) in kinds for name in candidates):
+        return
+
+    from inspect import getattr_static
+
+    parent_slot = vars(cell).get("parent")
+    has_cell_parent = type(parent_slot) is types.MemberDescriptorType and parent_slot.__objclass__ is cell
+    for name, value in roots.items():
+        sheet = value
+        if type(value) is cell and has_cell_parent:
+            try:
+                sheet = parent_slot.__get__(value)
+            except AttributeError:  # A cell with an unset slot has no owner.
+                continue
+        if type(sheet) is worksheet:
+            owner = getattr_static(sheet, "_parent", None)
+            if type(owner) is workbook:
+                # Give the identity scan the owner without enumerating the workbook's cells.
+                roots[name] = (value, owner)
+
+
 def _shared_names(ns: dict, candidates: list[str]) -> set[str]:
     import rlm.repl as _repl
     from snapshot_refs import shared_references
 
     roots = {n: v for n, v in ns.copy().items() if type(n) is str and not n.startswith("__")
              and n not in _repl._ALWAYS_SKIP}
+    _link_workbook_roots(roots, candidates)
     return shared_references(roots, ns, candidates)[0]
 
 

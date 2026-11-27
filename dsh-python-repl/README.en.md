@@ -122,7 +122,7 @@ Options are stored under the `python-repl` loader id. The plugin settings card e
 | `maxCellOutputTokens` | `8000` | Estimated cell output budget. Full overflow output goes to the Harness spill store; zero disables the limit. |
 | `maxCellTimeoutMs` | `86400000` | Maximum cell duration, including tool and approval waits. A smaller call-level `timeoutMs` wins. |
 | `cellWaitMs` | `5000` | Maximum foreground wait for a bash command or job before it continues in the background. Zero disables this cap. A subagent session waits at least 10 minutes: when a subagent's turn ends, DSH stops its background jobs without a notice, so it has to wait for results in a cell. |
-| `archiveAfterCells` | `100` | Archive unpinned names after this many unused cells. Names sharing an object through a direct reference or a built-in container stay in memory at the archive threshold. Using an archived name restores it. Zero disables archiving. |
+| `archiveAfterCells` | `100` | Archive unpinned names after this many unused cells. Names sharing an object through a direct reference or a built-in container stay in memory at the archive threshold. Separately named openpyxl workbooks, worksheets and cells that belong to the same in-memory workbook stay together, too. Using an archived name restores it. Zero disables archiving. |
 | `deleteAfterCells` | `200` | Delete unpinned names after this many unused cells. Zero disables deletion. |
 | `idleKernelMinutes` | `60` | Reclaim fully recoverable idle kernels when no tasks, threads, or child processes are active. Zero disables reclaim. |
 

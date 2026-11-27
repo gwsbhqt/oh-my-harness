@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { kernelEnvironment, probeInterpreter } from '../src/index.ts'
 import { ReplSession } from '../src/session.ts'
 import { testKernelPython } from './fixtures/test-kernel.ts'
 import { readPanelLifecycle, restoreNotice } from '../src/snapshot.ts'
@@ -23,8 +24,8 @@ before(async () => {
 const scratch = mkdtempSync(join(tmpdir(), 'dsh-lifecycle-'))
 const sessions: ReplSession[] = []
 let counter = 0
-function newSession(state = join(scratch, `s${++counter}`), archive = 3, del = 6): { session: ReplSession; state: string } {
-  const session = new ReplSession({ python: venvPython, vendorRoot: join(root, 'vendor', 'prime'), pythonRoot: join(root, 'python'),
+function newSession(state = join(scratch, `s${++counter}`), archive = 3, del = 6, python = venvPython): { session: ReplSession; state: string } {
+  const session = new ReplSession({ python, vendorRoot: join(root, 'vendor', 'prime'), pythonRoot: join(root, 'python'),
     cwd: scratch, startupTimeoutMs: 60_000, statePath: state, archiveAfterCells: archive, deleteAfterCells: del })
   sessions.push(session)
   return { session, state }
@@ -109,6 +110,56 @@ describe('name lifecycle', () => {
     assert.equal((await session.panelNameAction('unkeep', 'value')).ok, true)
     assert.equal((await session.panelNameAction('keep', 'nope')).ok, false)
     await ok(session, 'assert value == 2')
+  })
+
+  it('keeps named workbooks, worksheets and cells together through manual and automatic archiving', { timeout: 180_000 }, async () => {
+    const workbookEnv = await kernelEnvironment({ python: venvPython, ...await probeInterpreter(venvPython) },
+      join(scratch, 'workbook-env'), ['dill', 'openpyxl'])
+    for (const active of ["book.active['A1'].value", "sheet['A1'].value", 'cell.value']) {
+      const { session, state } = newSession(undefined, 3, 0, workbookEnv.python)
+      await ok(session, `from openpyxl import Workbook, load_workbook
+book = Workbook()
+book.active['A1'] = 10
+book.save('archive-source.xlsx')
+book = load_workbook('archive-source.xlsx')
+sheet = book.active
+cell = sheet['A1']
+other = load_workbook('archive-source.xlsx')
+rows = [10]
+box = {'rows': rows}
+unused = [10]
+class _Proxy:
+    def __getattribute__(self, name):
+        raise AssertionError(f'archive lookup accessed a user object: {name}')
+def _check_types():
+    from lifecycle import _shared_names
+    class SheetSubclass(type(sheet)):
+        pass
+    subclass = object.__new__(SheetSubclass)
+    vars(subclass)['_parent'] = book
+    roots = dict(book=book, sheet=sheet, cell=cell, proxy=_Proxy(), subclass=subclass)
+    assert _shared_names(roots, ['book']) == {'book', 'sheet', 'cell'}
+_check_types()
+del _check_types, _Proxy`)
+      for (const name of ['book', 'sheet', 'cell']) {
+        const result = await session.panelNameAction('archive', name)
+        assert.equal(result.ok, false, `${active}: ${name} was archived`)
+        assert.match(result.reason ?? '', /shares an object/)
+      }
+      for (let amount = 11; amount <= 14; amount++) await ok(session, `${active} = ${amount}\nbox['rows'].append(${amount})`)
+      const { archived } = lifecycle(state)
+      assert.ok('other' in archived && 'unused' in archived, 'independent values still age out')
+      for (const name of ['book', 'sheet', 'cell', 'rows']) assert.ok(!(name in archived), name)
+      await ok(session, `assert book.active is sheet and sheet.parent is book
+assert book.active['A1'] is sheet['A1'] is cell and cell.parent is sheet
+assert cell.value == 14
+sheet['A1'] = 51
+assert book.active['A1'].value == cell.value == 51
+assert rows is box['rows'] and rows == [10, 11, 12, 13, 14]
+assert other is not book and other.active['A1'].value == 10
+del sheet, cell`)
+      assert.equal((await session.panelNameAction('archive', 'book')).ok, true, 'the remaining workbook can be archived')
+    }
   })
 
   it('reset removes the records and the archive', { timeout: 120_000 }, async () => {

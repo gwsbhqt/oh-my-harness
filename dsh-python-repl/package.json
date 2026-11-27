@@ -96,6 +96,7 @@
         "python-repl-core/src/python_repl_core/skills_runtime.py",
         "python-repl-core/src/python_repl_core/snapshot_errors.py",
         "python-repl-core/src/python_repl_core/snapshot_names.py",
+        "python-repl-core/src/python_repl_core/snapshot_resources.py",
         "python-repl-core/src/python_repl_core/snapshot_store.py"
       ]
     },
