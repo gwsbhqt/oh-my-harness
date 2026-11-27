@@ -6,6 +6,8 @@ Run:  python3 -m unittest discover -s tests -v   (from the skill directory)
 """
 
 import argparse
+import asyncio
+import fcntl
 import io
 import os
 import re
@@ -16,6 +18,7 @@ import sys
 import tempfile
 import threading
 import time
+import textwrap
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -24,6 +27,7 @@ from unittest import mock
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 sys.path[:0] = [str(SCRIPTS.parent / "src"), str(SCRIPTS.parents[1] / "_shared")]
 
+import remote_host  # noqa: E402
 from agentkit.remote import pins, reach, ssh  # noqa: E402
 from remote_host.commands import basic, config, core, doctor, fanout, jobs, onboard, ready, shot, transfer  # noqa: E402
 
@@ -1075,6 +1079,144 @@ class SafetyRegression(TempHome):
                 self.assertEqual(cli.execute(['-H','h',command,'-i','bash','--','--','-i','literal']),0)
             self.assertEqual(captured[0].command,['--','-i','literal'])
             self.assertEqual(captured[0].interp,'bash')
+
+    def test_cancelled_exec_kills_sigterm_ignoring_process_group(self):
+        import asyncio
+        import remote_host
+
+        pids_file = self.home / "pids.txt"
+        child_script = self.home / "ignore_sigterm.py"
+        child_script.write_text(
+            "import os, signal, subprocess, sys, time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "if len(sys.argv) > 1 and sys.argv[1] == '--grandchild':\n"
+            "    time.sleep(30)\n"
+            "    sys.exit(0)\n"
+            "grand = subprocess.Popen([sys.executable, __file__, '--grandchild'])\n"
+            f"open({str(pids_file)!r}, 'w').write(f'{{os.getpid()}}\\n{{grand.pid}}\\n')\n"
+            "time.sleep(30)\n"
+        )
+
+        async def scenario():
+            with mock.patch.object(remote_host, "_entry", return_value=[sys.executable, str(child_script)]), \
+                 mock.patch.object(remote_host, "_CANCEL_GRACE", 0.15):
+                task = asyncio.create_task(remote_host._exec([], timeout=30.0, quiet=True))
+                deadline = time.monotonic() + 5.0
+                while time.monotonic() < deadline:
+                    if pids_file.is_file() and len(pids_file.read_text().splitlines()) == 2:
+                        break
+                    await asyncio.sleep(0.02)
+                self.assertTrue(pids_file.is_file(), "child did not record PIDs")
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+
+        asyncio.run(scenario())
+        recorded = [int(line) for line in pids_file.read_text().splitlines()]
+        self.assertEqual(len(recorded), 2)
+        for pid in recorded:
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)
+
+
+class ExitedLauncher(TempHome):
+    def setUp(self):
+        super().setUp()
+        launcher = self.home / "launcher.py"
+        launcher.write_text(textwrap.dedent("""\
+            import fcntl, os, signal, sys, time
+            from pathlib import Path
+
+            mode, directory = sys.argv[1:]
+            root = Path(directory)
+            if os.fork():
+                os._exit(0)
+
+            def stop(signum, frame):
+                if mode == "timeout":
+                    print("last stderr", file=sys.stderr, flush=True)
+                    raise SystemExit(0)
+                # The caller still owns this process after the output pipes close.
+                os.close(1)
+                os.close(2)
+
+            signal.signal(signal.SIGTERM, stop)
+            deadline = time.monotonic() + 4
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(os.getpgrp(), 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.01)
+            else:
+                raise SystemExit("launcher was not reaped")
+            with (root / "worker.lock").open("w") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                print("first stdout", flush=True)
+                print("first stderr", file=sys.stderr, flush=True)
+                (root / "ready").touch()
+                deadline = time.monotonic() + 4
+                while not (root / "release").exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                (root / "survived").touch()
+            """))
+        entry = mock.patch.object(remote_host, "_CLI_ENTRY", launcher)
+        entry.start()
+        self.addCleanup(entry.stop)
+
+    async def wait_for_worker_exit(self):
+        with (self.home / "worker.lock").open() as lock:
+            deadline = time.monotonic() + 1
+            while True:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    return
+                except BlockingIOError:
+                    self.assertLess(time.monotonic(), deadline, "the worker is still running")
+                    await asyncio.sleep(0.01)
+
+    async def exercise(self, mode):
+        timeout = 1.0 if mode == "timeout" else None
+        task = asyncio.create_task(remote_host.cli(mode, self.home, timeout=timeout, quiet=True))
+        try:
+            deadline = time.monotonic() + 5
+            while not (self.home / "ready").exists():
+                self.assertLess(time.monotonic(), deadline, "worker did not start")
+                await asyncio.sleep(0.01)
+            if mode == "cancel":
+                task.cancel("caller stopped the operation")
+                with self.assertRaises(asyncio.CancelledError) as caught:
+                    await task
+                self.assertEqual(caught.exception.args, ("caller stopped the operation",))
+            else:
+                result = await task
+                self.assertTrue(result.timed_out)
+                self.assertEqual(result.outcome, "unknown")
+                self.assertIn("远端任务是否停止未知", result.err)
+                self.assertEqual(result.out, "first stdout\n")
+                self.assertIn("first stderr\nlast stderr\n", result.err)
+                self.assertEqual(result.code, 0)
+                self.assertFalse(result.ok)
+            await self.wait_for_worker_exit()
+            self.assertFalse((self.home / "survived").exists(), "worker ran to its own deadline")
+        finally:
+            (self.home / "release").touch()
+            await asyncio.gather(task, return_exceptions=True)
+            if (self.home / "worker.lock").exists():
+                await self.wait_for_worker_exit()
+
+    def test_timeout_drains_output_after_launcher_exits(self):
+        asyncio.run(self.exercise("timeout"))
+
+    def test_cancellation_stops_its_worker_after_launcher_exits(self):
+        with subprocess.Popen(["cat"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                              start_new_session=True) as independent:
+            try:
+                with mock.patch.object(remote_host, "_CANCEL_GRACE", 0.1):
+                    asyncio.run(self.exercise("cancel"))
+            finally:
+                out, _ = independent.communicate(b"independent", timeout=5)
+        self.assertEqual((independent.returncode, out), (0, b"independent"))
 
 
 if __name__ == "__main__":

@@ -91,6 +91,17 @@ def _extract(argv, tool="remote-host"):
     return args, host, local
 
 
+_BOOLEAN_OPTIONS = {
+    "--json", "--now", "--steer", "--interrupt", "--force", "--all", "--tools", "--running",
+    "--ungrouped", "--include-blank", "--when-idle", "--detach", "--kill", "--refresh", "--full",
+    "--shot", "--diff", "--coord", "--gone", "--front", "--off", "--selected", "--no-settle",
+    "--no-webmode", "--allow-newline", "--request", "--help", "-h", "--dry-run", "--restart",
+    "--reveal", "--dead", "--no-ip", "--used", "--no-check", "--authorized", "--require-focus",
+    "--system", "--if-idle", "--quiet", "--check", "--settled", "--sound", "--no-title",
+    "--no-body", "--no-sound",
+}
+
+
 def _reject_misplaced_route(args, tool):
     words = args[:args.index("--")] if "--" in args else args
     command_at = next((i for i, value in enumerate(words) if not value.startswith("-")), None)
@@ -102,8 +113,6 @@ def _reject_misplaced_route(args, tool):
                   if tool == "dsh-use" else {"type": (2,), "paste": (2,), "clip": (1,), "set": (3,), "selecttext": (3,)})
     positional = 0
     i = command_at + 1
-    booleans = {"--json", "--now", "--steer", "--interrupt", "--force", "--all", "--tools", "--running", "--ungrouped", "--include-blank", "--when-idle", "--detach", "--kill", "--refresh", "--full", "--shot", "--diff", "--coord", "--gone", "--front", "--off", "--selected", "--no-settle", "--no-webmode", "--allow-newline", "--request", "--help", "-h",
-                "--dry-run", "--restart", "--reveal", "--dead", "--no-ip", "--used", "--no-check"}
     while i < len(words):
         word = words[i]
         if _route_word(word):
@@ -111,7 +120,7 @@ def _reject_misplaced_route(args, tool):
             if positional not in text_slots.get(command, ()):
                 raise ValueError(f"{tool}: machine options must precede the command; use {tool} -H HOST {command} …")
         elif word.startswith("--"):
-            if "=" not in word and word not in booleans and i + 1 < len(words):
+            if "=" not in word and word not in _BOOLEAN_OPTIONS and i + 1 < len(words):
                 i += 1
         else:
             positional += 1

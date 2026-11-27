@@ -14,13 +14,27 @@ import tempfile
 from PIL import Image, UnidentifiedImageError
 
 
+def _run_media(command, *, action, timeout):
+    """执行媒体命令，保留工具名、当前操作及原生错误。"""
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(f"{command[0]} {action}超时（超过 {timeout:g} 秒）") from exc
+    except OSError as exc:
+        raise OSError(exc.errno, f"{command[0]} {action}失败：{exc.strerror}", exc.filename) from exc
+    if result.returncode:
+        detail = result.stderr.strip() or f"退出码 {result.returncode}"
+        raise ValueError(f"{command[0]} {action}失败：{detail}")
+    return result
+
+
 def _number(value, name):
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         raise ValueError(f"{name} 必须是有限数字")
     return float(value)
 
 
-def _media_info(source):
+def _media_info(source, timeout):
     path = Path(source).expanduser()
     if not path.is_file():
         raise FileNotFoundError(f"找不到输入文件：{path}")
@@ -41,17 +55,18 @@ def _media_info(source):
 
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         raise RuntimeError("视频抽帧需要 ffmpeg 和 ffprobe，请先安装 FFmpeg")
-    result = subprocess.run(
+    result = _run_media(
         ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
          "stream=start_time,duration:format=start_time,duration", "-of", "json", str(path)],
-        capture_output=True, text=True,
+        action="读取视频信息", timeout=timeout,
     )
-    if result.returncode:
-        raise ValueError(f"无法读取视频：{result.stderr.strip()}")
-    info = json.loads(result.stdout)
+    try:
+        info = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"ffprobe 读取视频信息失败：{exc}") from exc
     streams = info.get("streams", [])
     if not streams:
-        raise ValueError("输入文件没有视频画面")
+        raise ValueError("ffprobe 读取视频信息失败：输入文件没有视频画面")
     def finite_or(value, default):
         try:
             number = float(value)
@@ -67,7 +82,7 @@ def _media_info(source):
     duration = stream_duration if stream_duration > 0 else container_duration - max(0, video_start - container_start)
     if duration > 0:
         return path, duration, None, video_start, container_start
-    raise ValueError("视频没有可用的时长信息，无法按时间抽帧")
+    raise ValueError("ffprobe 读取视频信息失败：视频没有可用的时长信息，无法按时间抽帧")
 
 
 def _sample_times(duration, count, start, end, interval, times, max_frames):
@@ -114,16 +129,14 @@ def _save_frame(image, target, frame_max_edge):
     return image.size
 
 
-def _video_frame_time(path, timestamp, video_start):
+def _video_frame_time(path, timestamp, video_start, timeout):
     point = video_start + timestamp
-    result = subprocess.run(
+    result = _run_media(
         ["ffprobe", "-v", "error", "-select_streams", "v:0", "-read_intervals",
          f"{point:.9f}%{point + 0.001:.9f}", "-show_entries",
          "frame=best_effort_timestamp_time", "-of", "csv=p=0", str(path)],
-        capture_output=True, text=True,
+        action=f"{timestamp:.3f} 秒定位帧时间", timeout=timeout,
     )
-    if result.returncode:
-        raise ValueError(f"{timestamp:.3f} 秒读取帧时间失败：{result.stderr.strip()}")
     candidates = []
     for line in result.stdout.splitlines():
         try:
@@ -133,11 +146,11 @@ def _video_frame_time(path, timestamp, video_start):
         except ValueError:
             continue
     if not candidates:
-        raise ValueError(f"{timestamp:.3f} 秒没有可解码的画面")
+        raise ValueError(f"ffprobe {timestamp:.3f} 秒定位帧时间失败：没有可解码的画面")
     return max(candidates)
 
 
-def _decode_frames(path, ends, times, temp_dir, frame_max_edge, video_start, container_start):
+def _decode_frames(path, ends, times, temp_dir, frame_max_edge, video_start, container_start, timeout):
     frames = []
     if ends is not None:
         with Image.open(path) as image:
@@ -150,20 +163,20 @@ def _decode_frames(path, ends, times, temp_dir, frame_max_edge, video_start, con
         decoded = {}
         for index, timestamp in enumerate(times):
             target = Path(temp_dir) / f"{index:06d}.png"
-            frame_time = _video_frame_time(path, timestamp, video_start)
+            frame_time = _video_frame_time(path, timestamp, video_start, timeout)
             if frame_time in decoded:
                 previous, width, height = decoded[frame_time]
                 shutil.copyfile(previous, target)
                 frames.append((target, timestamp, width, height))
                 continue
             seek = max(0.0, frame_time - container_start)
-            result = subprocess.run(
+            result = _run_media(
                 ["ffmpeg", "-nostdin", "-v", "error", "-ss", f"{seek:.9f}",
                  "-i", str(path), "-map", "0:v:0", "-frames:v", "1", "-y", str(target)],
-                capture_output=True, text=True,
+                action=f"{timestamp:.3f} 秒抽帧", timeout=timeout,
             )
-            if result.returncode or not target.is_file() or target.stat().st_size == 0:
-                raise ValueError(f"{timestamp:.3f} 秒抽帧失败：{result.stderr.strip() or '没有可解码的画面'}")
+            if not target.is_file() or target.stat().st_size == 0:
+                raise ValueError(f"ffmpeg {timestamp:.3f} 秒抽帧失败：{result.stderr.strip() or '没有可解码的画面'}")
             with Image.open(target) as image:
                 width, height = _save_frame(image, target, frame_max_edge)
             decoded[frame_time] = (target, width, height)
@@ -175,7 +188,7 @@ def extract_frames(source: str, out_dir: str, *, count: int | None = None,
                    start: float = 0.0, end: float | None = None,
                    interval: float | None = None, times: list[float] | None = None,
                    frame_max_edge: int | None = None, prefix: str = "frame",
-                   max_frames: int = 200):
+                   max_frames: int = 200, timeout: float | None = None):
     """按时间从 GIF 或视频导出 PNG 图片，返回时长和每张图的路径、采样时间与尺寸。
 
     source 是本地文件；out_dir 是输出目录。默认将全长均分为 8 段，取每段中点；
@@ -184,12 +197,17 @@ def extract_frames(source: str, out_dir: str, *, count: int | None = None,
     frame_max_edge 可限制每帧长边；prefix 为文件名前缀；max_frames 默认最多 200 张。
     不覆盖已存在的帧；视频需要 ffmpeg 与 ffprobe，缺依赖或解码失败会抛出异常。
     视频采样时间是请求的位置，画面取该时刻正在显示的实际帧。
+    timeout 以秒限制每次 ffprobe 或 ffmpeg 调用。默认等待命令完成。
     """
+    if timeout is not None:
+        timeout = _number(timeout, "timeout")
+        if timeout <= 0:
+            raise ValueError("timeout 必须大于 0")
     if frame_max_edge is not None and (type(frame_max_edge) is not int or frame_max_edge <= 0):
         raise ValueError("frame_max_edge 必须是正整数")
     if not isinstance(prefix, str) or not prefix or prefix in (".", "..") or Path(prefix).name != prefix:
         raise ValueError("prefix 必须是不含目录的文件名前缀")
-    path, duration, ends, video_start, container_start = _media_info(source)
+    path, duration, ends, video_start, container_start = _media_info(source, timeout)
     selected = _sample_times(duration, count, start, end, interval, times, max_frames)
     destination = Path(out_dir).expanduser()
     destination.mkdir(parents=True, exist_ok=True)
@@ -199,7 +217,7 @@ def extract_frames(source: str, out_dir: str, *, count: int | None = None,
             raise FileExistsError(f"输出文件已存在：{target}")
     created = []
     with tempfile.TemporaryDirectory(prefix="shot-sheet-frames-") as temp_dir:
-        frames = _decode_frames(path, ends, selected, temp_dir, frame_max_edge, video_start, container_start)
+        frames = _decode_frames(path, ends, selected, temp_dir, frame_max_edge, video_start, container_start, timeout)
         try:
             for (temporary, _, _, _), target in zip(frames, targets):
                 with temporary.open("rb") as src, target.open("xb") as dst:
@@ -228,13 +246,13 @@ def media_sheet(source: str, out: str, *, count: int | None = None,
                 title: str | None = None, subtitle: str | None = None,
                 cols: int = 2, notes: list[tuple[str, str]] | None = None,
                 cell: tuple[int, int] = (1200, 750), max_edge: int = 3900,
-                upscale: bool = True, overwrite: bool = False):
+                upscale: bool = True, overwrite: bool = False, timeout: float | None = None):
     """从 GIF 或视频抽帧并拼图，返回成品尺寸、素材时长和各帧采样时间。
 
     抽帧参数与 extract_frames 相同；title、subtitle、cols、notes、cell 和 max_edge
     与 sheet 相同。默认等比放大小帧，可用 upscale=False 关闭；默认不覆盖成品，
     明确设置 overwrite=True 才覆盖已有输出文件。标签显示请求采样时间；临时帧
-    在完成或失败后清理，不修改输入文件。
+    在完成或失败后清理，不修改输入文件。timeout 以秒限制每次 ffprobe 或 ffmpeg 调用。
     """
     from . import sheet
 
@@ -246,7 +264,7 @@ def media_sheet(source: str, out: str, *, count: int | None = None,
     with tempfile.TemporaryDirectory(prefix="shot-sheet-media-") as temp_dir:
         result = extract_frames(source, temp_dir, count=count, start=start, end=end,
                                 interval=interval, times=times, frame_max_edge=frame_max_edge,
-                                max_frames=max_frames)
+                                max_frames=max_frames, timeout=timeout)
         panels = [(frame["path"], _time_label(frame["time"])) for frame in result["frames"]]
         with tempfile.NamedTemporaryFile(prefix=".shot-sheet-", suffix=output.suffix or ".png",
                                          dir=output.parent, delete=False) as temporary:

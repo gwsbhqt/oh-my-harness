@@ -47,7 +47,7 @@ def test_cli_media_sheet_and_extract_frames(tmp_path):
     source = tmp_path / "animation.gif"
     images = [Image.new("RGB", (90, 60), color) for color in ("red", "blue")]
     images[0].save(source, save_all=True, append_images=images[1:], duration=[250, 750], loop=0)
-    cases = [("extract-frames", {"source": str(source), "out_dir": str(tmp_path / "frames"), "times": [0.1, 0.5]}),
+    cases = [("extract-frames", {"source": str(source), "out_dir": str(tmp_path / "frames"), "times": [0.1, 0.5], "timeout": 2.5}),
              ("media-sheet", {"source": str(source), "out": str(tmp_path / "sheet.png"),
                               "count": 2, "cols": 2, "cell": [200, 120], "max_edge": 1000})]
     for action, values in cases:
@@ -64,9 +64,16 @@ def test_cli_media_sheet_and_extract_frames(tmp_path):
 
     result = subprocess.run([sys.executable, str(SCRIPT), "media-sheet", "--source", str(source),
                              "--out", str(tmp_path / "flags.png"), "--start", "0.1", "--end", "0.9",
-                             "--interval", "0.25", "--frame-max-edge", "45", "--cols", "2",
+                             "--interval", "0.25", "--frame-max-edge", "45", "--timeout", "2.5", "--cols", "2",
                              "--cell", "[120,80]", "--max-edge", "600"], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     actual = json.loads(result.stdout)
     assert [round(frame["time"], 2) for frame in actual["frames"]] == [0.1, 0.35, 0.6, 0.85]
     assert max(actual["width"], actual["height"]) <= 600
+
+    invalid_out = tmp_path / "invalid-timeout.png"
+    invalid = subprocess.run([sys.executable, str(SCRIPT), "media-sheet", "--source", str(source),
+                              "--out", str(invalid_out), "--timeout", "0"], capture_output=True, text=True)
+    assert invalid.returncode != 0
+    assert "timeout" in json.loads(invalid.stderr)["message"]
+    assert not invalid_out.exists()

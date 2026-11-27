@@ -189,12 +189,30 @@ def test_media_sheet_does_not_overwrite_without_permission(tmp_path):
         assert image.format == "PNG"
 
 
-def test_common_video_formats_extract_requested_frames(tmp_path):
+def test_invalid_media_timeout_creates_no_output(tmp_path):
+    import pytest
+    source = _gif(tmp_path / "sample.gif")
+    frames, sheet = tmp_path / "frames", tmp_path / "review.png"
+    for invalid in (0, -1, True, False, float("inf"), float("nan"), "3"):
+        for action, destination in ((shot_sheet.extract_frames, frames), (shot_sheet.media_sheet, sheet)):
+            with pytest.raises(ValueError, match="timeout"):
+                action(source, str(destination), timeout=invalid)
+            assert not destination.exists()
+
+
+def test_common_video_formats_extract_requested_frames(tmp_path, monkeypatch):
     import shutil
     import subprocess
     import pytest
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         pytest.skip("视频测试需要 ffmpeg 和 ffprobe")
+    real_run = subprocess.run
+
+    def run_without_deadline(*args, **kwargs):
+        assert kwargs.get("timeout") is None
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run_without_deadline)
     for index in range(12):
         color = ("red", "lime", "blue")[index // 4]
         Image.new("RGB", (120, 80), color).save(tmp_path / f"input-{index:02}.png")
@@ -219,3 +237,49 @@ def test_common_video_formats_extract_requested_frames(tmp_path):
                 with Image.open(frame["path"]) as image:
                     pixel = image.getpixel((30, 30))
                     assert pixel[channel] > 180 and all(pixel[i] < 70 for i in range(3) if i != channel)
+
+
+def test_ffprobe_and_ffmpeg_timeouts_raise_clear_errors(tmp_path, monkeypatch):
+    import json
+    import subprocess
+    import pytest
+    from shot_sheet import media
+
+    video = tmp_path / "sample.mp4"
+    video.write_bytes(b"not-a-gif")
+    out_dir = tmp_path / "frames"
+
+    monkeypatch.setattr(media.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def hang_ffprobe(cmd, **kwargs):
+        assert kwargs["timeout"] == 0.05
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr(media.subprocess, "run", hang_ffprobe)
+    with pytest.raises(TimeoutError, match=r"ffprobe.*读取视频信息超时"):
+        shot_sheet.extract_frames(str(video), str(out_dir), times=[0.25], timeout=0.05)
+    with pytest.raises(TimeoutError, match=r"ffprobe.*定位帧时间超时"):
+        media._video_frame_time(video, 0.25, 0.0, timeout=0.05)
+
+    probe_info = json.dumps({
+        "streams": [{"start_time": "0", "duration": "2.0"}],
+        "format": {"start_time": "0", "duration": "2.0"},
+    })
+
+    def hang_ffmpeg(cmd, **kwargs):
+        assert kwargs["timeout"] == 0.05
+        if cmd[0] == "ffprobe" and any("format=start_time" in part for part in cmd):
+            return subprocess.CompletedProcess(cmd, 0, probe_info, "")
+        if cmd[0] == "ffprobe":
+            return subprocess.CompletedProcess(cmd, 0, "0.250000\n", "")
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr(media.subprocess, "run", hang_ffmpeg)
+    with pytest.raises(TimeoutError, match=r"ffmpeg.*抽帧超时"):
+        shot_sheet.extract_frames(str(video), str(out_dir), times=[0.25], timeout=0.05)
+    assert list(out_dir.iterdir()) == []
+    existing = tmp_path / "review.png"
+    existing.write_bytes(b"original")
+    with pytest.raises(TimeoutError, match=r"ffmpeg.*抽帧超时"):
+        shot_sheet.media_sheet(str(video), str(existing), times=[0.25], timeout=0.05, overwrite=True)
+    assert existing.read_bytes() == b"original"

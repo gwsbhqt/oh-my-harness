@@ -112,7 +112,7 @@ computer-use --local autofill Chrome --window-ref "$WINDOW_REF" --scope task-a -
 
 浮层处理只点击观察到的填充按钮，不完整或凭证过期时拒绝；看不到浮层先新截图，不猜坐标。跳转后用原页面核对，结束按各自归属释放。登录参数同时参阅 [命令参数参考](references/cli.md) 和 [内核参数参考](references/interfaces.md#python-内核里调用)。
 
-browser-use 连接调用方指定、已开启调试的 Chrome 实例。若单独处理 Chrome 原生远程调试授权框，先确认这是获准操作的实例，再显式调用下面的 computer-use 命令。它核对应用身份、远程调试字样、唯一的「允许」按钮及前台窗口。关闭提示后，用同一实例核对连接。Cra 首次 MCP 连接由用户在 Cra 内确认。
+browser-use 连接调用方指定、已开启调试的 Chrome 实例。若单独处理 Chrome 原生远程调试授权框，先确认这是获准操作的实例，再显式调用下面的 computer-use 操作。它核对应用身份、远程调试字样、唯一的「允许」按钮及前台窗口。关闭提示后，用同一实例核对连接。Cra 首次 MCP 连接由用户在 Cra 内确认。
 
 ```bash
 # 仅在单独处理已授权的 Chrome 原生调试提示时调用。

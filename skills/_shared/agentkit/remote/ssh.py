@@ -1,5 +1,6 @@
 """Real ssh calls shared by remote-host, computer-use and dsh-use: options, PATH prelude, payload staging, LAN proxy, failure hints."""
 
+import ipaddress
 import os
 import re
 import shlex
@@ -92,6 +93,16 @@ def ssh_hint(code, host, detail=None):
 
 
 PROXY = {"on": False}
+_FAKE_IP_NETWORK = ipaddress.ip_network("198.18.0.0/15")
+
+
+def _local_ipv4_interfaces():
+    result = subprocess.run(["/sbin/ifconfig", "-a", "-u", "-f", "inet:cidr", "inet"],
+                            capture_output=True, text=True)
+    if result.returncode:
+        raise OSError(result.stderr.strip() or "cannot read local IPv4 interface prefixes")
+    addresses = re.findall(r"^[ \t]*inet[ \t]+([0-9.]+/\d+)\b", result.stdout, re.MULTILINE)
+    return [ipaddress.IPv4Interface(address) for address in addresses]
 
 
 def lan_proxy(host):
@@ -104,14 +115,21 @@ def lan_proxy(host):
     if relay(conf):
         raise OSError(f"{host} is reached through {relay(conf)}, so it cannot dial this machine back; it uses its own network")
     name = conf.get("hostname") or host
-    # IPv4 on purpose: a .local name tends to resolve to an IPv6 link-local
-    # address with a zone id, which proxy URLs cannot carry.
-    ip = socket.getaddrinfo(name, 22, socket.AF_INET)[0][4][0]
-    # A UDP connect sends nothing; it only asks the routing table which local
-    # address faces the host, and the LAN route beats Clash's TUN routes.
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-        s.connect((ip, 22))
-        return f"{s.getsockname()[0]}:7890"
+    # Scoped IPv6 link-local addresses are unsuitable for an automatic proxy URL.
+    answers = socket.getaddrinfo(name, 22, socket.AF_INET, socket.SOCK_STREAM)
+    addresses = (ipaddress.IPv4Address(answer[4][0]) for answer in answers)
+    peers = [addr for addr in addresses if addr.is_private and addr not in _FAKE_IP_NETWORK]
+    if not peers:
+        raise OSError(f"{host} has no private IPv4 LAN address")
+
+    from .reach import local_addr_towards
+
+    interfaces = _local_ipv4_interfaces()
+    for peer in peers:
+        source = local_addr_towards(str(peer))
+        if any(str(interface.ip) == source and peer in interface.network for interface in interfaces):
+            return f"{source}:7890"
+    raise OSError(f"{host} has no address on the selected local interface's IPv4 network")
 
 
 def proxy_prelude(host):

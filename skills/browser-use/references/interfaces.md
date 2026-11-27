@@ -17,7 +17,7 @@
 | 侧栏和空间 | `tab_move`、`tab_update`、`folder_create`、`history_search`、`site_notes` | Cra 根据其设置、权限和用户的空间执行。Chrome 对这些浏览器专用语义返回 `unsupported`。 |
 | 同一页的连续动作 | `page_batch` | 最多 50 个 `page_` 动作，所有步骤绑定外层 `tabId`，不允许嵌套批处理。一步失败后，保留已经完成的步骤并标记余项。 |
 
-Chrome 控制使用官方 [Chrome DevTools MCP 1.13.0](https://github.com/ChromeDevTools/chrome-devtools-mcp/blob/chrome-devtools-mcp-v1.13.0/docs/tool-reference.md)。Google 的页号和控件编号属于该连接。BU 保留会话内的对应关系，网页重绘或连接更换后无法确认原节点时会报错。Chrome 的普通标签页不具备 Cra 空间、独立无窗口标签或手动接管的原生语义。Google 读取正文和等待 DOM 时使用页面的执行环境，Cra 原生读取可以使用隔离的执行环境。
+Chrome 控制使用官方 [Chrome DevTools MCP 1.13.0](https://github.com/ChromeDevTools/chrome-devtools-mcp/blob/chrome-devtools-mcp-v1.13.0/docs/tool-reference.md)。Google 的页号和控件编号属于该连接。browser-use 保留会话内的对应关系，网页重绘或连接更换后无法确认原节点时会报错。Chrome 的普通标签页不具备 Cra 空间、独立无窗口标签或手动接管的原生语义。Google 读取正文和等待 DOM 时使用页面的执行环境，Cra 原生读取可以使用隔离的执行环境。
 
 ### 用当前网页中的 JavaScript 读界面
 
@@ -38,7 +38,7 @@ Cra 设置中打开「允许代理在页面运行 JavaScript」后，`page_evalu
 
 网页刷新或导航到新文档会清除旧文档上的观察器。跨来源的 iframe 和样式表受浏览器同源规则限制。`getComputedStyle` 能读到生效的颜色，定位覆盖它的规则和来源行号可用 `debug_css_styles`。页面脚本运行时，载入当前文档的请求已经发出。脚本可以给随后由它发起的请求加测试标记。
 
-在隔离测试页上，Google 调试器给已绑定标签预设的请求头，可以随下一次导航的首个文档请求发出。另一来源的图片和后续导航也收到该标记，显式清除后才消失。这个验证使用无敏感信息的标记。设置请求头仅在独立的 Google 调试连接上验证，尚未作为 BU 接口发布。 官方的域名白名单会连其他来源的子资源一起拦截。目前缺少只给目标来源加标记、同时允许其他来源资源照常加载的上游选项。
+在隔离测试页上，Google 调试器给已绑定标签预设的请求头，可以随下一次导航的首个文档请求发出。另一来源的图片和后续导航也收到该标记，显式清除后才消失。这个验证使用无敏感信息的标记。设置请求头仅在独立的 Google 调试连接上验证，尚未作为 browser-use 接口发布。 官方的域名白名单会连其他来源的子资源一起拦截。目前缺少只给目标来源加标记、同时允许其他来源资源照常加载的上游选项。
 
 ### Chrome 输入的具体范围
 
@@ -98,9 +98,9 @@ finally:
     await browser.debug_mock_clear(tabId=tab)
 ```
 
-错误场景可传 `status=500, json={"error": "fixture"}`。浏览器实际收到 HTTP 500。BU 用测试期间的本机固定 JSON 响应提供状态码。浏览器的网络记录仍显示原接口地址。官方模拟器由调试进程接收 GET 或 HEAD 的替代响应。匹配条件没有 HTTP 方法维度，同 URL、同资源类型还被用于写操作的接口不适合这项测试。POST 命中这条规则会被官方工具中止，并增加错误数。网页注册的服务工作线程可能自行给出结果，只有页面状态和计数都吻合才算复现。
+错误场景可传 `status=500, json={"error": "fixture"}`。浏览器实际收到 HTTP 500。browser-use 用测试期间的本机固定 JSON 响应提供状态码。浏览器的网络记录仍显示原接口地址。官方模拟器由调试进程接收 GET 或 HEAD 的替代响应。匹配条件没有 HTTP 方法维度，同 URL、同资源类型还被用于写操作的接口不适合这项测试。POST 命中这条规则会被官方工具中止，并增加错误数。网页注册的服务工作线程可能自行给出结果，只有页面状态和计数都吻合才算复现。
 
-同源重载保留规则。BU 在主动跨来源导航、未知目标的历史跳转、关页和会话结束时撤回本会话的规则。网页自行跳转后，规则仍按原接口地址匹配。测试期间让该标签专用于当前场景。生效期间，Google 会停止使用该页 HTTP 缓存，性能测量应在撤销之后进行。
+同源重载保留规则。browser-use 在主动跨来源导航、未知目标的历史跳转、关页和会话结束时撤回本会话的规则。网页自行跳转后，规则仍按原接口地址匹配。测试期间让该标签专用于当前场景。生效期间，Google 会停止使用该页 HTTP 缓存，性能测量应在撤销之后进行。
 
 ### 整页原图与本机差异图
 
@@ -116,6 +116,6 @@ change = await browser.compare_screenshots(baseline=str(before), current=str(aft
                                            output=str(Path("difference.png").resolve()))
 ```
 
-整页截图使用独立的官方调试连接，重新核对所选文档，保存原始设备像素。原图输出请选已有目录中的新 `.png` 路径。Chromium 对单个方向超过 16384 设备像素的页面无法保证整页正确，BU 会报告限制。截图只包含捕获时页面已渲染的内容。
+整页截图使用独立的官方调试连接，重新核对所选文档，保存原始设备像素。原图输出请选已有目录中的新 `.png` 路径。Chromium 对单个方向超过 16384 设备像素的页面无法保证整页正确，browser-use 会报告限制。截图只包含捕获时页面已渲染的内容。
 
 `compare_screenshots` 也可独立使用，不需要连接浏览器。返回 `changed`、`sizeMismatch`、两张图的尺寸、变化像素数 `changedPixels` 和变化范围 `bounds`。同尺寸且有变化时，传入 `output` 才写红色差异图。相同或尺寸不同均不生成图，已有文件会保留。 支持 8 位非交错的灰度、灰度加透明度、RGB 和 RGBA 截图。每张至多 16,777,216 个像素，超过限制会明确报错。

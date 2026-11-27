@@ -29,6 +29,8 @@ __all__ = [
 
 #: 进程侧默认超时（秒）。长任务显式传 timeout=None，或改用 job。
 DEFAULT_TIMEOUT = 600.0
+#: 取消或异常中断时给进程组响应 SIGTERM 的宽限秒数，超时升级 SIGKILL。
+_CANCEL_GRACE = 2.0
 
 #: 源码树与安装包都携带同一份命令行启动器。
 _CLI_ENTRY = _PACKAGE.parents[1] / "scripts" / "remote-host"
@@ -66,7 +68,7 @@ class Result:
     @property
     def ok(self) -> bool:
         """退出码为 0。超时和被信号杀掉都是 False。"""
-        return self.code == 0
+        return not self.timed_out and self.code == 0
 
     @property
     def text(self) -> str:
@@ -108,12 +110,25 @@ def _host(host):
     return ["-H", host] if host else []
 
 
-def _kill_group(proc, sig=signal.SIGTERM) -> None:
-    """杀整个进程组：remote-host 底下还挂着 ssh/scp，只杀直接子进程会把它们留下。"""
+async def _terminate_group(pgid, comm, grace):
+    """包装进程和输出管道都可能先退出，收尾以本次创建的进程组为准。"""
+    group_gone = False
     try:
-        os.killpg(os.getpgid(proc.pid), sig)
-    except (ProcessLookupError, PermissionError):
+        for sig, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, 1.0)):
+            os.killpg(pgid, sig)
+            deadline = time.monotonic() + wait
+            while True:
+                os.killpg(pgid, 0)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                await asyncio.sleep(min(remaining, 0.05))
+    except ProcessLookupError:
+        group_gone = True
+    except PermissionError:
         pass
+    out, err = await asyncio.shield(comm)
+    return out, err, group_gone
 
 
 async def _exec(args, *, input=None, timeout=DEFAULT_TIMEOUT, quiet=False, env=None) -> Result:
@@ -127,28 +142,27 @@ async def _exec(args, *, input=None, timeout=DEFAULT_TIMEOUT, quiet=False, env=N
         stderr=asyncio.subprocess.PIPE,
         start_new_session=True,
     )
+    # start_new_session 固定了组号，包装进程退出后不能再用它的 PID 查组。
+    pgid = proc.pid
     started = time.monotonic()
     payload = input.encode() if input is not None else None
     timed_out = False
     # shield：超时后 communicate 继续跑完，进程被杀后它很快返回，输出不丢。
     comm = asyncio.ensure_future(proc.communicate(payload))
     try:
-        out, err = await asyncio.wait_for(asyncio.shield(comm), timeout)
-    except asyncio.TimeoutError:
-        timed_out = True
-        _kill_group(proc)
         try:
-            out, err = await asyncio.wait_for(comm, 10)
+            out, err = await asyncio.wait_for(asyncio.shield(comm), timeout)
         except asyncio.TimeoutError:
-            _kill_group(proc, signal.SIGKILL)
-            out, err = await comm
+            timed_out = True
+            out, err, group_gone = await _terminate_group(pgid, comm, 10)
     except BaseException:
-        _kill_group(proc)
+        await _terminate_group(pgid, comm, _CANCEL_GRACE)
         raise
 
     error = err.decode(errors="replace")
     if timed_out:
-        error += ("\n[remote-host] 本地等待超时，已终止本地连接进程；远端任务是否停止未知。"
+        local_status = "已终止本地连接进程" if group_gone else "尚未确认本地进程组退出"
+        error += (f"\n[remote-host] 本地等待超时，{local_status}。远端任务是否停止未知。"
                   "不要自动重跑。后台任务请用 remote-host job list/wait 查询，确认后再决定是否 kill。\n")
     result = Result(list(args), proc.returncode, out.decode(errors="replace"),
                     error, time.monotonic() - started, timed_out)

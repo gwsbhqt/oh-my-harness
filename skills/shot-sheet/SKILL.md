@@ -23,6 +23,8 @@ shot-sheet media-sheet --source demo.mp4 --out review-sheet.png --count 8 --star
 shot-sheet extract-frames --source demo.mp4 --out-dir frames --times '[1.0,3.5,8.0]' --frame-max-edge 1600
 ```
 
+视频默认等待每条 FFmpeg 命令完成。需要限时时，可将 `timeout` 设为大于零的有限秒数，命令行使用 `--timeout`。读取视频信息、定位每帧和解码每帧各自计时。超时会报告程序名、当时的操作和等待上限。
+
 也可用 `interval` 从起点按秒间隔抽帧，或用 `times` 指定时间列表；这些方式不能与 `count` 同时使用。仅导出帧时返回各帧路径、采样时间和尺寸；一键拼图会清理临时帧并返回成品尺寸、素材时长和采样时间。默认不覆盖已有输出，只有拼图显式设置 `overwrite` 才能覆盖。
 
 ## 网格审查

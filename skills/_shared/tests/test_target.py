@@ -318,6 +318,34 @@ class Routing(TargetCase):
         self.assertEqual(result[1], 2)
         self.assertIn("precede", result[3])
 
+    def test_public_options_do_not_swallow_misplaced_host(self):
+        cases = (
+            ("computer-use", ["target-close", "app.example", "--authorized"]),
+            ("computer-use", ["key", "Example", "Return", "--system"]),
+            ("computer-use", ["click", "Example", "--id", "OK", "--require-focus"]),
+            ("dsh-use", ["wait", "session-a", "--settled"]),
+            ("dsh-use", ["new", "--if-idle"]),
+            ("dsh-use", ["new", "workspace-a", "msg", "--if-idle"]),
+            ("dsh-use", ["notice", "session-a", "hi", "--quiet"]),
+            ("dsh-use", ["notify", "hi", "--no-sound"]),
+            ("dsh-use", ["monitor", "session-a", "--command", "echo", "--cwd", "/tmp", "--restart"]),
+        )
+        for tool, argv in cases:
+            with self.subTest(tool=tool, argv=argv):
+                result = self.call(tool, *argv, "-H", "alpha")
+                self.assertEqual(result[1], 2)
+                self.assertIn("precede", result[3])
+
+    def test_public_options_preserve_valid_values_and_messages(self):
+        for argv in (
+            ["monitor", "session-a", "--command", "echo", "--cwd", "/tmp", "--restart", "on-failure"],
+            ["new", "--if-idle", "workspace-a", "-H"],
+            ["notice", "--quiet", "session-a", "-H"],
+            ["notify", "--title", "-H", "--body", "hello"],
+        ):
+            with self.subTest(argv=argv):
+                self.assertEqual(self.call("dsh-use", *argv)[:2], (argv, None))
+
     def test_context_values_before_command_do_not_break_payload_boundary(self):
         argv=["-i","py","-H","alpha","run","print", "-H","literal"]
         args,host,_=target._extract(argv,"remote-host")

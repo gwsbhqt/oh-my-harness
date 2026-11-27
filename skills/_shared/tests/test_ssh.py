@@ -204,7 +204,7 @@ class Proxy(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        env = mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp.name})
+        env = mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp.name, "REMOTE_HOST_PROXY": ""})
         env.start()
         self.addCleanup(env.stop)
         ssh.PROXY["on"] = False
@@ -214,15 +214,51 @@ class Proxy(unittest.TestCase):
         self.assertEqual(ssh.remote_argv("worker"), ["ssh", *ssh.SSH_OPTS, "worker", "bash -l -s"])
         self.assertEqual(ssh.proxy_prelude("worker"), "")
 
-    def test_on_points_the_host_at_this_machines_address_facing_it(self):
+    def proxy_for(self, peers, sources, interface_output):
         ssh.PROXY["on"] = True
-        with mock.patch.object(ssh, "ssh_config", return_value={"hostname": "127.0.0.1"}):
-            self.assertIn("HTTPS_PROXY=http://127.0.0.1:7890", ssh.proxy_prelude("box"))
+        answers = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", (peer, 22)) for peer in peers]
 
-    def test_remote_host_proxy_overrides_the_address(self):
+        def ifconfig(command, **kwargs):
+            self.assertEqual(command, ["/sbin/ifconfig", "-a", "-u", "-f", "inet:cidr", "inet"])
+            return subprocess.CompletedProcess(command, 0, interface_output, "")
+
+        with (
+            mock.patch.object(ssh, "ssh_config", return_value={"hostname": "peer.invalid"}),
+            mock.patch.object(ssh.socket, "getaddrinfo", return_value=answers),
+            mock.patch.object(reach, "local_addr_towards", side_effect=sources.get),
+            mock.patch.object(ssh.subprocess, "run", side_effect=ifconfig),
+        ):
+            return ssh.proxy_prelude("box")
+
+    def test_target_across_a_slash_24_can_share_the_source_interface(self):
+        prelude = self.proxy_for(["127.0.1.9"], {"127.0.1.9": "127.0.0.8"},
+                                 "net0: flags=1<UP>\n\tinet 127.0.0.8/23 broadcast 127.0.1.255\n")
+        self.assertIn("HTTPS_PROXY=http://127.0.0.8:7890", prelude)
+
+    def test_matching_network_on_another_interface_cannot_enable_the_proxy(self):
+        interfaces = "net0:\n\tinet 192.0.2.8/25\nnet1:\n\tinet 192.0.2.150/25\n"
+        with self.assertRaisesRegex(SystemExit, "REMOTE_HOST_PROXY"):
+            self.proxy_for(["192.0.2.140"], {"192.0.2.140": "192.0.2.8"}, interfaces)
+
+    def test_an_unlisted_source_prefix_cannot_be_guessed(self):
+        with self.assertRaisesRegex(SystemExit, "REMOTE_HOST_PROXY"):
+            self.proxy_for(["192.0.2.20"], {"192.0.2.20": "192.0.2.8"}, "net0:\n\tinet6 ::1/128\n")
+
+    def test_unusable_answers_before_a_lan_address_are_skipped(self):
+        peers = ["198.18.0.1", "198.51.100.2", "192.0.2.140", "192.0.2.40"]
+        sources = {"192.0.2.140": "192.0.2.9", "192.0.2.40": "192.0.2.9"}
+        prelude = self.proxy_for(peers, sources, "net0:\n\tinet 192.0.2.9/25\n")
+        self.assertIn("HTTPS_PROXY=http://192.0.2.9:7890", prelude)
+
+    def test_remote_host_proxy_overrides_even_a_missing_ipv4_address(self):
         ssh.PROXY["on"] = True
-        with mock.patch.dict(os.environ, {"REMOTE_HOST_PROXY": "198.18.0.9:7891"}):
-            self.assertIn("ALL_PROXY=http://198.18.0.9:7891", ssh.proxy_prelude("box"))
+        with (
+            mock.patch.dict(os.environ, {"REMOTE_HOST_PROXY": "[2001:db8::9]:7891"}),
+            mock.patch.object(ssh, "ssh_config", side_effect=AssertionError("unexpected host lookup")),
+        ):
+            script = ssh.proxy_prelude("box") + 'printf "%s" "$ALL_PROXY"'
+        done = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True)
+        self.assertEqual(done.stdout, "http://[2001:db8::9]:7891")
 
     def test_proxy_url_is_one_safe_shell_word(self):
         ssh.PROXY["on"] = True
@@ -245,12 +281,23 @@ class Proxy(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "control characters"):
                     ssh.proxy_prelude("box")
 
-    def test_a_host_off_the_lan_is_refused(self):
+    def test_benchmark_and_public_addresses_are_refused_even_on_a_matching_interface(self):
+        for peer, source in (("198.18.0.6", "198.18.0.1"), ("198.19.0.5", "198.19.0.1"),
+                             ("1.1.1.1", "1.1.1.2")):
+            with self.subTest(peer=peer), self.assertRaisesRegex(SystemExit, "REMOTE_HOST_PROXY"):
+                self.proxy_for([peer], {peer: source}, f"net0:\n\tinet {source}/24\n")
+
+    def test_ipv6_only_or_unresolvable_names_get_the_existing_override_hint(self):
         ssh.PROXY["on"] = True
-        with mock.patch.object(ssh, "ssh_config", return_value={"hostname": "no-such-host.invalid"}):
-            with self.assertRaises(SystemExit) as e:
+        for hostname in ("2001:db8::7", "missing.invalid"):
+            with (
+                self.subTest(hostname=hostname),
+                mock.patch.object(ssh, "ssh_config", return_value={"hostname": hostname}),
+                mock.patch.object(ssh.socket, "getaddrinfo", side_effect=socket.gaierror("no IPv4 address")) as resolve,
+                self.assertRaisesRegex(SystemExit, "REMOTE_HOST_PROXY"),
+            ):
                 ssh.proxy_prelude("box")
-        self.assertIn("REMOTE_HOST_PROXY", str(e.exception.code))
+            resolve.assert_called_once_with(hostname, 22, socket.AF_INET, socket.SOCK_STREAM)
 
 
 if __name__ == "__main__":
