@@ -38,6 +38,10 @@ class StandaloneBundleTests(unittest.IsolatedAsyncioTestCase):
             subprocess.run(["sh", str(ROOT / "scripts/bundle.sh"), str(bundle)], check=True, capture_output=True)
             self.assertEqual((bundle / "LICENSE").read_bytes(), (ROOT.parent / "LICENSE").read_bytes())
             self.assertTrue((bundle / "_bundled/vendor/prime/LICENSE").is_file())
+            self.assertEqual(
+                (bundle / "_bundled/vendor/PROVENANCE.md").read_bytes(),
+                (ROOT.parent / "dsh-python-repl/vendor/PROVENANCE.md").read_bytes(),
+            )
             sidecar = bundle / "sidecars" / "app-bridge"
             manifest = json.loads((sidecar / "sidecar.json").read_text(encoding="utf-8"))
             self.assertTrue((sidecar / manifest["args"][0]).is_file())

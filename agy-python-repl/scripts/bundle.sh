@@ -32,6 +32,7 @@ done
 mkdir -p "$DEST/_bundled/vendor"
 cp -R "$REPO_ROOT/python-repl-core/src/python_repl_core" "$DEST/_bundled/python_repl_core"
 cp -R "$REPO_ROOT/dsh-python-repl/vendor/prime" "$DEST/_bundled/vendor/prime"
+cp "$REPO_ROOT/dsh-python-repl/vendor/PROVENANCE.md" "$DEST/_bundled/vendor/PROVENANCE.md"
 find "$DEST" -depth -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 find "$DEST" -depth -type d -name '__pycache__' -empty -delete
 
