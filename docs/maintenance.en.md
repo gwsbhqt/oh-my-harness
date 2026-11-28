@@ -64,14 +64,17 @@ test -f "$AGY_DIR/LICENSE"
 test -x "$AGY_DIR/scripts/start_mcp.sh"
 test -x "$AGY_DIR/skills/agy-use/scripts/agy-use"
 (cd "$OUT" && shasum -a 256 ./*.tgz > DSH-SHA256SUMS)
-(cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + | LC_ALL=C sort > "$OUT/AGY-SHA256SUMS")
+AGY_UNSORTED="$OUT/AGY-SHA256SUMS.unsorted"
+(cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + > "$AGY_UNSORTED")
+LC_ALL=C sort "$AGY_UNSORTED" > "$OUT/AGY-SHA256SUMS"
+rm "$AGY_UNSORTED"
 ```
 
 If you also run AGY's Python tests on macOS, a long Unix socket path can fail with `AF_UNIX path too long`; keep the failure log and rerun with a shorter temporary `TMPDIR`.
 
 The DSH artifact is the `.tgz`, which must contain `lib/index.js`, the build manifest, and the Prime provenance manifest. The AGY artifact is the standalone `$AGY_DIR` directory that passed strict validation. Keep `SOURCE_COMMIT`, both `SHA256SUMS`, and the artifacts together. A version in a filename cannot replace the commit and hashes. Hashes provide identity and integrity checks, not a signature.
 
-In a separate shell, the recipient first changes into the delivered directory containing `SOURCE_COMMIT`. Set `REV` to the full commit declared by the maintainer; the example below reuses the commit above. DSH uses `shasum -c` to check the whole `.tgz`. For AGY, recompute the sorted file inventory and compare it with the delivered manifest, and confirm that both delivered commands are still executable:
+If the delivery is a ZIP, extract it into a new empty directory, then change into the directory that actually contains `SOURCE_COMMIT`; do not overwrite an existing extraction and leave stale files behind. Set `REV` to the full commit declared by the maintainer; the example below reuses the commit above. DSH uses `shasum -c` to check the whole `.tgz`. For AGY, sort the delivered and observed inventories independently before comparing them, so a complete legacy manifest needs no sorting beforehand, and confirm that both delivered commands are still executable:
 
 ```sh
 set -e
@@ -82,10 +85,16 @@ test "$(cat "$OUT/SOURCE_COMMIT")" = "$REV"
 (cd "$OUT" && shasum -a 256 -c DSH-SHA256SUMS)
 test -x "$AGY_DIR/scripts/start_mcp.sh"
 test -x "$AGY_DIR/skills/agy-use/scripts/agy-use"
-(cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + | LC_ALL=C sort | diff -u "$OUT/AGY-SHA256SUMS" -)
+AGY_EXPECTED="$OUT/AGY-SHA256SUMS.expected"
+AGY_CURRENT="$OUT/AGY-SHA256SUMS.current"
+LC_ALL=C sort "$OUT/AGY-SHA256SUMS" > "$AGY_EXPECTED"
+(cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + > "$AGY_CURRENT.unsorted")
+LC_ALL=C sort "$AGY_CURRENT.unsorted" > "$AGY_CURRENT"
+diff -u "$AGY_EXPECTED" "$AGY_CURRENT"
+rm "$AGY_EXPECTED" "$AGY_CURRENT" "$AGY_CURRENT.unsorted"
 ```
 
-These checks need neither network access nor source code. The single archive hash covers every file in the DSH package. For AGY, the manifest difference identifies changed content, extra files, and missing files, while the permission checks identify either delivered command losing its executable bit. Recipients no longer need another build just to detect extra files.
+These checks need neither network access nor source code. Generation and receipt both finish scanning before sorting, so a read failure returns non-zero and partial output is never treated as a complete manifest. The single archive hash covers every file in the DSH package. For AGY, the manifest difference identifies changed content, extra regular files, and missing regular files. The AGY inventory does not check directory structure, symbolic links, or other file types, and the permission checks cover only the two commands above. Recipients no longer need another build just to detect extra files.
 
 Use the existing platform installation paths. For DSH, replace the getting-started profile's `link:` dependency with an absolute `file:` path to the verified `.tgz`, preserve the bundle registration, then install with Harness's pnpm, run its startup check, and restart. For Antigravity, run `agy plugin install "$AGY_DIR"`, then confirm with `agy plugin list --json`. For temporary acceptance only, give the AGY commands a new empty `HOME`; first confirm that `plugin list --json` returns `[]`, and do not touch the daily app.
 
