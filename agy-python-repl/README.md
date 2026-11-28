@@ -55,6 +55,8 @@ See the [agy-use skill](skills/agy-use/SKILL.md) to send messages to an existing
 
 Enable `agy-python-repl/app-bridge` in Antigravity’s Sidecars settings for desktop control. Its default Unix socket lives under the current user’s state directory. For a custom `AGY_USE_SOCKET`, choose a directory owned by and writable only by that user. [Sidecar configuration](https://antigravity.google/docs/sidecars.md)
 
+After binding its socket, the bridge watches the direct parent that launched it. If that parent disappears, the bridge closes its listener and removes only its own socket and metadata, allowing the configured restart policy to start a replacement. Live parents, client disconnects, and duplicate starts do not stop a healthy bridge. This cleanup does not signal process groups, change kernels, or replay operations. Public sidecar documentation does not specify the same process tree for every host version; a separately managed supervisor remains responsible for delivering a normal termination signal when it owns the bridge lifecycle.
+
 For cross-host handoffs from Antigravity to DSH with a single settled completion notice back to the originating Antigravity conversation, pass `--notify self` in Antigravity shell commands (`ANTIGRAVITY_CONVERSATION_ID`) or `notify="agy:<conversation_id>"` in Python REPL (`skills.dsh_use.send` / `new`), which sends a minimal status-only notice via `agy-use send --wait-receipt` over `bridge.sock` without reading secrets or renaming the target conversation.
 
 ## Testing

@@ -26,6 +26,7 @@ import urllib.request
 
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_CONVERSATION_SCAN = 1000
+PARENT_POLL_SECONDS = 1.0
 
 
 def default_socket_path() -> Path:
@@ -249,6 +250,7 @@ class AppBridgeServer:
         self._metadata_entry: Optional[os.stat_result] = None
         self._server: Optional[asyncio.AbstractServer] = None
         self._stop_event: Optional[asyncio.Event] = None
+        self._parent_pid = os.getppid()
 
     async def handle_op(self, op: str, params: Dict[str, Any]) -> Dict[str, Any]:
         timeout = float(params.get("timeout") or 15.0)
@@ -567,6 +569,12 @@ class AppBridgeServer:
             except FileNotFoundError:
                 pass
 
+    async def _watch_parent(self) -> None:
+        assert self._stop_event is not None
+        while os.getppid() == self._parent_pid:
+            await asyncio.sleep(PARENT_POLL_SECONDS)
+        self._stop_event.set()
+
     async def serve(self) -> int:
         self._stop_event = asyncio.Event()
         try:
@@ -578,8 +586,16 @@ class AppBridgeServer:
                 loop = asyncio.get_running_loop()
                 for sig in (signal.SIGINT, signal.SIGTERM):
                     loop.add_signal_handler(sig, self._stop_event.set)
-                async with self._server:
-                    await self._stop_event.wait()
+                parent_task = (
+                    asyncio.create_task(self._watch_parent()) if self._parent_pid > 1 else None
+                )
+                try:
+                    async with self._server:
+                        await self._stop_event.wait()
+                finally:
+                    if parent_task is not None:
+                        parent_task.cancel()
+                        await asyncio.gather(parent_task, return_exceptions=True)
         finally:
             if self._socket_entry is not None:
                 self._cleanup()
