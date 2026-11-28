@@ -33,6 +33,58 @@ These are contribution directions, not delivery-date commitments.
 
 Prioritize reproducible user failures and first-use blockers. Explain why the current layout is insufficient before changing it. A new service, abstraction, or dependency needs a concrete benefit.
 
+## Build, verify, and roll back a pinned commit
+
+A Source code ZIP is suitable for review, not a built artifact, and it lacks the `.git` entry required by the DSH build. The following steps were actually verified on macOS; other platforms are not verified in this guide. Run them from the root of a clean, full checkout. `REV` is a reproducible public example, not a promise that it is the latest stable version; maintainers can substitute another reviewed full commit.
+
+```sh
+set -eu
+REV=57cfccb03b4f39121facc575a91bcff055d59fed
+test -z "$(git status --porcelain)"
+git checkout --detach "$REV"
+test "$(git rev-parse HEAD)" = "$REV"
+OUT="$(mktemp -d)"
+pnpm --dir dsh-python-repl install --frozen-lockfile
+uv python install 3.14
+UV314="$(uv python find --managed-python 3.14)"
+export PATH="$(dirname "$UV314"):$PATH"
+python3 --version
+pnpm --dir dsh-python-repl run check
+pnpm --dir dsh-python-repl pack --pack-destination "$OUT"
+AGY_DIR="$OUT/agy-python-repl"
+sh agy-python-repl/scripts/bundle.sh "$AGY_DIR"
+agy plugin validate "$AGY_DIR" --strict
+git rev-parse HEAD > "$OUT/SOURCE_COMMIT"
+set -- "$OUT"/*.tgz
+test -f "$1"
+tar -tzf "$1" package/lib/index.js package/lib/dsh-build.json package/vendor/PROVENANCE.md
+test -f "$AGY_DIR/_bundled/vendor/PROVENANCE.md"
+(cd "$OUT" && shasum -a 256 ./*.tgz > DSH-SHA256SUMS)
+(cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + > "$OUT/AGY-SHA256SUMS")
+```
+
+If you also run AGY's Python tests on macOS, a long Unix socket path can fail with `AF_UNIX path too long`; keep the failure log and rerun with a shorter temporary `TMPDIR`.
+
+The DSH artifact is the `.tgz`, which must contain `lib/index.js`, the build manifest, and the Prime provenance manifest. The AGY artifact is the standalone `$AGY_DIR` directory that passed strict validation. Keep `SOURCE_COMMIT`, both `SHA256SUMS`, and the artifacts together. A version in a filename cannot replace the commit and hashes. Hashes provide identity and integrity checks, not a signature.
+
+In a separate shell, the recipient first changes into the delivered directory containing `SOURCE_COMMIT`. Set `REV` to the full commit declared by the maintainer; the example below reuses the commit above. `shasum -c` checks each listed file: the `.tgz` for DSH and the standalone directory's files for AGY.
+
+```sh
+set -e
+OUT="$PWD"
+AGY_DIR="$OUT/agy-python-repl"
+REV=57cfccb03b4f39121facc575a91bcff055d59fed
+test "$(cat "$OUT/SOURCE_COMMIT")" = "$REV"
+(cd "$OUT" && shasum -a 256 -c DSH-SHA256SUMS)
+(cd "$AGY_DIR" && shasum -a 256 -c "$OUT/AGY-SHA256SUMS")
+```
+
+The manifest covers the files it lists. To check for extra files as well, build a clean standalone directory from the same commit, set `CLEAN_AGY_DIR` to its path, and compare both directories with `diff -r "$CLEAN_AGY_DIR" "$AGY_DIR"`.
+
+Use the existing platform installation paths. For DSH, replace the getting-started profile's `link:` dependency with an absolute `file:` path to the verified `.tgz`, preserve the bundle registration, then install with Harness's pnpm, run its startup check, and restart. For Antigravity, run `agy plugin install "$AGY_DIR"`, then confirm with `agy plugin list --json`. For temporary acceptance only, give the AGY commands a new empty `HOME`; first confirm that `plugin list --json` returns `[]`, and do not touch the daily app.
+
+Keep the previous verified artifact set and existing snapshots for rollback. For DSH, point `file:` back to the old `.tgz`, reinstall the profile dependencies, check, and restart. For AGY, do not uninstall first: set `PREVIOUS_AGY_DIR` to the previous verified standalone directory and run `agy plugin install "$PREVIOUS_AGY_DIR"` directly, avoiding a disabled window. Then use the path returned by `agy plugin list --json` as `AGY_INSTALLED` and run `diff -r "$PREVIOUS_AGY_DIR" "$AGY_INSTALLED"`; no output and exit status 0 establish that the content was restored. Do not rely on the unchanged version number. A DSH installation still using a source `link:` must check out the old commit and rerun the component checks; edited source alone does not prove that the running instance rolled back.
+
 ## Before a release
 
 1. Review a focused diff. Keep Chinese and English entry points aligned, and run public examples without private configuration.

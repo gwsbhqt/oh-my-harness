@@ -33,6 +33,58 @@
 
 优先修用户能重现的故障和首次使用阻碍。结构调整需要说明现有目录为什么不够用；新增常驻服务、抽象层和依赖需要有明确收益。
 
+## 固定提交构建、校验与回退
+
+Source code ZIP 适合审阅，不是已构建成品，也不带 DSH 构建需要的 `.git`。下面的步骤只在 macOS 上实际验收，其他平台未在本说明中验证；在干净完整克隆根目录运行。`REV` 是可复现的公开示例，不是“最新稳定版”承诺，维护者可换成另一已审核的完整提交。
+
+```sh
+set -eu
+REV=57cfccb03b4f39121facc575a91bcff055d59fed
+test -z "$(git status --porcelain)"
+git checkout --detach "$REV"
+test "$(git rev-parse HEAD)" = "$REV"
+OUT="$(mktemp -d)"
+pnpm --dir dsh-python-repl install --frozen-lockfile
+uv python install 3.14
+UV314="$(uv python find --managed-python 3.14)"
+export PATH="$(dirname "$UV314"):$PATH"
+python3 --version
+pnpm --dir dsh-python-repl run check
+pnpm --dir dsh-python-repl pack --pack-destination "$OUT"
+AGY_DIR="$OUT/agy-python-repl"
+sh agy-python-repl/scripts/bundle.sh "$AGY_DIR"
+agy plugin validate "$AGY_DIR" --strict
+git rev-parse HEAD > "$OUT/SOURCE_COMMIT"
+set -- "$OUT"/*.tgz
+test -f "$1"
+tar -tzf "$1" package/lib/index.js package/lib/dsh-build.json package/vendor/PROVENANCE.md
+test -f "$AGY_DIR/_bundled/vendor/PROVENANCE.md"
+(cd "$OUT" && shasum -a 256 ./*.tgz > DSH-SHA256SUMS)
+(cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + > "$OUT/AGY-SHA256SUMS")
+```
+
+若另行运行 AGY 的 Python 测试，macOS 可能因 Unix socket 路径过长报 `AF_UNIX path too long`；保留失败日志，改用更短的临时 `TMPDIR` 后重跑。
+
+DSH 成品是 `.tgz`，其中必须有 `lib/index.js`、构建清单和 Prime 来源清单；AGY 成品是通过严格校验的 `$AGY_DIR` 独立目录。交付时同时保留 `SOURCE_COMMIT`、两个 `SHA256SUMS` 和成品。文件名中的版本不能代替提交和哈希；哈希用于辨认与完整性检查，不等同签名。
+
+接收方在独立 shell 中先 `cd` 到含 `SOURCE_COMMIT` 的交付目录。`REV` 填维护者声明的完整提交；下面沿用示例提交。`shasum -c` 按名单逐个核对已列文件，DSH 验 `.tgz`，AGY 验独立目录中的文件：
+
+```sh
+set -e
+OUT="$PWD"
+AGY_DIR="$OUT/agy-python-repl"
+REV=57cfccb03b4f39121facc575a91bcff055d59fed
+test "$(cat "$OUT/SOURCE_COMMIT")" = "$REV"
+(cd "$OUT" && shasum -a 256 -c DSH-SHA256SUMS)
+(cd "$AGY_DIR" && shasum -a 256 -c "$OUT/AGY-SHA256SUMS")
+```
+
+这个检查按名单核对文件。若需要连额外文件也查出，可从同一提交构建一份干净的独立目录，将其路径设为 `CLEAN_AGY_DIR`，再用 `diff -r "$CLEAN_AGY_DIR" "$AGY_DIR"` 比较两份目录。
+
+平台安装沿用现有入口。DSH：把入门页 profile 中的 `link:` 依赖改为指向已校验 `.tgz` 的绝对 `file:` 路径，保留组合包登记，再用 DSH 所配 pnpm 安装、运行启动检查并重启。Antigravity：执行 `agy plugin install "$AGY_DIR"`，再用 `agy plugin list --json` 核对。只做临时验收时，为 AGY 命令设置一个新的空 `HOME`；先确认 `plugin list --json` 为 `[]`，不要操作日常 App。
+
+回退前保留上一组已校验成品和现有快照。DSH 把 `file:` 指回旧 `.tgz`，重新安装 profile 依赖、检查并重启。AGY 不先卸载：把上一已校验独立目录设为 `PREVIOUS_AGY_DIR`，直接执行 `agy plugin install "$PREVIOUS_AGY_DIR"`，避免停用窗口。随后用 `agy plugin list --json` 找到安装路径并设为 `AGY_INSTALLED`，执行 `diff -r "$PREVIOUS_AGY_DIR" "$AGY_INSTALLED"`；无输出且退出 0 才说明内容恢复，不要用相同的版本号判断。仍用源码 `link:` 的 DSH 安装则检出旧提交并重跑组件检查，不能把已改源码当成已回退的运行实例。
+
 ## 发布前检查
 
 1. 审查 diff，只包含本轮改动；中英文入口一致，公共示例能脱离私人配置运行。

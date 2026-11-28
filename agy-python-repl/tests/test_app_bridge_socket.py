@@ -21,8 +21,10 @@ spec.loader.exec_module(bridge)
 
 class BridgeSocketTests(unittest.TestCase):
     def test_existing_configuration_and_directory_permissions_are_preserved(self):
-        with tempfile.TemporaryDirectory() as dirname:
-            root = Path(dirname)
+        # AF_UNIX needs a short path even when the caller's TMPDIR is long.
+        with tempfile.TemporaryDirectory(dir="/tmp", prefix="agy-sock-") as dirname:
+            root = Path(dirname) / "config"
+            root.mkdir()
             root.chmod(0o755)
             server = bridge.AppBridgeServer(root / "control.sock")
             server.sock_path.write_text("existing file", encoding="utf-8")
@@ -38,7 +40,7 @@ class BridgeSocketTests(unittest.TestCase):
             self.assertFalse(server.sock_path.exists())
 
     def test_stale_socket_restarts_and_live_socket_keeps_its_owner(self):
-        with tempfile.TemporaryDirectory() as dirname:
+        with tempfile.TemporaryDirectory(dir="/tmp", prefix="agy-sock-") as dirname:
             path = Path(dirname) / "control.sock"
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stale:
                 stale.bind(str(path))

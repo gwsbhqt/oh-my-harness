@@ -23,12 +23,17 @@ Keep the full repository. Plugin builds need the adjacent `tooling/`; remote ope
 ```sh
 git clone https://github.com/gwsbhqt/oh-my-harness.git
 cd oh-my-harness
+REV="$(git rev-parse HEAD)"  # Pin this checkout; replace it with a saved full commit to reproduce that version
+git checkout --detach "$REV"
+printf 'source commit: %s\n' "$REV"
 pnpm run check:public
 pnpm --dir dsh-python-repl install --frozen-lockfile
 pnpm --dir dsh-python-repl run check
 ```
 
 The public check needs only Node.js and Git and checks documentation and repository contracts. The plugin check runs type checking, builds, and tests in the component's development environment. Passing these checks does not install the plugin into DSH.
+
+GitHub Source code is only a source snapshot: it contains neither DSH's built `lib/` nor an installable AGY directory, and DSH builds also need `.git`. Keep the full commit above; neither a moving `main` nor a component version uniquely identifies an artifact. See the [maintenance guide](maintenance.en.md) for built artifacts, verification, platform installation, and rollback.
 
 ## 3. Link it into your DSH profile
 

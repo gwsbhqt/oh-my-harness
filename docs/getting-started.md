@@ -23,12 +23,17 @@
 ```sh
 git clone https://github.com/gwsbhqt/oh-my-harness.git
 cd oh-my-harness
+REV="$(git rev-parse HEAD)"  # 固定当前提交；复现指定版本时换成保存的完整提交
+git checkout --detach "$REV"
+printf 'source commit: %s\n' "$REV"
 pnpm run check:public
 pnpm --dir dsh-python-repl install --frozen-lockfile
 pnpm --dir dsh-python-repl run check
 ```
 
 第一条检查只需要 Node.js 和 Git，核对公开文档与仓库约定。插件检查会运行类型检查、构建和测试，需要该部件的开发环境。检查通过说明本地构建和测试通过，还没有把插件装进 DSH。
+
+GitHub 的 Source code 只是源码快照，不含 DSH 已构建的 `lib/` 或 AGY 可安装目录；DSH 构建还需要 `.git`。保存上面的完整提交，不要把会移动的 `main` 或组件版本号当作成品的唯一标识。已构建成品、校验、平台安装和回退见[维护路线](maintenance.md)。
 
 ## 3. 链接到自己的 DSH 配置
 
