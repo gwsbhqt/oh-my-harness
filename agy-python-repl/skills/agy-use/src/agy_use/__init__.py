@@ -1,4 +1,4 @@
-"""通过 Antigravity App 官方 Sidecar 桥接控制桌面会话，并与 agy CLI 工具明确区分。"""
+"""通过 Antigravity App 的官方 Sidecar 控制桌面会话。"""
 from __future__ import annotations
 
 import asyncio
@@ -6,14 +6,6 @@ from pathlib import Path
 import time
 from typing import Any
 
-from ._cli_backend import (
-    cli_install_plugin,
-    cli_models,
-    cli_plugins,
-    cli_run,
-    cli_status,
-    cli_validate_plugin,
-)
 from ._client import (
     call_bridge,
     has_truncated_fields,
@@ -41,12 +33,6 @@ __all__ = [
     "archive",
     "update",
     "delete",
-    "cli_status",
-    "cli_models",
-    "cli_plugins",
-    "cli_validate_plugin",
-    "cli_install_plugin",
-    "cli_run",
 ]
 
 

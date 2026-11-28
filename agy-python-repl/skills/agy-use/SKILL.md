@@ -1,13 +1,13 @@
 ---
 name: agy-use
-description: 通过官方 Sidecar 桥接控制正在运行的 Antigravity App（列出、定位、新建、向指定已有桌面会话发消息、等待并读取转录回复，以及重命名、归档和删除），并把 agy CLI 命令明确区分为 cli-* 独立入口。
+description: 通过 Antigravity App 的官方 Sidecar 列出和管理桌面会话，向指定会话发送消息，并核对同一会话的收件和回复。
 ---
 
 # agy-use
 
 有 Python 技能内核时读取 [Python 使用说明](PYSKILL.md)，直接调用 `skills.agy_use` 完整下划线入口；无内核的传统代理读取 [标准使用说明](SKILL.md)，使用 `agy-use`。读取、导入或调用失败时先报告并定位，不得换方式绕过接口。完整参数、套接字约定、退出码和异常边界见 [参数与回执](references/commands.md)。
 
-本技能默认面向 **正在运行的 Antigravity App 桌面会话**，通过随插件提供的官方 Sidecar（`agy-python-repl/app-bridge`）连接本机当前账户可访问的 Unix 套接字。`agy` CLI 的独立命令与桌面会话不共享编号，全部归在 `cli-*`（Python 为 `cli_*`）子命令下。
+`agy-use` 通过随插件提供的官方 Sidecar（`agy-python-repl/app-bridge`）连接正在运行的 Antigravity 桌面 App。
 
 ## 检查桌面 Sidecar 与定位会话
 
@@ -20,6 +20,8 @@ agy-use get 11112222
 ```
 
 ## 新建与向指定已有会话发消息
+
+新建会话时，把首条任务传给 `new` 并启用等待，即可核对首轮回复。只传标题创建空会话时，回执只确认会话已创建。
 
 `send` 先核对当前桌面会话并保存发送前的步号。启用等待后，它按收件正文找到这一条消息，再读取同一轮的最终答复。若先发送、稍后再等，请保留回执中的会话编号、`since_step` 和 `prompt`。
 
@@ -40,16 +42,4 @@ agy-use read 11112222 --from-step 0 --limit 20
 agy-use last 11112222 --chars 4000
 agy-use rename 11112222 "新的会话标题"
 agy-use archive 11112222
-```
-
-## 独立 `agy` CLI 入口
-
-下列入口只操作独立安装的 `agy` 命令行工具，**不能**用于读取或续接 Antigravity App 桌面会话（CLI 传入桌面会话编号会报 `trajectory not found`）。仅在明确需要查询 CLI 版本、CLI 模型目录、插件列表、校验/安装本地插件或跑一轮非交互 CLI 会话时使用。
-
-```sh
-agy-use cli-status
-agy-use cli-models
-agy-use cli-plugins
-agy-use cli-validate-plugin ./demo-plugin --strict
-agy-use cli-run --workspace ./demo-workspace --timeout 60 "只回复 READY。"
 ```

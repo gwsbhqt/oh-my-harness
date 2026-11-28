@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agy-use"
-version = "0.2.0"
-description = "Control the running Antigravity App via its official Sidecar bridge, plus explicit agy CLI helpers"
+version = "0.3.0"
+description = "Control the running Antigravity App via its official Sidecar bridge"
 requires-python = ">=3.11"
 
 [project.scripts]

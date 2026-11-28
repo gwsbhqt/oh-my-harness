@@ -37,7 +37,7 @@ agy plugin list --json
 
 The workbench gives each conversation guidance on choosing tools. During a review, load related files together in `run_code` and reuse their contents for follow-up questions. Use native tools for a single lookup, edits, images, Git and project commands. An existing conversation can receive updated guidance on its next model invocation once Antigravity has loaded the new hooks. When a snapshot is being saved, the first Python cell waits for it.
 
-See the [agy-use skill](skills/agy-use/SKILL.md) for desktop conversation controls and explicit CLI operations. Antigravity handles Python tool permissions. For a headless CLI run with an empty answer, inspect `result.denied_actions` and the tool events. The CLI can exit successfully after a tool was denied. [Headless mode](https://antigravity.google/docs/cli/headless/) · [Permissions](https://antigravity.google/docs/permissions/)
+See the [agy-use skill](skills/agy-use/SKILL.md) to send messages to an existing desktop conversation and read its replies. Antigravity handles Python tool permissions. For a headless CLI run with an empty answer, inspect `result.denied_actions` and the tool events. The CLI can exit successfully after a tool was denied. [Headless mode](https://antigravity.google/docs/cli/headless/) · [Permissions](https://antigravity.google/docs/permissions/)
 
 Enable `agy-python-repl/app-bridge` in Antigravity’s Sidecars settings for desktop control. Its default Unix socket lives under the current user’s state directory. For a custom `AGY_USE_SOCKET`, choose a directory owned by and writable only by that user. [Sidecar configuration](https://antigravity.google/docs/sidecars.md)
 

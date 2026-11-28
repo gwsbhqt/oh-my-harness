@@ -217,6 +217,17 @@ sys.exit(2)
 """
 
 
+class SkillInterfaceTests(unittest.TestCase):
+    def test_desktop_actions_are_available_from_python_and_the_launcher(self) -> None:
+        help_text = subprocess.check_output(
+            [sys.executable, str(SKILL / "scripts/agy-use"), "--help"], text=True
+        )
+        actions = set(agy_use.__all__)
+        self.assertTrue({"sessions", "get", "send", "wait", "read"} <= actions)
+        self.assertEqual(set(re.findall(r"^    ([\w-]+)\s", help_text, re.MULTILINE)), actions)
+        self.assertFalse(any(name.startswith("cli_") for name in dir(agy_use)))
+
+
 class AppBridgeTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         # Keep socket path well under macOS 104-byte sun_path limit.

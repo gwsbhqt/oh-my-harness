@@ -9,12 +9,6 @@ from typing import Any
 
 from . import (
     archive,
-    cli_install_plugin,
-    cli_models,
-    cli_plugins,
-    cli_run,
-    cli_status,
-    cli_validate_plugin,
     delete,
     get,
     health,
@@ -48,13 +42,6 @@ def _add_app_common(parser: argparse.ArgumentParser, *, unbounded_timeout: bool 
 def _exit_code(receipt: dict[str, Any]) -> int:
     if receipt.get("timed_out"):
         return 124
-    if receipt.get("target") == "cli":
-        code = receipt.get("exit_code")
-        if code is None:
-            return 1
-        if code < 0:
-            return 128 - code
-        return int(code) or int(not receipt.get("ok"))
     if receipt.get("ok"):
         return 0
     err = receipt.get("error_code")
@@ -69,7 +56,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agy-use", allow_abbrev=False)
     commands = parser.add_subparsers(dest="action", required=True)
 
-    # --- Antigravity App operations ---
     p = commands.add_parser("health", help=health.__doc__, description=health.__doc__, allow_abbrev=False)
     p.set_defaults(function=health)
     _add_app_common(p)
@@ -164,29 +150,6 @@ def _build_parser() -> argparse.ArgumentParser:
     p.set_defaults(function=delete)
     p.add_argument("conversation_id", help="桌面会话完整编号或唯一前缀")
     _add_app_common(p)
-
-    # --- Explicit agy CLI operations (separate from Antigravity App) ---
-    for action in (cli_status, cli_models, cli_plugins, cli_validate_plugin, cli_install_plugin, cli_run):
-        help_text = (action.__doc__ or "").splitlines()[0]
-        child = commands.add_parser(
-            action.__name__.replace("_", "-"),
-            help=help_text,
-            description=help_text,
-            allow_abbrev=False,
-        )
-        child.set_defaults(function=action)
-        timeout_help = "等待秒数，默认 120 秒。0 等待本轮自然结束" if action is cli_run else "等待秒数，须大于 0"
-        child.add_argument("--timeout", type=float, default=argparse.SUPPRESS, metavar="SECONDS", help=timeout_help)
-        if action in (cli_validate_plugin, cli_install_plugin):
-            child.add_argument("path", help="本地插件路径")
-        if action is cli_validate_plugin:
-            child.add_argument("--strict", action="store_true")
-        if action is cli_run:
-            child.add_argument("--workspace", required=True)
-            child.add_argument("--conversation-id")
-            child.add_argument("--model")
-            child.add_argument("--allow-repl", action="store_true", help="仅在本轮允许工作台的 run_code 执行 Python")
-            child.add_argument("prompt")
 
     return parser
 
