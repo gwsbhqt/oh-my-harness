@@ -52,7 +52,8 @@ def _reply(receipt: dict[str, Any], text: str) -> CallToolResult:
     title="Run Python Code",
     description=(
         "Run Python in this persistent kernel. Reuse existing variables, functions and prebound tools. "
-        "Assignments are silent. Put the value to display on the last line. Use print for deliberate line breaks."
+        "Assignments are silent. A final expression displays a single value. For several named results, "
+        "finish checks inside the cell, then print each on its own labeled line in the user's language."
     ),
 )
 async def run_code(

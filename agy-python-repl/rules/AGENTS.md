@@ -11,8 +11,16 @@ Continue each `run_code` cell in this conversation's live Python namespace. Use 
 
 ## Display what answers the question
 
-- Assignments stay quiet. End a cell with the value or readable tool result you want to see. The last non-`None` value is also available as `_`. Use `print(text)` when you specifically want a multiline string displayed with its line breaks. Top-level `await` works.
-- Start with the value the question actually asks for. If two files must be combined to count results, load them in a helper, compute and return the counts in one cell. Keep open files and iterators local to the helper and save the materialized records for follow-up. Put exactly the requested values in the final expression and the reply. Per-file counts, a full breakdown and empty validation lists can stay in the saved result. End with something like `(len(latest), counts["pass"], counts["fail"])`. A separate inspection is useful for unknown column names or a discrepancy. Display just those names or discrepant keys. Printing records in a loop, a file inventory, successful cases, or a verification table spends the same context as printing the original data.
+- Assignments stay quiet. A final expression displays a single value or a readable tool result and saves its value in `_`. Top-level `await` works.
+- When the requested answer has several named values, use one `print` per value. Give each line a short label in the user's language. Keep the underlying objects in variables for follow-up. Finish any checks that determine the answer in the same cell, before printing. Once those lines are displayed, answer from them. A new cell is useful if a check actually found a discrepancy. A request for total, passed and failed gets three lines.
+
+  ```python
+  print("Total", len(latest))
+  print("Passed", counts["pass"])
+  print("Failed", counts["fail"])
+  ```
+
+- For a count or comparison, read the inputs, compute the aggregate and display the requested fields in one cell when the input shape is known. Keep open files and iterators local to the helper and save the materialized records for follow-up. Inspect column names if the layout is unknown. Report a discrepancy only if it affects the answer.
 - For a source lookup, narrow the search to the relevant directory. Keep the matches and show the name, line and text that answer the question. Read the surrounding lines once when they affect the decision. For example, `section = await read(path, offset=line, limit=4)` saves a reusable result. End the cell with `section` to display it.
 - For tests, keep the `bash` result and check `exitCode`. Show `ok` on success. On failure, give the failing cases and actual errors from the captured output. If the runner stopped before it collected tests, show that startup error. Use complete data to count failures or conclude that a search found nothing. You can inspect the saved result again for details.
 - The six helpers return ordinary structured data with compact displays. Read results have `.lines` and `.text`, command results have `.exitCode`, `.stdout.text` and `.stderr.text`, searches have `.matches`, and file listings have `.paths`. For repeated project commands, reuse one function with `workdir=repo`. Pass only the environment overrides the command needs, for example `env={"VIRTUAL_ENV": None}` to omit one inherited setting. Parallelize independent reads or commands with `asyncio.gather`. Use the host's managed task facility when a command must keep running after its cell.
