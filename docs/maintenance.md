@@ -57,17 +57,21 @@ agy plugin validate "$AGY_DIR" --strict
 git rev-parse HEAD > "$OUT/SOURCE_COMMIT"
 set -- "$OUT"/*.tgz
 test -f "$1"
-tar -tzf "$1" package/lib/index.js package/lib/dsh-build.json package/vendor/PROVENANCE.md
+tar -tzf "$1" package/lib/index.js package/lib/dsh-build.json package/vendor/PROVENANCE.md package/vendor/prime/LICENSE package/LICENSE
 test -f "$AGY_DIR/_bundled/vendor/PROVENANCE.md"
+test -f "$AGY_DIR/_bundled/vendor/prime/LICENSE"
+test -f "$AGY_DIR/LICENSE"
+test -x "$AGY_DIR/scripts/start_mcp.sh"
+test -x "$AGY_DIR/skills/agy-use/scripts/agy-use"
 (cd "$OUT" && shasum -a 256 ./*.tgz > DSH-SHA256SUMS)
-(cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + > "$OUT/AGY-SHA256SUMS")
+(cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + | LC_ALL=C sort > "$OUT/AGY-SHA256SUMS")
 ```
 
 若另行运行 AGY 的 Python 测试，macOS 可能因 Unix socket 路径过长报 `AF_UNIX path too long`；保留失败日志，改用更短的临时 `TMPDIR` 后重跑。
 
 DSH 成品是 `.tgz`，其中必须有 `lib/index.js`、构建清单和 Prime 来源清单；AGY 成品是通过严格校验的 `$AGY_DIR` 独立目录。交付时同时保留 `SOURCE_COMMIT`、两个 `SHA256SUMS` 和成品。文件名中的版本不能代替提交和哈希；哈希用于辨认与完整性检查，不等同签名。
 
-接收方在独立 shell 中先 `cd` 到含 `SOURCE_COMMIT` 的交付目录。`REV` 填维护者声明的完整提交；下面沿用示例提交。`shasum -c` 按名单逐个核对已列文件，DSH 验 `.tgz`，AGY 验独立目录中的文件：
+接收方在独立 shell 中先 `cd` 到含 `SOURCE_COMMIT` 的交付目录。`REV` 填维护者声明的完整提交；下面沿用示例提交。DSH 用 `shasum -c` 核对整个 `.tgz`；AGY 重算排序后的文件清单并与交付清单比较，同时核对两个交付命令仍有执行权限：
 
 ```sh
 set -e
@@ -76,10 +80,12 @@ AGY_DIR="$OUT/agy-python-repl"
 REV=57cfccb03b4f39121facc575a91bcff055d59fed
 test "$(cat "$OUT/SOURCE_COMMIT")" = "$REV"
 (cd "$OUT" && shasum -a 256 -c DSH-SHA256SUMS)
-(cd "$AGY_DIR" && shasum -a 256 -c "$OUT/AGY-SHA256SUMS")
+test -x "$AGY_DIR/scripts/start_mcp.sh"
+test -x "$AGY_DIR/skills/agy-use/scripts/agy-use"
+(cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + | LC_ALL=C sort | diff -u "$OUT/AGY-SHA256SUMS" -)
 ```
 
-这个检查按名单核对文件。若需要连额外文件也查出，可从同一提交构建一份干净的独立目录，将其路径设为 `CLEAN_AGY_DIR`，再用 `diff -r "$CLEAN_AGY_DIR" "$AGY_DIR"` 比较两份目录。
+这些检查不需要网络或源码。DSH 的单个归档哈希覆盖包内全部内容；AGY 的清单差异会指出内容变化、额外文件和缺文件，权限检查会指出两个命令失去执行位。不再要求接收方为了发现额外文件而重新构建。
 
 平台安装沿用现有入口。DSH：把入门页 profile 中的 `link:` 依赖改为指向已校验 `.tgz` 的绝对 `file:` 路径，保留组合包登记，再用 DSH 所配 pnpm 安装、运行启动检查并重启。Antigravity：执行 `agy plugin install "$AGY_DIR"`，再用 `agy plugin list --json` 核对。只做临时验收时，为 AGY 命令设置一个新的空 `HOME`；先确认 `plugin list --json` 为 `[]`，不要操作日常 App。
 

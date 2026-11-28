@@ -57,17 +57,21 @@ agy plugin validate "$AGY_DIR" --strict
 git rev-parse HEAD > "$OUT/SOURCE_COMMIT"
 set -- "$OUT"/*.tgz
 test -f "$1"
-tar -tzf "$1" package/lib/index.js package/lib/dsh-build.json package/vendor/PROVENANCE.md
+tar -tzf "$1" package/lib/index.js package/lib/dsh-build.json package/vendor/PROVENANCE.md package/vendor/prime/LICENSE package/LICENSE
 test -f "$AGY_DIR/_bundled/vendor/PROVENANCE.md"
+test -f "$AGY_DIR/_bundled/vendor/prime/LICENSE"
+test -f "$AGY_DIR/LICENSE"
+test -x "$AGY_DIR/scripts/start_mcp.sh"
+test -x "$AGY_DIR/skills/agy-use/scripts/agy-use"
 (cd "$OUT" && shasum -a 256 ./*.tgz > DSH-SHA256SUMS)
-(cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + > "$OUT/AGY-SHA256SUMS")
+(cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + | LC_ALL=C sort > "$OUT/AGY-SHA256SUMS")
 ```
 
 If you also run AGY's Python tests on macOS, a long Unix socket path can fail with `AF_UNIX path too long`; keep the failure log and rerun with a shorter temporary `TMPDIR`.
 
 The DSH artifact is the `.tgz`, which must contain `lib/index.js`, the build manifest, and the Prime provenance manifest. The AGY artifact is the standalone `$AGY_DIR` directory that passed strict validation. Keep `SOURCE_COMMIT`, both `SHA256SUMS`, and the artifacts together. A version in a filename cannot replace the commit and hashes. Hashes provide identity and integrity checks, not a signature.
 
-In a separate shell, the recipient first changes into the delivered directory containing `SOURCE_COMMIT`. Set `REV` to the full commit declared by the maintainer; the example below reuses the commit above. `shasum -c` checks each listed file: the `.tgz` for DSH and the standalone directory's files for AGY.
+In a separate shell, the recipient first changes into the delivered directory containing `SOURCE_COMMIT`. Set `REV` to the full commit declared by the maintainer; the example below reuses the commit above. DSH uses `shasum -c` to check the whole `.tgz`. For AGY, recompute the sorted file inventory and compare it with the delivered manifest, and confirm that both delivered commands are still executable:
 
 ```sh
 set -e
@@ -76,10 +80,12 @@ AGY_DIR="$OUT/agy-python-repl"
 REV=57cfccb03b4f39121facc575a91bcff055d59fed
 test "$(cat "$OUT/SOURCE_COMMIT")" = "$REV"
 (cd "$OUT" && shasum -a 256 -c DSH-SHA256SUMS)
-(cd "$AGY_DIR" && shasum -a 256 -c "$OUT/AGY-SHA256SUMS")
+test -x "$AGY_DIR/scripts/start_mcp.sh"
+test -x "$AGY_DIR/skills/agy-use/scripts/agy-use"
+(cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + | LC_ALL=C sort | diff -u "$OUT/AGY-SHA256SUMS" -)
 ```
 
-The manifest covers the files it lists. To check for extra files as well, build a clean standalone directory from the same commit, set `CLEAN_AGY_DIR` to its path, and compare both directories with `diff -r "$CLEAN_AGY_DIR" "$AGY_DIR"`.
+These checks need neither network access nor source code. The single archive hash covers every file in the DSH package. For AGY, the manifest difference identifies changed content, extra files, and missing files, while the permission checks identify either delivered command losing its executable bit. Recipients no longer need another build just to detect extra files.
 
 Use the existing platform installation paths. For DSH, replace the getting-started profile's `link:` dependency with an absolute `file:` path to the verified `.tgz`, preserve the bundle registration, then install with Harness's pnpm, run its startup check, and restart. For Antigravity, run `agy plugin install "$AGY_DIR"`, then confirm with `agy plugin list --json`. For temporary acceptance only, give the AGY commands a new empty `HOME`; first confirm that `plugin list --json` returns `[]`, and do not touch the daily app.
 
