@@ -92,7 +92,7 @@ dsh-use send 会话编号 "任务目标、限制和验收标准" --notify agy:<A
 dsh-use wait 回执中的sessionId --since 回执中的since --settled --timeout 1800 --json
 ```
 
-回执中的 `sessionId`、`since` 和 `requestId` 必须保存，后续等待继续使用同一机器和起点。`new` 报告首条消息收件未知时，从 `error.details`（`send-unconfirmed`）或顶层 `data`（发送异常）取回这三项，在原会话核对收件。回执里 `notify.error` 表示消息已发出、通知没登记上：不要重发，改用 `wait --settled`。绝对路径只开会话，不登记工作区。
+保存回执中已有的 `sessionId`、`since` 和 `requestId`。`new` 报 `sent: null` 时收件未知，用 `error.details`（`send-unconfirmed`）或顶层 `data`（发送异常）在原会话续等。`sent: false` 表示首问未发，有 `sessionId` 就查原会话；创建结果待核或整份回包丢失时，用 `sessions --include-blank` 核对近期会话，重放 `new` 可能重复建会话。回执里 `notify.error` 表示消息已发出、通知没登记上：不要重发，改用 `wait --settled`。绝对路径只开会话，不登记工作区。
 
 合并发送和等待的操作也要先检查 `receipt`，任何等待失败都不能重新发送。独立任务默认排下一轮；纠正当前方向用插话，用户要求立即停止才按授权中断。已排修正先查队列，再按稳定消息编号处理。具体选择和防重发规则见 [发送回执与防重发](references/common.md#发送回执与防重发)。
 

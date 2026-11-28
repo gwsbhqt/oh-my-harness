@@ -12,7 +12,7 @@
 import { chmodSync, existsSync, linkSync, mkdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { basename, dirname, join } from 'node:path'
-import { errorPayload, FirstMessageSendUncertain, UsageError } from './gateway.ts'
+import { errorPayload, DispatchError, UsageError } from './gateway.ts'
 import type { CommandResult } from './service.ts'
 
 export interface CommandSpec {
@@ -104,7 +104,7 @@ export async function startServer(options: ServerOptions): Promise<{ close(): Pr
         options.log(`${command} ok ${Date.now() - started}ms`)
         send(res, 200, { ok: true, ...result })
       } catch (error) {
-        const recovery = error instanceof FirstMessageSendUncertain ? error : undefined
+        const recovery = error instanceof DispatchError ? error : undefined
         const cause = recovery === undefined ? error : recovery.cause
         const payload = errorPayload(cause)
         options.log(`${command} failed ${payload.code} ${Date.now() - started}ms`)

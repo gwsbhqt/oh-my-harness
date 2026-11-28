@@ -9,7 +9,7 @@ import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { pendingRestart, type PendingRestart } from '../../tooling/runtime/restart-state.mjs'
 import { formatNotifyTarget, parseAgyNotifyTarget } from './agy-notify.ts'
-import { CommandFailure, FirstMessageSendUncertain, errorPayload, UsageError, splitEndpoint, describeEndpoint, parameterSchemas, collectStream, type GatewayLike, type TypertLocalLike } from './gateway.ts'
+import { CommandFailure, DispatchError, errorPayload, UsageError, splitEndpoint, describeEndpoint, parameterSchemas, collectStream, type GatewayLike, type TypertLocalLike } from './gateway.ts'
 import { buildTranscript, clock, oneLine, renderTurn, turnLine, type RawEvent, type Transcript } from './transcript.ts'
 import { pick, routeKey, tierOf, verdictLine, publicTier, fromSharedPick, clock as shortClock, type Tier, type TierTable, type UsageReportLike, type ModelTiersLike, type ModelJudgement, type PickResult } from './models.ts'
 import { findInterruptedUser, scanLostMessages } from './lost-messages.ts'
@@ -672,8 +672,15 @@ export class RemoteService {
     const mode = wantsNow && running && !interrupted ? 'steer' : 'queue'
     const requestId = randomUUID()
     const code = requestId.replace(/-/g, '').slice(0, 8)
-    const admitted = obj(await this.call('session/prompt', { request: { requestId, sessionId: id, mode, content: [{ type: 'text', text }], clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone } }))
-    if (admitted.accepted !== true) throw new CommandFailure('宿主没有确认消息已接收；不要自动重发，请先查询会话', 'send-unconfirmed', { requestId, sessionId: id, since, sent: null })
+    const recovery = { sessionId: id, since, requestId, sent: null }
+    const recoveryText = `收件状态未知。请求 ${requestId}，起点 ${since}。请用 dsh-use status ${id} 查原会话。`
+    let admitted: Json
+    try {
+      admitted = obj(await this.call('session/prompt', { request: { requestId, sessionId: id, mode, content: [{ type: 'text', text }], clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone } }))
+    } catch (error) {
+      throw new DispatchError(recoveryText, error, recovery)
+    }
+    if (admitted.accepted !== true) throw new CommandFailure(recoveryText, 'send-unconfirmed', recovery)
     this.deps.log(`send ${id} mode=${mode}${interrupted ? ' interrupt' : ''} chars=${text.length}`)
     const notify = notifyTo === undefined ? undefined : await this.registerNotify({ target: id, notify: notifyTo, since, ...(title === undefined ? {} : { targetTitle: title }) })
     if (notify !== undefined) notes.push(notify.line)
@@ -971,16 +978,35 @@ export class RemoteService {
     if (options.effort !== undefined) await this.validateEffort(route, options.effort)
     if (options.ifIdle) this.assertMaintenanceIdle()
     const created = obj(await this.call('session/create', { request }))
-    const id = String(created.sessionId)
-    this.deps.log(`new ${id} in ${match?.path ?? expanded}`)
-    // 新会话的模型选择是空的，要等第一轮才按全局默认（含等级）落地。目标正是默认模型时，
-    // 不带等级去选会把等级清成模型自带默认（Sol 是 low），所以把默认里的等级一起带上。
-    const fallback = obj((await this.catalog()).default)
-    const keep = fallback.provider === route.provider && fallback.model === route.model && typeof fallback.reasoningEffort === 'string'
-      ? fallback.reasoningEffort : undefined
-    const switched = await this.applyRoute(id, route, options.effort ?? keep, options.effort !== undefined)
+    // 不指定编号时，宿主会生成 session- 加 UUID。只把符合编号形式的值带入查询命令。
+    const id = created.sessionId
+    if (typeof id !== 'string' || !/^session-[A-Za-z0-9][A-Za-z0-9._-]{0,35}$/.test(id)) {
+      const cause = new CommandFailure('宿主没有返回有效的会话编号', 'session-id-invalid')
+      throw new DispatchError(
+        '会话的创建结果待核。请用 dsh-use sessions --include-blank 查看同一目标上的近期会话。再次运行 new 可能重复创建会话。',
+        cause,
+        { created: null, sent: false },
+      )
+    }
+    let switched: CommandResult
+    let since: number
+    try {
+      this.deps.log(`new ${id} in ${match?.path ?? expanded}`)
+      // 选中全局默认模型时须显式保留它的推理等级。
+      const fallback = obj((await this.catalog()).default)
+      const keep = fallback.provider === route.provider && fallback.model === route.model && typeof fallback.reasoningEffort === 'string'
+        ? fallback.reasoningEffort : undefined
+      switched = await this.applyRoute(id, route, options.effort ?? keep, options.effort !== undefined)
+      since = (await this.transcript(id)).lastSeq
+    } catch (error) {
+      const payload = errorPayload(error)
+      throw new DispatchError(
+        `会话 ${id} 已创建，但首条消息发出前的准备失败：${payload.message}。请用 dsh-use status ${id} 查询原会话，不要重放 new。`,
+        error,
+        { created: true, sessionId: id, sent: false },
+      )
+    }
     const lines = [`新会话 ${id}（${match?.title ?? expanded}）。`, switched.text]
-    const since = (await this.transcript(id)).lastSeq
     const sent = message !== undefined && message.trim() !== ''
     let requestId: string | undefined
     let notify: { line: string; data: Json } | undefined
@@ -995,12 +1021,12 @@ export class RemoteService {
       }
       requestId = randomUUID()
       const recovery = { created: true, sessionId: id, since, requestId, sent: null } as const
-      const recoveryText = `会话 ${id} 已创建，首条消息的收件状态未知。请用 dsh-use status ${id} 查询原会话。`
+      const recoveryText = `会话 ${id} 已创建，首条消息的收件状态未知。请求 ${requestId}，起点 ${since}。请用 dsh-use status ${id} 查询原会话。`
       let admitted: Json
       try {
         admitted = obj(await this.call('session/prompt', { request: { requestId, sessionId: id, mode: 'queue', content: [{ type: 'text', text: message }], clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone } }))
       } catch (error) {
-        throw new FirstMessageSendUncertain(recoveryText, error, recovery)
+        throw new DispatchError(recoveryText, error, recovery)
       }
       if (admitted.accepted !== true) {
         throw new CommandFailure(recoveryText, 'send-unconfirmed', recovery)

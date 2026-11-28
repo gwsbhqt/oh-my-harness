@@ -27,7 +27,17 @@ dsh-use wait WORKER_SESSION --since RECEIPT_SEQUENCE --settled --json
 
 Replace the uppercase placeholders with actual returned values. `--settled` checks more than an idle session: queued work, background jobs, child agents, and automatically continuing goals can prevent completion. Inspect the exit status and structured outcome. Waiting for input, timing out, failing, and being aborted are different outcomes. Even a successful completion must still be checked against the requested deliverable.
 
-When `new` creates a session and sends its first message, a failed request can still return the session ID. The terminal prints a command to inspect that session. In JSON and Python results, `send-unconfirmed` carries recovery fields in `error.details`. An exception while sending the first message carries them in top-level `data`. In both cases, `sent: null` means delivery is unknown. Inspect the original `sessionId` and continue waiting from the pre-send sequence `since`. If the original receipt record is available, match it to `requestId`. If the entire response was lost, run `dsh-use sessions --include-blank` on the same host and inspect recent sessions before deciding whether to send anything again.
+If `new` fails, check how far the host got. JSON and Python results use the same recovery fields.
+
+| What happened | Recovery fields | What to do |
+|---|---|---|
+| The host attempted to send the first message. Delivery is unknown. | `send-unconfirmed` uses `error.details`. An exception during the send uses top-level `data`. Both contain `sessionId`, `since`, `requestId`, and `sent: null`. | Inspect the original session and continue waiting from `since`. If you have the original receipt event, match the full `requestId`. |
+| The session was created and setup failed before the first send. | Top-level `data` contains `created: true`, `sessionId`, and `sent: false`. | Run `dsh-use status <sessionId>` to inspect the existing session. The first message has not been sent. |
+| The host returned no usable session ID. | Top-level `data` contains `created: null` and `sent: false`. | Run `dsh-use sessions --include-blank` on the same host. Creation is still unconfirmed. |
+
+For an existing session, when `send` / `chat` hits an exception from the host before the reply (an inner failure while the outer response still returns), the top-level `data` of JSON and Python results carries `sessionId`, `since`, `requestId`, and `sent: null` (no `created`); the original error and its 500/400 class are unchanged, and `chat` does not auto-resend.
+
+Recovery depends on the running server. Older servers also return identifiers in `error.details` for `send-unconfirmed`, but return only the original error for an exception during the first send. If you receive no ID or lose the entire response, list recent sessions and inspect their history. A timestamp alone cannot identify your request. Repeating `new` can create a duplicate.
 
 ## Use supervision for longer assignments
 

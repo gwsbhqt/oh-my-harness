@@ -8,7 +8,13 @@
 
 新任务用 `new <工作区或绝对路径> "任务与验收标准" --tier normal`。成功发送首条消息时，保存 `data.sessionId`、`data.since` 和 `data.requestId`。只创建空会话时，`data.sent` 为 `false`。绝对路径只开会话，不登记工作区。
 
-会话已创建、首问收件未知时，普通终端会显示可查询的会话编号。JSON 和 Python 回执中，`send-unconfirmed` 的恢复信息在 `error.details`，首问发送抛错时在顶层 `data`，两者的 `sent` 均为 `null`。用 `sessionId` 查询原会话，按发送前的 `since` 续等。有原始收件记录时，可用 `requestId` 核对是否为同一次请求。若整份回包丢失，先用 `sessions --include-blank` 列出同一目标上的近期会话，再查候选会话的状态和历史。创建与发送结果在查清前都算未知。
+`new` 失败时按回执恢复。有 `sessionId` 就在同一目标查原会话。
+
+- `sent: null` 表示尝试过发送、收件未知。`send-unconfirmed` 的恢复字段在 `error.details`，发送首问时抛出的异常在顶层 `data`。从 `since` 续等，有原始记录时按完整 `requestId` 核对。
+- 顶层 `data` 含 `created: true`、`sessionId`、`sent: false` 时，会话已建，发送前准备失败。可以直接查 `status <sessionId>`。
+- 顶层 `data` 只有 `created: null`、`sent: false` 时，首问未发，创建结果待核。用 `sessions --include-blank` 查同一目标的近期会话。
+
+较早的服务端在首问发送异常时只返回原错误。缺少编号或整份回包丢失时，检查候选会话的历史。仅凭相近时间无法确认原请求，重放 `new` 可能重复建会话。
 
 `chat` 将发送与等待合并，正常返回的所有等待结果保留 `receipt`。等待失败后仍用原回执继续等。
 

@@ -153,10 +153,18 @@ export class CommandFailure extends Error {
   }
 }
 
-export class FirstMessageSendUncertain extends Error {
-  readonly data: { created: true; sessionId: string; since: number; requestId: string; sent: null }
+type DispatchReceipt =
+  | { created: true; sessionId: string; since: number; requestId: string; sent: null }
+  | { created: true; sessionId: string; sent: false }
+  | { created: null; sent: false }
+  // 已存在的会话发送（send/chat）时 session/prompt 抛错：会话早已存在，不标 created；起止与请求号已知，收件未知。
+  | { sessionId: string; since: number; requestId: string; sent: null }
 
-  constructor(message: string, cause: unknown, data: FirstMessageSendUncertain['data']) {
+/** 原始错误决定 HTTP 状态，恢复信息单独返回给派工者。 */
+export class DispatchError extends Error {
+  readonly data: DispatchReceipt
+
+  constructor(message: string, cause: unknown, data: DispatchReceipt) {
     super(message, { cause })
     this.data = data
   }

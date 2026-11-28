@@ -27,7 +27,17 @@ dsh-use wait WORKER_SESSION --since RECEIPT_SEQUENCE --settled --json
 
 把大写占位符换成实际返回值。`--settled` 检查的不只是会话空闲：排队任务、后台任务、子 Agent 和自动继续的目标，都可能让任务尚未完成。检查退出状态和结构化结果。等输入、超时、失败和中止是不同结果。即使报告成功完成，也仍需对照要求检查交付物。
 
-用 `new` 建会话并发送首问时，失败回执也可能带回已建会话的编号。终端会显示查询命令。JSON 和 Python 回执把 `send-unconfirmed` 的恢复信息放在 `error.details`，把首问发送异常的恢复信息放在顶层 `data`。两者的 `sent: null` 都表示收件未知。用 `sessionId` 查原会话，按发送前的 `since` 继续等待。有原始收件记录时，可用 `requestId` 核对是否为同一次请求。整份回包丢失时，先运行 `dsh-use sessions --include-blank` 查同一目标的近期会话，再核对历史。
+`new` 失败后，先看宿主已确认到哪一步。JSON 和 Python 回执使用相同的字段。
+
+| 发生了什么 | 恢复信息 | 接下来怎么做 |
+|---|---|---|
+| 已尝试发送首问，收件未知 | `send-unconfirmed` 在 `error.details`，发送时抛出的异常在顶层 `data`。两者都带 `sessionId`、`since`、`requestId` 和 `sent: null` | 查原会话，从 `since` 继续等待。有原始收件记录时，用完整 `requestId` 核对。 |
+| 已建会话，发送前准备失败 | 顶层 `data` 有 `created: true`、`sessionId`、`sent: false` | 用 `dsh-use status <sessionId>` 找回已有会话。首问尚未发出。 |
+| 宿主没返回可用的会话编号 | 顶层 `data` 有 `created: null` 和 `sent: false` | 用 `dsh-use sessions --include-blank` 检查同一目标的近期会话。创建结果仍待核对。 |
+
+对**已有会话**用 `send` / `chat` 时，若宿主在回包前抛出异常（内层失败、外层仍回包），JSON 和 Python 结果的顶层 `data` 带 `sessionId`、`since`、`requestId` 和 `sent: null`（不带 `created`），原错误与 500/400 分类不变；`chat` 不会因此自动重发。
+
+恢复字段取决于正在运行的服务端。较早的服务端也会在 `send-unconfirmed` 的 `error.details` 返回编号，但在发送首问时抛出异常只返回原错误。若回执没有编号或整个回包丢失，先列出近期会话，再查候选会话的历史。仅凭时间不能确认是哪次派工，再次运行 `new` 可能重复创建会话。
 
 ## 较长任务使用监督分工
 

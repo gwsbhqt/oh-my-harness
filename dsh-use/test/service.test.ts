@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { RemoteService, type Deps, type RestartRecoveryResult, type SessionSummaryWire, type MonitorStartRequest } from '../src/service.ts'
 import { runCommand } from '../src/commands.ts'
 import { createCli, parseCommand, spawnDetachedCli, type AppControl } from '../src/cli/core.ts'
-import { CommandFailure, FirstMessageSendUncertain, UsageError } from '../src/gateway.ts'
+import { CommandFailure, DispatchError, UsageError } from '../src/gateway.ts'
 import { startServer } from '../src/server.ts'
 import { COMMANDS } from '../src/commands.ts'
 import { fromShared, type UsageReportLike, type ModelTiersLike, type SharedVerdict, type SharedTier, type PickResult } from '../src/models.ts'
@@ -1209,7 +1209,7 @@ test('new：首问抛错时保留原错误、会话和请求编号，且只建�
     watchDone: async () => { watched = true; return { id: 'watch-example', path: 'watch-example.json' } },
   })
   await assert.rejects(run(s, 'new', ['repo-a', '核对文件清单'], { notify: 'bbbb2222' }), (error) => {
-    assert.ok(error instanceof FirstMessageSendUncertain)
+    assert.ok(error instanceof DispatchError)
     assert.equal(error.cause, cause)
     const prompt = fake.calls.find((call) => call.endpoint === 'session/prompt')!.args.request as { requestId: string }
     assert.match(prompt.requestId, /^[0-9a-f-]{36}$/)
@@ -1517,6 +1517,69 @@ test('send 复用运行保护、额度放行；宿主未确认接收时不冒称
 
 
 
+test('send：session/prompt 内层抛错时保留已知 sessionId/since/requestId，原错误与 500/1、400/2 不变，不重发', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-use-send-inner-throw-'))
+  const socketPath = join(root, 'dsh.sock')
+  const env = { DSH_HOME: root, DSH_USE_SOCKET: socketPath }
+  const fake = makeFake()
+  const reset = Object.assign(new Error('连接被重置'), { code: 'remote-reset', details: { transport: 'reset' } })
+  const conflict = new UsageError('会话设置冲突', 'session-setting-conflict', { retryAfter: [5] })
+  let failure: Error = reset
+  fake.replies = { get 'session/prompt'() { throw failure } }
+  const s = service(fake)
+  const server = await startServer({ socketPath, commands: () => COMMANDS, info: () => ({}), log: () => {}, run: (command, args, options, signal) => runCommand(s, command, args, options, signal) })
+  const args = ['send', 'aaaa1111', '继续推进']
+  const promptCalls = () => fake.calls.filter((call) => call.endpoint === 'session/prompt')
+  try {
+    for (const [cause, status, exitCode] of [[reset, 500, 1], [conflict, 400, 2]] as const) {
+      failure = cause
+      const before = promptCalls().length
+      const httpStatus = await new Promise<number | undefined>((resolve, reject) => {
+        const req = request({ socketPath, path: '/v1/run', method: 'POST', agent: false }, (res) => { res.resume(); resolve(res.statusCode) })
+        req.on('error', reject)
+        req.end(JSON.stringify({ command: 'send', args: ['aaaa1111', '继续推进'], options: {} }))
+      })
+      assert.equal(httpStatus, status)
+      const json = await invokeCli([...args, '--json'], env)
+      assert.equal(json.code, exitCode)
+      const payload = JSON.parse(json.out)
+      assert.equal(payload.ok, false)
+      assert.deepEqual(payload.error, { code: cause.code, message: cause.message, details: cause.details })
+      const prompt = promptCalls().at(-1)!.args.request as { requestId: string; sessionId: string }
+      assert.equal(prompt.sessionId, 'session-aaaa1111-0000')
+      assert.deepEqual(payload.data, { sessionId: 'session-aaaa1111-0000', since: payload.data.since, requestId: prompt.requestId, sent: null })
+      assert.equal(typeof payload.data.since, 'number')
+      assert.equal(Object.hasOwn(payload.data, 'created'), false)
+      const plain = await invokeCli(args, env)
+      assert.equal(plain.code, exitCode)
+      assert.ok(plain.err.includes(cause.message))
+      const plainPrompt = promptCalls().at(-1)!.args.request as { requestId: string }
+      assert.ok(plain.out.includes('dsh-use status session-aaaa1111-0000'))
+      assert.ok(plain.out.includes(plainPrompt.requestId))
+      assert.equal(promptCalls().length - before, 3)
+    }
+    // chat：send 阶段抛错应直接失败、不进入等待、不重发（同一次输入只 1 次 session/prompt）
+    failure = reset
+    const beforeChat = promptCalls().length
+    const chatJson = await invokeCli(['chat', 'aaaa1111', '继续推进', '--timeout', '3', '--json'], env)
+    assert.equal(chatJson.code, 1)
+    assert.equal(JSON.parse(chatJson.out).error.code, 'remote-reset')
+    assert.equal(promptCalls().length - beforeChat, 1)
+    // accepted:false 保持既有四字段
+    fake.replies = { 'session/prompt': { accepted: false } }
+    const unconfirmed = await invokeCli([...args, '--json'], env)
+    assert.equal(unconfirmed.code, 1)
+    const up = JSON.parse(unconfirmed.out)
+    assert.equal(up.error.code, 'send-unconfirmed')
+    assert.deepEqual(Object.keys(up.error.details).sort(), ['requestId', 'sent', 'sessionId', 'since'])
+    assert.equal(up.error.details.sent, null)
+    assert.equal(up.error.details.sessionId, 'session-aaaa1111-0000')
+  } finally {
+    await server.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('旧运行中插件不能靠新入口握手放行 send/chat/wait；无正文请求发送', async () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-use-old-protocol-'))
   const socketPath = join(root, 'old.sock')
@@ -1559,6 +1622,65 @@ test('wait 途中通信口连接被断开（DSH 重启时）：重连接着等�
     assert.equal(JSON.parse(r.out).status, 'ok')
     assert.equal(posts, 2)
   } finally { server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }) }
+})
+
+test('new 建会话后准备失败，按原错误分类，首问仍未发送', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-use-new-setup-'))
+  const socketPath = join(root, 'dsh.sock')
+  const env = { DSH_HOME: root, DSH_USE_SOCKET: socketPath }
+  const id = 'session-eeee5555-0000'
+  const fake = makeFake()
+  const s = service(fake)
+  const server = await startServer({ socketPath, commands: () => COMMANDS, info: () => ({}), log: () => {}, run: (command, args, options, signal) => runCommand(s, command, args, options, signal) })
+  const args = ['new', 'repo-a', '核对文件清单', '--model', 'codex/gpt-6.1-sol']
+  const usage = new UsageError('宿主拒绝选择模型', 'route-refused', { available: [] })
+  const reset = Object.assign(new Error('会话读取中断'), { code: 'read-interrupted' })
+  try {
+    fake.replies = { get 'session/selectModel'() { throw usage } }
+    const route = await invokeCli([...args, '--json'], env)
+    assert.equal(route.code, 2)
+    assert.deepEqual(JSON.parse(route.out).error, { code: usage.code, message: usage.message, details: usage.details })
+    assert.deepEqual(JSON.parse(route.out).data, { created: true, sessionId: id, sent: false })
+    const plain = await invokeCli(args, env)
+    assert.equal(plain.code, 2)
+    assert.ok(plain.out.includes(`dsh-use status ${id}`))
+
+    fake.replies = {}
+    Object.defineProperty(fake.events, id, { get() { throw reset } })
+    for (const message of [[], ['核对文件清单']]) {
+      const history = await invokeCli(['new', 'repo-a', ...message, '--model', 'codex/gpt-6.1-sol', '--json'], env)
+      assert.equal(history.code, 1)
+      assert.deepEqual(JSON.parse(history.out).error, { code: reset.code, message: reset.message })
+      assert.deepEqual(JSON.parse(history.out).data, { created: true, sessionId: id, sent: false })
+    }
+
+    const privateValue = { note: 'fictional-host-value' }
+    const invalidIds = [undefined, null, '', 'undefined', 'null', '   ', privateValue.note, `session-${privateValue.note.repeat(10)}`, privateValue]
+    for (const invalid of invalidIds) {
+      fake.replies = { 'session/create': { sessionId: invalid } }
+      const r = await invokeCli([...args, '--json'], env)
+      assert.equal(r.code, 1)
+      const payload = JSON.parse(r.out)
+      assert.equal(payload.error.code, 'session-id-invalid')
+      assert.deepEqual(payload.data, { created: null, sent: false })
+      assert.ok(!r.out.includes(privateValue.note))
+    }
+    const invalidPlain = await invokeCli(args, env)
+    assert.equal(invalidPlain.code, 1)
+    assert.match(invalidPlain.out, /dsh-use sessions --include-blank/)
+    assert.ok(!(invalidPlain.out + invalidPlain.err).includes(privateValue.note))
+
+    fake.replies = { get 'session/create'() { throw reset } }
+    const creation = await invokeCli([...args, '--json'], env)
+    assert.equal(creation.code, 1)
+    assert.deepEqual(JSON.parse(creation.out).error, { code: reset.code, message: reset.message })
+    assert.equal(JSON.parse(creation.out).data, undefined)
+    assert.equal(fake.calls.filter((call) => call.endpoint === 'session/prompt').length, 0)
+    assert.equal(fake.calls.filter((call) => call.endpoint === 'session/create').length, invalidIds.length + 6)
+  } finally {
+    await server.close()
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('new：首问异常的 HTTP 分类、终端提示与 JSON 恢复信息', async () => {
