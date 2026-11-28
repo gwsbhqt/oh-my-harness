@@ -124,6 +124,41 @@ if cmd == "send-message":
             convs[cid]["state"]["updateTime"] = "2026-01-01T00:00:06Z"
             convs_file.write_text(json.dumps(convs), encoding="utf-8")
             tfile.write_text("\n".join(json.dumps(s) for s in steps) + "\n", encoding="utf-8")
+        elif mode == "done_then_low_system":
+            steps.append({"step_index": next_idx, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE",
+                          "content": wrapped})
+            steps.append({"step_index": next_idx + 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                          "model": "demo-model", "content": "ECHO:" + content})
+            notice = wrapped.replace(content, "LATER_NOTICE").replace("sender=peer", "sender=system").replace("MESSAGE_PRIORITY_HIGH", "MESSAGE_PRIORITY_LOW")
+            steps.append({"step_index": next_idx + 2, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE", "content": notice})
+            steps.append({"step_index": next_idx + 3, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                          "model": "demo-model", "content": "OTHER_REPLY"})
+            convs[cid]["state"]["runState"] = "RUN_STATE_IDLE"
+            convs_file.write_text(json.dumps(convs), encoding="utf-8")
+            tfile.write_text("\n".join(json.dumps(s) for s in steps) + "\n", encoding="utf-8")
+        elif mode in ("system_low_notice", "system_low_work_reminder", "peer_low_next_request", "system_high_next_request", "unknown_low_next_request"):
+            steps.append({"step_index": next_idx, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE",
+                          "created_at": "2026-01-01T00:00:05Z", "content": wrapped})
+            notice = wrapped.replace(content, "NOTICE_OR_NEXT_TASK")
+            if mode in ("system_low_notice", "system_low_work_reminder"):
+                notice = notice.replace("sender=peer", "sender=system").replace("MESSAGE_PRIORITY_HIGH", "MESSAGE_PRIORITY_LOW")
+            elif mode == "peer_low_next_request":
+                notice = notice.replace("MESSAGE_PRIORITY_HIGH", "MESSAGE_PRIORITY_LOW")
+            elif mode == "system_high_next_request":
+                notice = notice.replace("sender=peer", "sender=system")
+            else:
+                notice = notice.replace("sender=peer", "sender=unknown").replace("MESSAGE_PRIORITY_HIGH", "MESSAGE_PRIORITY_LOW")
+            steps.append({"step_index": next_idx + 1, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE",
+                          "created_at": "2026-01-01T00:00:06Z", "content": notice})
+            steps.append({"step_index": next_idx + 2, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "IN_PROGRESS",
+                          "created_at": "2026-01-01T00:00:07Z", "model": "demo-model", "content": "WORKING"})
+            final_text = "LATER_REPLY" if mode in ("system_low_notice", "system_low_work_reminder") else "NEXT_ANSWER"
+            steps.append({"step_index": next_idx + 3, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                          "created_at": "2026-01-01T00:00:08Z", "model": "demo-model", "content": final_text})
+            convs[cid]["state"]["runState"] = "RUN_STATE_IDLE"
+            convs[cid]["state"]["updateTime"] = "2026-01-01T00:00:08Z"
+            convs_file.write_text(json.dumps(convs), encoding="utf-8")
+            tfile.write_text("\n".join(json.dumps(s) for s in steps) + "\n", encoding="utf-8")
         elif mode == "empty_reply":
             steps.append({"step_index": next_idx, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE",
                           "created_at": "2026-01-01T00:00:05Z", "content": wrapped})
@@ -957,6 +992,45 @@ class AppBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(dup["error_code"], "ambiguous-reply")
         self.assertEqual(dup["matching_receipt_steps"], [2, 3])
         self.assertEqual(len(self._agentapi_calls()), 1)
+
+    async def test_wait_returns_final_reply_before_later_low_priority_boundary(self) -> None:
+        self.seed_conversations()
+        (self.state_dir / "agentapi_calls.jsonl").unlink(missing_ok=True)
+        sock = await self._start_bridge_with_new_socket("done_then_low_system")
+        result = await agy_use.send(
+            "11112222-bbbb-0000-0000-000000000002", "ROOT_TASK", wait=True,
+            timeout=0.5, poll_interval=0.05, socket_path=sock,
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["response"], "ECHO:ROOT_TASK")
+        self.assertEqual(result["reply_step_index"], result["receipt_step_index"] + 1)
+        self.assertNotEqual(result["response"], "OTHER_REPLY")
+        self.assertEqual(len(self._agentapi_calls()), 1)
+
+    async def test_wait_marks_low_priority_system_boundaries_ambiguous(self) -> None:
+        target = "11112222-bbbb-0000-0000-000000000002"
+        for mode in ("system_low_notice", "system_low_work_reminder", "peer_low_next_request", "system_high_next_request", "unknown_low_next_request"):
+            with self.subTest(mode=mode):
+                self.seed_conversations()
+                (self.state_dir / "agentapi_calls.jsonl").unlink(missing_ok=True)
+                sock = await self._start_bridge_with_new_socket(mode)
+                result = await agy_use.send(
+                    target, "ROOT_TASK", wait=True, timeout=0.5, poll_interval=0.05, socket_path=sock,
+                )
+                self.assertEqual(len(self._agentapi_calls()), 1)
+                if mode in ("system_low_notice", "system_low_work_reminder"):
+                    self.assertFalse(result["ok"], result)
+                    self.assertEqual(result["status"], "ambiguous")
+                    self.assertEqual(result["error_code"], "ambiguous-reply")
+                    self.assertEqual(result["ambiguous_step_index"], result["receipt_step_index"] + 1)
+                    self.assertTrue(result["receipt_confirmed"])
+                    self.assertNotIn("response", result)
+                else:
+                    self.assertFalse(result["ok"], result)
+                    self.assertEqual(result["status"], "unanswered")
+                    self.assertEqual(result["error_code"], "no-final-response")
+                    self.assertTrue(result["receipt_confirmed"])
+                    self.assertNotIn("response", result)
 
     async def test_inbox_reply_survives_background_progress_and_requires_matching_ack(self) -> None:
         target = "11112222-bbbb-0000-0000-000000000002"

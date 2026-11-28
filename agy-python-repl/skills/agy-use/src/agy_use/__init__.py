@@ -12,6 +12,7 @@ from ._client import (
     has_truncated_fields,
     is_final_planner_response,
     is_input_or_receipt_step,
+    is_low_priority_system_message,
     last_model_response,
     last_turn_segment,
     normalize_conversation,
@@ -489,9 +490,14 @@ async def wait(
                     receipt_idx = match_idx
                     segment: list[dict[str, Any]] = []
                     bounded_by_next_input = False
+                    ambiguous_idx: int | None = None
                     for s in new_steps:
                         idx = s.get("step_index")
                         if isinstance(idx, int) and idx > receipt_idx:
+                            if is_low_priority_system_message(s):
+                                ambiguous_idx = idx
+                                bounded_by_next_input = True
+                                break
                             if is_input_or_receipt_step(s, exact_id):
                                 bounded_by_next_input = True
                                 break
@@ -503,6 +509,17 @@ async def wait(
                     finals = [s for s in segment if is_final_planner_response(s)]
                     non_empty = [s for s in finals if step_text(s).strip()]
                     diag_seg = diagnose_turn(segment, last_run_state, has_receipt=True)
+                    if ambiguous_idx is not None and diag_seg["classification"] not in (
+                        "completed", "empty_response", "transport_error", "step_error", "user_cancelled"
+                    ):
+                        ambiguous = _unanswered_payload(segment)
+                        ambiguous.update({
+                            "status": "ambiguous",
+                            "error_code": "ambiguous-reply",
+                            "error": "相邻低优先级系统消息可能是通知或新任务，无法归属后续答复；请读取原会话并逐单核实产物。",
+                            "ambiguous_step_index": ambiguous_idx,
+                        })
+                        return ambiguous
                     if last_run_state == "RUN_STATE_IDLE":
                         if diag_seg["classification"] == "completed" and non_empty:
                             reply_step = non_empty[-1]

@@ -13,6 +13,7 @@ from typing import Any
 _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 _SYSTEM_MSG_BLOCK_RE = re.compile(r"(?:^|\n)<SYSTEM_MESSAGE>\n(.*)\n</SYSTEM_MESSAGE>\s*\Z", re.DOTALL)
 _SYSTEM_MSG_HEADER_RE = re.compile(r"\[Message\][^\n]*?\bsender=(\S+)[^\n]*?\bcontent=(.*)", re.DOTALL)
+_SYSTEM_MSG_PRIORITY_RE = re.compile(r"(?:^|\s)priority=(\S+)")
 _USER_REQUEST_BLOCK_RE = re.compile(r"<USER_REQUEST>\s*\n?(.*?)\n?</USER_REQUEST>", re.DOTALL)
 
 
@@ -292,7 +293,8 @@ def extract_receipt_body(step: dict[str, Any], conversation_id: str, *, allow_us
     raw = step_text(step).replace("\r\n", "\n")
     if kind == "SYSTEM_MESSAGE" and step.get("source", "SYSTEM") == "SYSTEM":
         block = _SYSTEM_MSG_BLOCK_RE.search(raw)
-        header = _SYSTEM_MSG_HEADER_RE.fullmatch(block.group(1) if block else raw)
+        header_text = block.group(1) if block else raw
+        header = _SYSTEM_MSG_HEADER_RE.fullmatch(header_text)
         if header:
             sender, body = header.groups()
             # The App posts this conversation's background tool completions into the same inbox.
@@ -303,6 +305,20 @@ def extract_receipt_body(step: dict[str, Any], conversation_id: str, *, allow_us
         block = _USER_REQUEST_BLOCK_RE.search(raw)
         return block.group(1) if block else raw
     return None
+
+
+def is_low_priority_system_message(step: dict[str, Any]) -> bool:
+    if step.get("type") != "SYSTEM_MESSAGE" or step.get("source", "SYSTEM") != "SYSTEM":
+        return False
+    raw = step_text(step).replace("\r\n", "\n")
+    block = _SYSTEM_MSG_BLOCK_RE.search(raw)
+    header_text = block.group(1) if block else raw
+    header = _SYSTEM_MSG_HEADER_RE.fullmatch(header_text)
+    if not header:
+        return False
+    sender, _ = header.groups()
+    priority = _SYSTEM_MSG_PRIORITY_RE.search(header_text[:header.start(2)])
+    return sender == "system" and priority is not None and priority.group(1) == "MESSAGE_PRIORITY_LOW"
 
 
 def receipt_matches(step: dict[str, Any], expected_prompt: str, conversation_id: str, *, allow_user_input: bool = False) -> bool:

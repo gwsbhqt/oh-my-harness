@@ -34,6 +34,8 @@ reply = await skills.agy_use.wait(
 
 `send` 先核对当前桌面会话并保存发送前的步号。启用等待后，它按收件正文找到这一条消息，再读取同一轮的最终答复；若只需严格确认对方已收件、不等本轮结束，使用只等收件确认选项（只返回确认标志、步骤索引和必要错误/状态字段，不输出事件或对话资料）。若先发送、稍后再等，请保留回执中的会话编号、`since_step` 和 `prompt`。
 
+`since_step` 是**发送前基线**，不是观测到的 `receipt_step_index`；按正文匹配时，收件步必须严格大于基线。跨宿主派工稍后复核时，要同时使用原回执的 `since_step` 与 `prompt`（作为 `expected_prompt`），不能省略正文后逐个尝试相邻步号来猜归属。不带 `expected_prompt` 的步号查询会在下一条输入或系统收件处保守截断；其 `unanswered` 不是“原单没有最终答复”的充分证据。 对结构化 `sender=system` 与 `MESSAGE_PRIORITY_LOW` 的相邻消息，公开契约不能区分普通通知与合法低优工作提醒：只有边界前没有明确完成或其他确定终态时，精确续等才返回 `ambiguous-reply`；若边界前已有明确 DONE，仍返回前面的原答复，绝不采用 LOW 后的别单答复。
+
 ```python
 sent = await skills.agy_use.send("11112222", "请继续核对上一轮结果。", wait=True, timeout=120)
 receipt_acked = await skills.agy_use.send("11112222", "请收件。", wait_receipt=True, timeout=20)
