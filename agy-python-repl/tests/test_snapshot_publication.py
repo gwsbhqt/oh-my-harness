@@ -16,6 +16,7 @@ import textwrap
 import unittest
 from contextlib import asynccontextmanager
 from pathlib import Path
+from uuid import uuid4
 
 import dill
 from mcp import ClientSession, StdioServerParameters
@@ -26,6 +27,7 @@ from python_repl_core.kernel_client import KernelClient
 
 
 ROOT = Path(__file__).resolve().parents[1]
+CONVERSATION = "00000000-0000-4000-8000-000000000001"
 
 
 class SnapshotPublicationTests(unittest.IsolatedAsyncioTestCase):
@@ -35,10 +37,12 @@ class SnapshotPublicationTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(temp.name).resolve()
         self.data = self.root / "data"
         self.snapshots = self.data / "snapshots"
+        self.hooks = json.loads((ROOT / "hooks.json").read_text(encoding="utf-8"))["agy-python-repl-session"]
 
     @asynccontextmanager
     async def server(self, *, watchdog_pid=None):
-        env = {"HOME": str(self.root), "PLUGIN_DATA": str(self.data), "PYTHONPATH": str(ROOT / "src"),
+        env = {"HOME": str(self.root), "PLUGIN_ROOT": str(ROOT), "PLUGIN_DATA": str(self.data),
+               "PYTHONPATH": str(ROOT / "src"),
                "PYTHONDONTWRITEBYTECODE": "1"}
         if watchdog_pid is not None:
             env["PRIME_AGENT_KERNEL_OWNER_PID"] = str(watchdog_pid)
@@ -48,34 +52,53 @@ class SnapshotPublicationTests(unittest.IsolatedAsyncioTestCase):
             await client.initialize()
             yield client
 
-    async def call(self, client, tool, **args):
+    def run_hook(self, event, payload, *, data=None):
+        group = self.hooks[event][0]
+        command = group["hooks"][0] if "hooks" in group else group
+        proc = subprocess.run(shlex.split(command["command"]), cwd=ROOT, timeout=command["timeout"], check=True,
+                              input=json.dumps(payload), capture_output=True, text=True,
+                              env={"HOME": str(self.root), "PLUGIN_ROOT": str(ROOT), "PLUGIN_DATA": str(data or self.data),
+                                   "PYTHONDONTWRITEBYTECODE": "1", "PATH": os.pathsep.join((str(Path(sys.executable).parent), os.defpath))})
+        return json.loads(proc.stdout)
+
+    async def request(self, client, tool, *, conversation=CONVERSATION, **args):
+        if tool not in ("run_code", "kernel_state"):
+            return await client.call_tool(tool, args)
+        payload = {"conversationId": conversation, "workspacePaths": [str(self.root)], "toolCall": {
+            "id": uuid4().hex, "name": f"mcp_agy-python-repl_agy-python-repl_{tool}", "args": args,
+        }}
+        registered = await asyncio.to_thread(self.run_hook, "PreToolUse", payload)
+        self.assertEqual(registered, {"decision": "allow"})
         reply = await client.call_tool(tool, args)
+        await asyncio.to_thread(self.run_hook, "PostToolUse", {**payload, "error": reply.isError})
+        return reply
+
+    async def call(self, client, tool, **args):
+        reply = await self.request(client, tool, **args)
         self.assertFalse(reply.isError, reply.content)
-        self.assertEqual(json.loads(reply.content[0].text), reply.structuredContent)
+        if tool in ("app_kernel_action", "app_kernel_overview"):
+            self.assertEqual(json.loads(reply.content[0].text), reply.structuredContent)
         return reply.structuredContent
 
-    async def cell(self, client, code, kernel="default"):
-        result = await self.call(client, "run_code", kernel=kernel, code=code)
+    async def cell(self, client, code, conversation=CONVERSATION):
+        result = await self.call(client, "run_code", conversation=conversation, code=code)
         self.assertEqual(result["status"], "ok", result)
         return result
 
-    def hook(self, kernel, *, data=None):
-        config = json.loads((ROOT / "hooks.json").read_text())["agy-python-repl-session"]["SessionStart"][0]
-        proc = subprocess.run(shlex.split(config["command"]), cwd=ROOT, timeout=config["timeout"], check=True,
-                              input=json.dumps({"conversationId": kernel}), capture_output=True, text=True,
-                              env={"HOME": str(self.root), "PLUGIN_DATA": str(data if data is not None else self.data),
-                                   "PYTHONDONTWRITEBYTECODE": "1", "PATH": os.pathsep.join((str(Path(sys.executable).parent), os.defpath))})
-        return " ".join(step["systemMessage"]["systemMessage"] for step in json.loads(proc.stdout).get("injectSteps", []))
+    def hook(self, conversation=CONVERSATION, *, data=None):
+        result = self.run_hook("SessionStart", {"conversationId": conversation, "workspacePaths": [str(self.root)]}, data=data)
+        return " ".join(step["systemMessage"]["systemMessage"] for step in result.get("injectSteps", []))
 
     def fail_publication(self):
         # Deny just the final publish on each layout. Encoding and writes to private temps still succeed.
+        manifest = self.snapshots / f"{CONVERSATION}.manifest.json"
         install = textwrap.dedent(f"""\
             import os
             from pathlib import Path
             replace = os.replace
             def fault(src, dst, *args, **kwargs):
                 target = Path(dst)
-                if (target == Path({str(self.snapshots / 'default.manifest.json')!r}) and not Path(src).is_symlink()
+                if (target == Path({str(manifest)!r}) and not Path(src).is_symlink()
                     or target.name == 'current' and Path(src).is_symlink() and len(os.readlink(src)) == 32):
                     raise OSError('fixture refused publication')
                 return replace(src, dst, *args, **kwargs)
@@ -89,6 +112,7 @@ class SnapshotPublicationTests(unittest.IsolatedAsyncioTestCase):
         async with self.server() as writer:
             await self.cell(writer, "first, second = 7, 11")
             state = await self.call(writer, "kernel_state", action="snapshot")
+        self.assertEqual(state["kernel"], CONVERSATION)
         payload = Path(state["snapshot_path"])
         for directory in (payload.parent, payload.resolve(strict=True).parent):
             with self.subTest(directory=directory.name), tempfile.TemporaryDirectory(dir=self.root) as fresh:
@@ -97,10 +121,10 @@ class SnapshotPublicationTests(unittest.IsolatedAsyncioTestCase):
                 fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
                 try:
                     fcntl.flock(fd, fcntl.LOCK_EX)
-                    self.assertEqual(self.hook("default", data=data), guidance)
+                    self.assertEqual(self.hook(data=data), guidance)
                 finally:
                     os.close(fd)
-        self.assertIn("first, second", self.hook("default"))
+        self.assertIn("first, second", self.hook())
         async with self.server() as reader:
             restored = await self.cell(reader, "(first, second)")
             self.assertEqual(restored["result"], "(7, 11)")
@@ -157,7 +181,7 @@ class SnapshotPublicationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(path.is_symlink() or manifest.is_symlink())
         replacement = path.read_bytes(), manifest.read_bytes()
         self.assertNotEqual(replacement[0], previous[0])
-        self.assertNotIn("snapshot ready", self.hook("default"))
+        self.assertNotIn("snapshot ready", self.hook())
         async with self.server() as reader:
             probe = await self.cell(reader, "'counter' in globals()")
             self.assertEqual(probe["result"], "False")
@@ -183,7 +207,7 @@ class SnapshotPublicationTests(unittest.IsolatedAsyncioTestCase):
             os.kill(host_pid, signal.SIGKILL)
             async with asyncio.timeout(10):
                 while True:
-                    response = await next_host.call_tool("run_code", {"code": "'counter' in globals()"})
+                    response = await self.request(next_host, "run_code", code="'counter' in globals()")
                     if not response.isError:
                         break
                     self.assertIn("in use", response.content[0].text.lower())
@@ -198,8 +222,8 @@ class SnapshotPublicationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("fixture refused publication", failed["snapshot_error"])
         async with self.server() as reader:
             names = await self.call(reader, "kernel_state", action="list")
-            self.assertNotIn("default", names["saved_snapshots"])
-            self.assertNotIn("snapshot ready", self.hook("default"))
+            self.assertNotIn(CONVERSATION, names["saved_snapshots"])
+            self.assertNotIn("snapshot ready", self.hook())
             restored = await self.cell(reader, "'unpublished' in globals()")
             self.assertEqual(restored["result"], "False")
             self.assertNotIn("restored", restored)
@@ -208,7 +232,7 @@ class SnapshotPublicationTests(unittest.IsolatedAsyncioTestCase):
         name = "Quarter Report"
         async with self.server() as writer:
             await self.cell(writer, "quarter_total = 73", name)
-            receipt = await self.call(writer, "kernel_state", kernel=name, action="snapshot")
+            receipt = await self.call(writer, "kernel_state", conversation=name, action="snapshot")
             payload = Path(receipt["snapshot_path"])
             before = payload.read_bytes()
             manifest = payload.with_suffix(".manifest.json")
@@ -219,7 +243,7 @@ class SnapshotPublicationTests(unittest.IsolatedAsyncioTestCase):
         manifest.resolve(strict=True).unlink()
         self.assertNotIn("snapshot ready", self.hook(name))
         async with self.server() as reader:
-            listing = await self.call(reader, "kernel_state", action="list")
+            listing = await self.call(reader, "kernel_state", conversation=name, action="list")
             self.assertIn(name, listing["saved_snapshots"])
             overview = await self.call(reader, "app_kernel_overview")
             self.assertIn(name, {row["name"] for row in overview["kernels"]})
@@ -228,7 +252,7 @@ class SnapshotPublicationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(probe["restored"]["status"], "error")
             self.assertIn("snapshot_warning", probe)
             for action in ("snapshot", "restore"):
-                state = await self.call(reader, "kernel_state", action=action, kernel=name)
+                state = await self.call(reader, "kernel_state", action=action, conversation=name)
                 self.assertEqual(state["status"], "error", state)
             self.assertEqual(payload.read_bytes(), before)
             await self.cell(reader, "neighbor = 4", "another")
@@ -251,7 +275,7 @@ class SnapshotPublicationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("legacy_name_warning", report)
             self.assertTrue(payload.is_file())
         async with self.server() as successor:
-            explicit = await self.call(successor, "kernel_state", kernel="scope__history", action="restore")
+            explicit = await self.call(successor, "kernel_state", conversation="scope__history", action="restore")
             self.assertEqual((explicit["status"], explicit["restored"]), ("ok", ["dsh_user_old"]))
             self.assertEqual(Path(explicit["snapshot_path"]), payload)
 
@@ -262,7 +286,7 @@ class SnapshotPublicationTests(unittest.IsolatedAsyncioTestCase):
         async with self.server() as client:
             async def restore_north():
                 for _ in range(6):
-                    result = await self.call(client, "kernel_state", kernel="north", action="restore")
+                    result = await self.call(client, "kernel_state", conversation="north", action="restore")
                     self.assertEqual((result["status"], result["restored"]), ("ok", ["region"]))
 
             async def save_south():
@@ -272,7 +296,7 @@ class SnapshotPublicationTests(unittest.IsolatedAsyncioTestCase):
 
             async def reset_west():
                 for i in range(6):
-                    await self.call(client, "kernel_state", kernel="west", action="reset")
+                    await self.call(client, "kernel_state", conversation="west", action="reset")
                     clean = await self.cell(client, "'previous' in globals()", "west")
                     self.assertEqual(clean["result"], "False")
                     await self.cell(client, f"previous = {i}", "west")

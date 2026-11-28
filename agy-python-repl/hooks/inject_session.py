@@ -1,66 +1,101 @@
 #!/usr/bin/env python3
-"""Bind this plugin's calls to the current Antigravity conversation and workspace."""
+"""Bind this plugin's calls to the current Antigravity conversation and workspace via side-channel routing."""
 
 from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from agy_python_repl.session_routing import (  # noqa: E402
+    SessionRoutingError,
+    consume_routing_alerts,
+    data_dir_from_env,
+    discard_conversation_calls,
+    enqueue_call,
+    extract_repl_call,
+    record_workspace,
+    require_conversation_id,
+    resolve_workspace,
+    verify_post_tool_execution,
+)
 
 
-SERVER_NAME = "agy-python-repl_agy-python-repl"
-SCOPED_TOOLS = ("run_code", "kernel_state")
-DIRECT_NAMES = {f"mcp_{SERVER_NAME}_{name}" for name in SCOPED_TOOLS}
+def _handle_pre_tool_use(payload: dict) -> dict:
+    try:
+        extracted = extract_repl_call(payload)
+        if extracted is None:
+            return {"decision": "allow"}
+        tool_name, args, _deferred, call_id = extracted
+        conv_id = require_conversation_id(payload.get("conversationId"))
+        data_dir = data_dir_from_env()
+        work_dir = resolve_workspace(payload)
+        record_workspace(data_dir, conv_id, work_dir)
+        if enqueue_call(data_dir, tool_name, args, conv_id, call_id, workspace=work_dir):
+            return {"decision": "allow"}
+        return {
+            "decision": "deny",
+            "reason": "The same Python REPL arguments still have a pending route. "
+                      "Wait for its conversation to finish or cancel the pending call.",
+        }
+    except SessionRoutingError as exc:
+        return {"decision": "deny", "reason": str(exc)}
+    except (OSError, ValueError, OverflowError, RuntimeError):
+        return {
+            "decision": "deny",
+            "reason": "The Python REPL could not register this conversation in the plugin data directory.",
+        }
 
 
-def _scope_kernel(raw_kernel: object, conv_id: str) -> str:
-    kernel = raw_kernel if isinstance(raw_kernel, str) and raw_kernel.strip() else "default"
-    if kernel in ("default", conv_id):
-        return conv_id
-    if kernel.startswith(f"{conv_id}:"):
-        return kernel
-    if kernel.startswith(f"{conv_id}__"):
-        return f"{conv_id}:{kernel.removeprefix(f'{conv_id}__')}"
-    return f"{conv_id}:{kernel}"
+def _handle_post_tool_use(payload: dict) -> None:
+    try:
+        extracted = extract_repl_call(payload)
+        if extracted is None:
+            return
+        tool_name, args, _deferred, call_id = extracted
+        conv_id = require_conversation_id(payload.get("conversationId"))
+        verify_post_tool_execution(
+            data_dir_from_env(),
+            tool_name,
+            args,
+            conv_id=conv_id,
+            tool_call_id=call_id,
+            had_error=bool(payload.get("error")),
+        )
+    except (OSError, SessionRoutingError):
+        pass
 
 
-def _resolve_workspace(payload: dict) -> str | None:
-    paths = payload.get("workspacePaths")
-    if isinstance(paths, list) and paths and isinstance(paths[0], str) and paths[0]:
-        return paths[0]
-    cwd = payload.get("cwd")
-    if isinstance(cwd, str) and cwd:
-        return cwd
-    return None
-
-
-def _overwrite(payload: dict) -> dict:
+def _handle_post_invocation(payload: dict) -> dict:
     conv_id = payload.get("conversationId")
-    call = payload.get("toolCall")
-    if not isinstance(conv_id, str) or not conv_id or not isinstance(call, dict):
+    if not isinstance(conv_id, str) or not conv_id:
         return {}
+    data_dir = data_dir_from_env()
+    try:
+        alerts = consume_routing_alerts(data_dir, conv_id)
+    except (OSError, SessionRoutingError):
+        return {}
+    if not alerts:
+        return {}
+    return {
+        "injectSteps": [{"systemMessage": {"systemMessage": msg}} for msg in alerts],
+        "terminationBehavior": "force_continue",
+    }
 
-    tool_name = call.get("name")
-    args = call.get("args", {})
-    if not isinstance(tool_name, str) or not isinstance(args, dict):
-        return {}
-    deferred = tool_name == "call_mcp_tool"
-    if deferred:
-        if args.get("ServerName") != SERVER_NAME or args.get("ToolName") not in SCOPED_TOOLS:
-            return {}
-        args = args.get("Arguments", {})
-        if not isinstance(args, dict):
-            return {}
-    elif tool_name not in DIRECT_NAMES:
-        return {}
 
-    updates = {"kernel": _scope_kernel(args.get("kernel"), conv_id)}
-    work_dir = _resolve_workspace(payload)
-    if work_dir and not args.get("cwd"):
-        updates["cwd"] = work_dir
-    if deferred:
-        # AGY shallow-merges the outer call. Keep the arguments that the model supplied.
-        return {"Arguments": {**args, **updates}}
-    return updates
+def _handle_conversation_cleanup(payload: dict) -> None:
+    if payload.get("fullyIdle") is not True:
+        return
+    conv_id = payload.get("conversationId")
+    if not isinstance(conv_id, str) or not conv_id:
+        return
+    try:
+        discard_conversation_calls(data_dir_from_env(), conv_id)
+    except (OSError, SessionRoutingError):
+        pass
 
 
 def main() -> None:
@@ -68,11 +103,28 @@ def main() -> None:
         payload = json.load(sys.stdin)
     except ValueError:
         payload = None
-    result: dict[str, object] = {"decision": "allow"}
+
+    if "--post-tool-use" in sys.argv[1:]:
+        if isinstance(payload, dict):
+            _handle_post_tool_use(payload)
+        print("{}")
+        return
+
+    if "--post-invocation" in sys.argv[1:]:
+        out = _handle_post_invocation(payload) if isinstance(payload, dict) else {}
+        print(json.dumps(out))
+        return
+
+    if "--sweep-conversation" in sys.argv[1:]:
+        if isinstance(payload, dict):
+            _handle_conversation_cleanup(payload)
+        print("{}")
+        return
+
     if isinstance(payload, dict):
-        overwrite = _overwrite(payload)
-        if overwrite:
-            result["overwrite"] = overwrite
+        result = _handle_pre_tool_use(payload)
+    else:
+        result = {"decision": "deny", "reason": "The Python REPL hook received an unreadable tool invocation."}
     print(json.dumps(result))
 
 

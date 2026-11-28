@@ -12,8 +12,10 @@ import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest.mock import patch
 
 from agy_python_repl.manager import KernelManager
+from agy_python_repl.session_routing import resolve_execution_context
 
 
 class AgyPythonReplTests(unittest.IsolatedAsyncioTestCase):
@@ -142,12 +144,17 @@ class AgyPythonReplTests(unittest.IsolatedAsyncioTestCase):
     def run_hook(self, event: str, payload: dict) -> dict:
         root = Path(__file__).resolve().parents[1]
         group = json.loads((root / "hooks.json").read_text())["agy-python-repl-session"][event][0]
-        handler = group["hooks"][0] if event == "PreToolUse" else group
+        handler = group["hooks"][0] if event in ("PreToolUse", "PostToolUse") else group
         env = {**os.environ, "PLUGIN_DATA": str(self.tmp_dir / "hook_data"),
                "PATH": os.pathsep.join((str(Path(sys.executable).parent), os.defpath))}
         result = subprocess.run(shlex.split(handler["command"]), cwd=root, input=json.dumps(payload),
                                 env=env, text=True, capture_output=True, check=True, timeout=handler["timeout"])
         return json.loads(result.stdout)
+
+    def resolve_hook_call(self, tool, args):
+        data = self.tmp_dir / "hook_data"
+        with patch.dict(os.environ, {"PLUGIN_DATA": str(data)}):
+            return resolve_execution_context(data, tool, args, cwd=args.get("cwd"))
 
     def test_hook_matcher_selects_the_repl_and_deferred_dispatch(self) -> None:
         config = Path(__file__).resolve().parents[1] / "hooks.json"
@@ -169,36 +176,40 @@ class AgyPythonReplTests(unittest.IsolatedAsyncioTestCase):
                                ("kernel_state", {"action": "restart"})):
             direct = f"mcp_{server}_{tool}"
             calls = (
-                {"name": direct, "args": original},
-                {"name": "call_mcp_tool", "args": {"ServerName": server, "ToolName": tool, "Arguments": original}},
+                {"id": f"direct-{tool}", "name": direct, "args": original},
+                {
+                    "id": f"deferred-{tool}",
+                    "name": "call_mcp_tool",
+                    "args": {"ServerName": server, "ToolName": tool, "Arguments": original},
+                },
             )
             for call in calls:
                 with self.subTest(tool=tool, form=call["name"]):
                     result = self.run_hook("PreToolUse", {
                         "conversationId": "conv-abc", "workspacePaths": [workspace], "toolCall": call,
                     })
-                    updates = {"kernel": "conv-abc", "cwd": workspace}
-                    if call["name"] == "call_mcp_tool":
-                        updates = {"Arguments": {**original, **updates}}
-                    self.assertEqual(result, {"decision": "allow", "overwrite": updates})
+                    self.assertEqual(result, {"decision": "allow"})
+                    self.assertEqual(self.resolve_hook_call(tool, original)[1], Path(workspace))
+                    post = self.run_hook("PostToolUse", {
+                        "conversationId": "conv-abc", "workspacePaths": [workspace], "toolCall": call,
+                    })
+                    self.assertEqual(post, {})
 
-    def test_session_binding_preserves_scoped_kernels_and_an_explicit_workspace(self) -> None:
-        kernels = (
-            ("tables", "conv-abc:tables"),
-            ("conv-abc:tables", "conv-abc:tables"),
-            ("conv-abc__tables", "conv-abc:tables"),
-            ("conv-abc", "conv-abc"),
-        )
-        for kernel, expected in kernels:
-            with self.subTest(kernel=kernel):
+    def test_session_binding_preserves_explicit_args_without_overwrite(self) -> None:
+        for idx, cwd in enumerate(("/workspace/data", "/workspace/other")):
+            with self.subTest(cwd=cwd):
+                call = {
+                    "id": f"explicit-{idx}",
+                    "name": "mcp_agy-python-repl_agy-python-repl_run_code",
+                    "args": {"code": "2 + 2", "cwd": cwd},
+                }
                 result = self.run_hook("PreToolUse", {
-                    "conversationId": "conv-abc", "cwd": "/workspace",
-                    "toolCall": {
-                        "name": "mcp_agy-python-repl_agy-python-repl_run_code",
-                        "args": {"code": "2 + 2", "kernel": kernel, "cwd": "/workspace/data"},
-                    },
+                    "conversationId": "conv-abc", "cwd": "/workspace", "toolCall": call,
                 })
-                self.assertEqual(result["overwrite"], {"kernel": expected})
+                self.assertEqual(result, {"decision": "allow"})
+                self.assertEqual(self.resolve_hook_call("run_code", call["args"])[1], Path(cwd))
+                self.assertEqual(self.run_hook("PostToolUse", {"conversationId": "conv-abc", "toolCall": call}), {})
+                self.assertEqual(self.run_hook("PostInvocation", {"conversationId": "conv-abc"}), {})
 
     def test_other_mcp_tools_keep_their_original_arguments(self) -> None:
         server = "agy-python-repl_agy-python-repl"
@@ -260,13 +271,14 @@ class AgyPythonReplTests(unittest.IsolatedAsyncioTestCase):
         snap_dir.mkdir(parents=True)
         (snap_dir / "conv-xyz.dill").write_bytes(b"stub")
         (snap_dir / "conv-xyz.manifest.json").write_text(
-            json.dumps({"savedNames": ["df", "records"]}), encoding="utf-8",
+            json.dumps({"savedNames": ["df", "records", "glob"]}), encoding="utf-8",
         )
         resumed = self.run_hook("SessionStart", request)
         msg = resumed["injectSteps"][0]["systemMessage"]["systemMessage"]
         self.assertIn("run_code", msg)
         self.assertIn("snapshot", msg)
         self.assertIn("df, records", msg)
+        self.assertIn("await repl.restore_binding('glob')", msg)
 
 
 if __name__ == "__main__":

@@ -39,6 +39,45 @@ class KernelPreludeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await manager.run_code("repl.vars()"))["result"], "[]")
         self.assertEqual(self.saved_names(), set())
 
+    async def test_reuses_live_paths_and_looks_up_names_without_reading_values(self) -> None:
+        manager = self.new_manager()
+        for setup in ('repo = Path("first")', 'repo = Path("project")'):
+            self.assertNotIn("reuse_hint", await manager.run_code(setup, cwd=self.workspace))
+        await manager.run_code('def case_path(name):\n    return (repo / "tests" / name).as_posix()')
+        self.assertEqual((await manager.run_code('case_path("sample")'))["result"], "'project/tests/sample'")
+        self.assertEqual((await manager.run_code('repl.vars("rep")'))["result"], "['repo']")
+        self.assertEqual((await manager.run_code('repl.vars("missing")'))["result"], "[]")
+
+        same_path = 'from pathlib import Path\nrepo = Path("project")'
+        duplicate = await manager.run_code(same_path)
+        self.assertIn("`repo`", duplicate["reuse_hint"])
+        self.assertNotIn("stdout", duplicate)
+        self.assertNotIn("reuse_hint", await manager.run_code(same_path))
+        separate = await manager.run_code(same_path, kernel="separate", cwd=self.workspace)
+        self.assertNotIn("reuse_hint", separate)
+
+    async def test_helper_lookup_displays_call_shape_without_expanding_defaults(self) -> None:
+        manager = self.new_manager()
+        await manager.run_code('def select_case(case, /, rows=list(range(2000)), *, strict=False):\n    return case')
+        await manager.run_code('def other():\n    return None')
+        found = await manager.run_code('await repl.helpers("select")')
+        self.assertEqual(found["result"], "select_case(case, /, rows=..., *, strict=False)")
+        names = await manager.run_code('[item["name"] for item in await repl.helpers()]')
+        self.assertEqual(names["result"], "['other', 'select_case']")
+
+    async def test_user_helper_matching_a_new_builtin_survives_restoration(self) -> None:
+        first = self.new_manager()
+        await first.run_code('def read(): return "custom reader"', cwd=self.workspace)
+        self.assertIn("read", self.saved_names())
+        await first.shutdown_all()
+
+        second = self.new_manager()
+        restored = await second.run_code('read(), [entry["name"] for entry in await repl.helpers("read")]')
+        self.assertEqual(restored["result"], "('custom reader', ['read'])")
+        self.assertIn("read", restored["restored"]["restored_names"])
+        self.assertEqual((await second.run_code('await repl.restore_binding("read")'))["status"], "ok")
+        self.assertNotIn("read", self.saved_names())
+
     async def test_last_result_belongs_to_a_user_expression(self) -> None:
         manager = self.new_manager()
         empty = await manager.run_code("'_' in globals()", cwd=self.workspace)

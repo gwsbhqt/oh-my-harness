@@ -14,15 +14,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 
 START_GUIDANCE = (
-    "Start reviews across source files, docs or implementations with the persistent Python REPL's run_code. "
-    "Read any required SKILL.md with read_file and use rg if required to locate paths. Then load the related "
-    "files together in one cell, limited to the paths the task calls for. "
-    "Keep paths, text and matches in variables for comparisons and follow-up checks. For citations and "
-    "line numbers use enumerate(text.splitlines(), 1) on the saved text; reread a file only if it changed, "
-    "was incomplete, or a native tool needs a read before an edit. Start data analysis, "
-    "batch reads, calculations and trusted Python skills in run_code too. Use native tools for a single "
-    "lookup, edits, images, Git, builds and tests. If run_code is deferred, read its MCP schema and use "
-    "call_mcp_tool with the listed ServerName and ToolName run_code."
+    "Continue in the persistent Python run_code workbench. Reuse earlier variables and functions. Once repo "
+    "exists, use repo / 'tests'. Only if unsure, check 'repo' in globals(). read, write, edit, bash, glob and "
+    "grep are ready to use. Save complete results and use a small final expression for the answer. Use print "
+    "for intentional multiline text. For a source review, follow any required SKILL.md read_file, then narrow "
+    "the search and keep its results for follow-up. For a count or comparison, go straight from all inputs to "
+    "the aggregate in the same cell. Keep rows, validation tables and intermediate diagnostics in variables. "
+    "Return exactly the requested values. Keep unrequested breakdowns and empty diagnostics in variables. "
+    "Pass Path objects straight to file helpers. If you need the layout, inspect column names alone. "
+    "Define repeated work once. For tests inspect exitCode "
+    "and return ok or the failing cases and errors. If run_code is deferred, call it via call_mcp_tool."
 )
 
 
@@ -46,6 +47,7 @@ def _claim_guidance(data: Path, conversation: str) -> bool:
 
 
 def _snapshot_hint(data: Path, conversation: str) -> str:
+    from agy_python_repl.builtin_tools import BUILTIN_TOOL_NAMES
     from agy_python_repl.snapshot_paths import kernel_identity, snapshot_paths
     from python_repl_core.snapshot_store import open_snapshot, read_manifest
 
@@ -67,6 +69,10 @@ def _snapshot_hint(data: Path, conversation: str) -> str:
         preview_names = ", ".join(str(n) for n in saved_names[:12])
         more = f" (+{len(saved_names) - 12} more)" if len(saved_names) > 12 else ""
         msg += f" Saved variables include {preview_names}{more}."
+        shadowed = sorted(name for name in saved_names if isinstance(name, str) and name in BUILTIN_TOOL_NAMES)
+        if shadowed:
+            msg += (f" Saved user bindings take precedence over these built-in helpers: {', '.join(shadowed)}."
+                    f" Keep an alias if needed, then use await repl.restore_binding({shadowed[0]!r}) to get that helper.")
     return msg
 
 
@@ -80,14 +86,20 @@ def main() -> None:
         print("{}")
         return
 
+    from agy_python_repl.session_routing import record_workspace, resolve_workspace
+
     starting = "--pre-invocation" not in sys.argv[1:]
     data = _data_dir()
-    hint = _snapshot_hint(data, conv_id) if starting else ""
+    try:
+        record_workspace(data, conv_id, resolve_workspace(payload))
+    except OSError:
+        pass
     try:
         first = _claim_guidance(data, conv_id)
     except OSError:
         # Without a receipt only SessionStart is known to run once.
         first = starting
+    hint = _snapshot_hint(data, conv_id) if starting or first else ""
     msg = " ".join(filter(None, (START_GUIDANCE if first else "", hint)))
     print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": msg}}]} if msg else {}))
 

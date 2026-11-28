@@ -21,7 +21,8 @@ from python_repl_core.output_budget import bound_text
 from python_repl_core.skill_discovery import SkillEntry, discover_python_skills
 from python_repl_core.snapshot_store import SnapshotPair, read_manifest, reset_snapshot, try_publish_prepared_snapshot
 
-from .bootstrap import SKILL_RETRY_MIME
+from .bootstrap import REUSE_HINT_MIME, SKILL_RETRY_MIME
+from .display import SUMMARY_BYTES, render_run_code, summarize_restored_names
 from .snapshot_paths import NAMED_DIR, flat_names, has_snapshot, kernel_identity, named_storage, snapshot_paths
 
 
@@ -48,16 +49,21 @@ _SNAPSHOT_PROTECTION_MESSAGE = (
 
 # AGY adds a hook/timestamp prefix and clips tool text around 10 KiB.
 _HOST_TEXT_BYTES = 8 * 1024
-_SUMMARY_BYTES = 4 * 1024
 
 
-def _model_text(value: Any) -> str:
-    # FastMCP renders dict returns as indented UTF-8 JSON in content[0].text.
+def _json_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
-def _model_bytes(value: Any) -> int:
-    return len(_model_text(value).encode("utf-8", errors="replace"))
+def _json_bytes(value: Any) -> int:
+    return len(_json_text(value).encode("utf-8", errors="replace"))
+
+
+def _fits_output(receipt: dict[str, Any], budget: int) -> bool:
+    return (
+        _json_bytes(receipt) <= budget
+        and len(render_run_code(receipt).encode("utf-8", errors="replace")) <= budget
+    )
 
 
 def _output_receipt(
@@ -68,13 +74,13 @@ def _output_receipt(
     ) if text is not None and (text or name == "result")}
     limits = {"stdout": max_chars, "stderr": max(4000, max_chars // 2), "result": max_chars}
     raw = metadata | channels
-    over_budget = sum(map(len, channels.values())) > _HOST_TEXT_BYTES or _model_bytes(raw) > _HOST_TEXT_BYTES
+    over_budget = sum(map(len, channels.values())) > _HOST_TEXT_BYTES or not _fits_output(raw, _HOST_TEXT_BYTES)
     if not over_budget and not any(0 < limits[name] < len(text) for name, text in channels.items()):
         return raw
 
     captures = [(name, "txt", text) for name, text in channels.items()]
-    if _model_bytes(metadata) > _SUMMARY_BYTES // 2:
-        captures.append(("details", "json", _model_text(metadata)))
+    if _json_bytes(metadata) > SUMMARY_BYTES // 2:
+        captures.append(("details", "json", _json_text(metadata)))
         metadata = metadata.copy()
         for key, value in metadata.items():
             if isinstance(value, dict):
@@ -84,6 +90,8 @@ def _output_receipt(
                     for field, item in value.items()
                     if field in {"ename", "evalue", "status", "restored", "reason"}
                 }
+                if key == "restored" and isinstance(names := value.get("restored_names"), list):
+                    metadata[key].update(summarize_restored_names(names))
             elif isinstance(value, str):
                 metadata[key] = bound_text(value, max_chars=320).text
         metadata["details_truncated"] = True
@@ -102,7 +110,7 @@ def _output_receipt(
 
     header: dict[str, Any] = {}
     if files:
-        if _model_bytes(files) <= _SUMMARY_BYTES - 1024:
+        if _json_bytes(files) <= SUMMARY_BYTES - 1024:
             header["overflow_files"] = files
         else:
             header["overflow_index"] = {"directory": str(directory), "files": [Path(f).name for f in files]}
@@ -112,16 +120,15 @@ def _output_receipt(
     header["truncated"] = True
     header["output_note"] = "Output is captured text. The kernel's display text for a result may already be truncated."
 
-    # Each trial measures one whole MCP text block, including its paths, escapes and diagnostics.
-    # Short channels stay intact while the larger previews shrink to fit around them.
-    cap = _SUMMARY_BYTES
+    # Short channels stay intact while larger previews shrink to fit both MCP representations.
+    cap = SUMMARY_BYTES
     while True:
         previews = {}
         for name, text in channels.items():
             limit = min(cap, limits[name]) if limits[name] > 0 else cap
             previews[name] = bound_text(text, max_chars=limit).text
         receipt = header | previews
-        if _model_bytes(receipt) <= _SUMMARY_BYTES or cap == 1:
+        if _fits_output(receipt, SUMMARY_BYTES) or cap == 1:
             return receipt
         cap //= 2
 
@@ -183,6 +190,7 @@ class ManagedKernel:
     last_used_at: float = field(default_factory=time.time)
     skill_report: dict[str, Any] = field(default_factory=dict)
     pending_restore_notice: dict[str, Any] | None = None
+    pending_state_loss: bool = False
     snapshot_protected: bool = False
     last_skipped_digest: bytes | None = None
 
@@ -297,6 +305,7 @@ class KernelManager:
         except BaseException:
             ownership.close()
             raise
+        managed.pending_state_loss = existing is not None and managed.pending_restore_notice is None
         self._kernels[key] = managed
         return managed
 
@@ -350,7 +359,8 @@ class KernelManager:
             f"{_BOOTSTRAP_REPORT_MIME!r}: "
             "__import__('agy_python_repl.bootstrap', fromlist=['install_antigravity_surface'])"
             f".install_antigravity_surface({[asdict(entry) for entry in entries]!r}, kernel={key!r}, "
-            f"copy_session={str(self.data_dir / 'recovery' / storage)!r})"
+            f"copy_session={str(self.data_dir / 'recovery' / storage)!r}, "
+            f"capture_dir={str(self.data_dir / 'overflow' / storage)!r})"
             "})"
         )
         client = KernelClient(
@@ -421,6 +431,9 @@ class KernelManager:
 
             status = "timeout" if res.timed_out else res.status
             out: dict[str, Any] = {"status": status}
+            if managed.pending_state_loss:
+                out["state_loss"] = "The previous kernel exited. Its live state was lost because no snapshot was restored."
+                managed.pending_state_loss = False
             if managed.snapshot_protected:
                 out["snapshot_warning"] = _SNAPSHOT_PROTECTION_MESSAGE
             elif self.auto_snapshot and not res.timed_out:
@@ -446,6 +459,11 @@ class KernelManager:
 
         if res.error is not None:
             out["error"] = res.error
+        for frame in res.displays:
+            hint = frame.get(REUSE_HINT_MIME)
+            if isinstance(hint, str) and hint.strip():
+                out["reuse_hint"] = hint
+                break
 
         out = _output_receipt(out, res, self.data_dir / "overflow" / storage, self.max_output_chars)
 
@@ -629,7 +647,10 @@ class KernelManager:
             managed = await self._ensure_kernel(key, storage, cwd=cwd)
             if action == "vars":
                 info = await managed.client.list_names()
-                return {"kernel": key, "names": info.get("names", [])}
+                names = info.get("names")
+                if info.get("status") != "ok" or not isinstance(names, list):
+                    raise KernelProtocolError(info.get("reason") or "The kernel did not confirm its variable list.")
+                return {"kernel": key, "names": names}
 
             snap_path, manifest_path = snapshot_paths(self.data_dir, storage)
             if action == "snapshot":

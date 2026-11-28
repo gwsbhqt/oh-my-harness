@@ -17,6 +17,7 @@ from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+from agy_python_repl import session_routing
 from agy_python_repl.manager import KernelManager
 
 
@@ -45,10 +46,15 @@ class ProcessOwnershipTests(unittest.IsolatedAsyncioTestCase):
             await client.initialize()
             yield client
 
-    async def call(self, client, tool, **arguments):
+    async def call(self, client, tool, *, kernel=None, **arguments):
+        if tool in ("run_code", "kernel_state") and kernel and kernel != "default":
+            session_routing.enqueue_call(self.data, tool, arguments, kernel)
+        elif kernel is not None:
+            arguments = {**arguments, "kernel": kernel}
         reply = await client.call_tool(tool, arguments)
         self.assertFalse(reply.isError, reply.content)
-        self.assertEqual(json.loads(reply.content[0].text), reply.structuredContent)
+        if tool in ("app_kernel_action", "app_kernel_overview"):
+            self.assertEqual(json.loads(reply.content[0].text), reply.structuredContent)
         return reply.structuredContent
 
     async def cell(self, client, code, name=REPORT):
@@ -56,7 +62,11 @@ class ProcessOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["status"], "ok", body)
         return body
 
-    async def busy(self, client, tool, **arguments):
+    async def busy(self, client, tool, *, kernel=None, **arguments):
+        if tool in ("run_code", "kernel_state") and kernel and kernel != "default":
+            session_routing.enqueue_call(self.data, tool, arguments, kernel)
+        elif kernel is not None:
+            arguments = {**arguments, "kernel": kernel}
         reply = await client.call_tool(tool, arguments)
         self.assertTrue(reply.isError, reply.content)
         self.assertIn("in use", reply.content[0].text.lower())
@@ -121,7 +131,9 @@ class ProcessOwnershipTests(unittest.IsolatedAsyncioTestCase):
                 os.kill(kernel_pid, signal.SIGCONT)
             async with asyncio.timeout(10):
                 while True:
-                    reply = await successor.call_tool("run_code", {"kernel":REPORT, "code":"(base, pending_sale)"})
+                    args = {"code": "(base, pending_sale)"}
+                    session_routing.enqueue_call(self.data, "run_code", args, REPORT)
+                    reply = await successor.call_tool("run_code", args)
                     if not reply.isError:
                         break
                     self.assertIn("in use", reply.content[0].text.lower())
@@ -139,7 +151,9 @@ class ProcessOwnershipTests(unittest.IsolatedAsyncioTestCase):
             os.kill(host_pid, signal.SIGKILL)
             async with asyncio.timeout(10):
                 while True:
-                    reply = await successor.call_tool("run_code", {"kernel": REPORT, "code": "confirmed"})
+                    args = {"code": "confirmed"}
+                    session_routing.enqueue_call(self.data, "run_code", args, REPORT)
+                    reply = await successor.call_tool("run_code", args)
                     if not reply.isError:
                         break
                     self.assertIn("in use", reply.content[0].text.lower())
@@ -171,7 +185,7 @@ class ProcessOwnershipTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, "bootstrap"):
             await kernel.run_code("Path('never').touch()", kernel=REPORT, cwd=self.root)
         stub.write_text("import time\nfrom pathlib import Path\n"
-                        "def install_antigravity_surface(entries, *, kernel, copy_session=None):\n    Path('booting').touch()\n    time.sleep(30)\n")
+                        "def install_antigravity_surface(entries, *, kernel, copy_session=None, capture_dir=None):\n    Path('booting').touch()\n    time.sleep(30)\n")
         good = self.root / "good"
         good.mkdir()
         opening = asyncio.create_task(kernel.run_code("Path('never').touch()", kernel=REPORT, cwd=self.root))

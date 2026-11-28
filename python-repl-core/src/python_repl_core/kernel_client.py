@@ -288,7 +288,7 @@ class KernelClient:
 
             return CellResult(
                 cell_id=req_id,
-                status=str(done_frame.get("status", "ok")),
+                status=str(done_frame.get("status") or "unknown"),
                 stdout="".join(stdout_parts),
                 stderr="".join(stderr_parts),
                 result=result_text,

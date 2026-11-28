@@ -120,7 +120,7 @@ class ManagerRecoveryTests(unittest.IsolatedAsyncioTestCase):
         package.mkdir()
         (package / "__init__.py").touch()
         (package / "bootstrap.py").write_text(
-            "def install_antigravity_surface(entries, *, kernel, copy_session=None): return None\n", encoding="utf-8"
+            "def install_antigravity_surface(entries, *, kernel, copy_session=None, capture_dir=None): return None\n", encoding="utf-8"
         )
         with self.assertRaisesRegex(RuntimeError, "skill report"):
             await self.cell("1 + 1")

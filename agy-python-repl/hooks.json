@@ -21,9 +21,35 @@
           {
             "type": "command",
             "command": "python3 ./hooks/inject_session.py",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^(mcp_agy-python-repl_agy-python-repl_(run_code|kernel_state)|call_mcp_tool)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ./hooks/inject_session.py --post-tool-use",
             "timeout": 5
           }
         ]
+      }
+    ],
+    "PostInvocation": [
+      {
+        "type": "command",
+        "command": "python3 ./hooks/inject_session.py --post-invocation",
+        "timeout": 5
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "python3 ./hooks/inject_session.py --sweep-conversation",
+        "timeout": 5
       }
     ]
   }

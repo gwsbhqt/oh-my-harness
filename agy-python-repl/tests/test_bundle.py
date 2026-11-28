@@ -62,15 +62,40 @@ class StandaloneBundleTests(unittest.IsolatedAsyncioTestCase):
                                           args=[Template(arg).substitute(variables) for arg in server["args"]])
             async with stdio_client(params) as (reader, writer), ClientSession(reader, writer) as session:
                 await session.initialize()
-                tools = await session.list_tools()
-                self.assertIn("run_code", [tool.name for tool in tools.tools])
+                tools = {tool.name: tool for tool in (await session.list_tools()).tools}
+                self.assertIn("run_code", tools)
+                self.assertNotIn("kernel", tools["run_code"].inputSchema["properties"])
+                self.assertNotIn("kernel", tools["kernel_state"].inputSchema["properties"])
+
+                def run_bundle_hook(event: str, payload: dict) -> dict:
+                    cmd = ["python3", str(bundle / "hooks" / "inject_session.py")]
+                    if event == "PostToolUse":
+                        cmd.append("--post-tool-use")
+                    proc = subprocess.run(
+                        cmd,
+                        cwd=bundle,
+                        input=json.dumps(payload),
+                        env={**os.environ, **variables},
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                    return json.loads(proc.stdout)
+
                 code = "from pathlib import Path\nunits = int(Path('units.txt').read_text())\nunits"
-                result = await session.call_tool("run_code", {"code": code, "kernel": "sample-session"})
+                call_1 = {"id": "bundle-1", "name": "mcp_agy-python-repl_agy-python-repl_run_code", "args": {"code": code}}
+                self.assertEqual(run_bundle_hook("PreToolUse", {"conversationId": "sample-session", "toolCall": call_1}), {"decision": "allow"})
+                result = await session.call_tool("run_code", {"code": code})
                 self.assertFalse(result.isError, result.content)
                 self.assertEqual(result.structuredContent["result"], "42")
+                self.assertEqual(run_bundle_hook("PostToolUse", {"conversationId": "sample-session", "toolCall": call_1}), {})
+
                 followup = "[units + 1, any(s['import_name'] == 'agy_use' for s in await skills.list())]"
-                result = await session.call_tool("run_code", {"code": followup, "kernel": "sample-session"})
+                call_2 = {"id": "bundle-2", "name": "mcp_agy-python-repl_agy-python-repl_run_code", "args": {"code": followup}}
+                self.assertEqual(run_bundle_hook("PreToolUse", {"conversationId": "sample-session", "toolCall": call_2}), {"decision": "allow"})
+                result = await session.call_tool("run_code", {"code": followup})
                 self.assertEqual(result.structuredContent["result"], "[43, True]")
+                self.assertEqual(run_bundle_hook("PostToolUse", {"conversationId": "sample-session", "toolCall": call_2}), {})
             self.assertTrue((root / "plugin data" / "snapshots" / "sample-session.dill").is_file())
             self.assertFalse(any(bundle.rglob("__pycache__")))
             self.assertFalse(any(bundle.rglob("*.egg-info")))

@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult, TextContent
 
+from agy_python_repl.display import render_kernel_state, render_run_code
 from agy_python_repl.manager import KernelManager
+from agy_python_repl.session_routing import resolve_execution_context
+
+ToolReply = Annotated[CallToolResult, dict[str, Any]]
 
 APP_URI = "ui://agy-python-repl/panel.html"
 
@@ -39,28 +44,35 @@ async def _lifespan(_app: FastMCP):
 mcp = FastMCP("agy-python-repl", lifespan=_lifespan)
 
 
+def _reply(receipt: dict[str, Any], text: str) -> CallToolResult:
+    return CallToolResult(content=[TextContent(type="text", text=text)], structuredContent=receipt)
+
+
 @mcp.tool(
     title="Run Python Code",
     description=(
-        "Use this session's persistent Python kernel as the first tool for data questions, batch file "
-        "reads, log/JSON/CSV analysis, calculations and trusted Python skills. Open the authorized "
-        "inputs in the cell, keep records in variables, and return a bounded result. Supports "
-        "top-level await, repl.preview(value) and await skills.list()."
+        "Run Python in this persistent kernel. Reuse existing variables, functions and prebound tools. "
+        "Assignments are silent. Put the value to display on the last line. Use print for deliberate line breaks."
     ),
 )
 async def run_code(
     code: str,
     timeout_seconds: float = 60.0,
-    kernel: str = "default",
     cwd: str | None = None,
-) -> dict[str, Any]:
-    work_dir = Path(cwd).expanduser() if cwd else None
-    return await _manager.run_code(
+) -> ToolReply:
+    effective_kernel, work_dir = resolve_execution_context(
+        _manager.data_dir,
+        "run_code",
+        {"code": code, "timeout_seconds": timeout_seconds, "cwd": cwd},
+        cwd=cwd,
+    )
+    receipt = await _manager.run_code(
         code,
-        kernel=kernel,
+        kernel=effective_kernel,
         timeout_seconds=timeout_seconds,
         cwd=work_dir,
     )
+    return _reply(receipt, render_run_code(receipt))
 
 
 @mcp.tool(
@@ -72,11 +84,16 @@ async def run_code(
 )
 async def kernel_state(
     action: Literal["list", "vars", "snapshot", "restore", "restart", "reset"],
-    kernel: str = "default",
     cwd: str | None = None,
-) -> dict[str, Any]:
-    work_dir = Path(cwd).expanduser() if cwd else None
-    return await _manager.kernel_state(action, kernel=kernel, cwd=work_dir)
+) -> ToolReply:
+    effective_kernel, work_dir = resolve_execution_context(
+        _manager.data_dir,
+        "kernel_state",
+        {"action": action, "cwd": cwd},
+        cwd=cwd,
+    )
+    receipt = await _manager.kernel_state(action, kernel=effective_kernel, cwd=work_dir)
+    return _reply(receipt, render_kernel_state(action, receipt))
 
 
 @mcp.tool(
@@ -85,8 +102,8 @@ async def kernel_state(
     description="Open the Python REPL panel.",
     meta=PANE_META,
 )
-async def open_kernel_panel() -> dict[str, Any]:
-    return _manager.get_overview()
+async def open_kernel_panel() -> ToolReply:
+    return _reply(_manager.get_overview(), "Python REPL")
 
 
 @mcp.tool(name="app_kernel_overview", meta=APP_ONLY_META)

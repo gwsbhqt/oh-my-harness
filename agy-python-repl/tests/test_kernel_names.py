@@ -15,6 +15,8 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 
+from agy_python_repl import session_routing
+
 ROOT = Path(__file__).resolve().parents[1]
 SESSION = "00000000-0000-4000-8000-000000000001"
 OTHER = "00000000-0000-4000-8000-000000000002"
@@ -40,13 +42,38 @@ class KernelNameTests(unittest.IsolatedAsyncioTestCase):
             yield client
 
     def qualified(self, name: str, session: str = SESSION) -> str:
-        call = {"name": "mcp_agy-python-repl_agy-python-repl_run_code", "args": {"code": "42", "kernel": name}}
-        hook = subprocess.run([sys.executable, str(ROOT / "hooks" / "inject_session.py")], check=True,
-                              input=json.dumps({"conversationId": session, "toolCall": call}),
-                              capture_output=True, text=True)
-        return json.loads(hook.stdout)["overwrite"]["kernel"]
+        from agy_python_repl.session_routing import scope_kernel
 
-    async def tool(self, client: ClientSession, name: str, **arguments) -> dict:
+        call = {
+            "id": f"qual-{session}-{hash(name)}",
+            "name": "mcp_agy-python-repl_agy-python-repl_run_code",
+            "args": {"code": "42"},
+        }
+        hook = subprocess.run(
+            [sys.executable, str(ROOT / "hooks" / "inject_session.py")],
+            check=True,
+            input=json.dumps({"conversationId": session, "toolCall": call}),
+            capture_output=True,
+            text=True,
+            env={"PLUGIN_DATA": str(self.data)},
+        )
+        self.assertEqual(json.loads(hook.stdout), {"decision": "allow"})
+        post = subprocess.run(
+            [sys.executable, str(ROOT / "hooks" / "inject_session.py"), "--post-tool-use"],
+            check=True,
+            input=json.dumps({"conversationId": session, "toolCall": call}),
+            capture_output=True,
+            text=True,
+            env={"PLUGIN_DATA": str(self.data)},
+        )
+        self.assertEqual(json.loads(post.stdout), {})
+        return scope_kernel(name, session)
+
+    async def tool(self, client: ClientSession, name: str, *, kernel: str | None = None, **arguments) -> dict:
+        if name in ("run_code", "kernel_state") and kernel and kernel != "default":
+            session_routing.enqueue_call(self.data, name, arguments, kernel)
+        elif kernel is not None:
+            arguments = {**arguments, "kernel": kernel}
         reply = await client.call_tool(name, arguments)
         self.assertFalse(reply.isError, reply.content)
         return reply.structuredContent

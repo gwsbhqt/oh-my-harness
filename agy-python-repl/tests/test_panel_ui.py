@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from mcp.shared.memory import create_connected_server_and_client_session
 
-from agy_python_repl import server
+from agy_python_repl import server, session_routing
 from agy_python_repl.manager import KernelManager
 
 PANEL = Path(__file__).resolve().parents[1] / "ui" / "panel.html"
@@ -41,6 +41,9 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(resource.text, PANEL.read_text(encoding="utf-8"))
 
                     async def call(name, **args):
+                        if name in ("run_code", "kernel_state") and "kernel" in args:
+                            target_kernel = args.pop("kernel")
+                            session_routing.enqueue_call(manager.data_dir, name, args, target_kernel)
                         reply = await client.call_tool(name, args)
                         self.assertFalse(reply.isError, reply.content)
                         return reply.structuredContent
