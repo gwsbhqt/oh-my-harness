@@ -153,6 +153,15 @@ export class CommandFailure extends Error {
   }
 }
 
+export class FirstMessageSendUncertain extends Error {
+  readonly data: { created: true; sessionId: string; since: number; requestId: string; sent: null }
+
+  constructor(message: string, cause: unknown, data: FirstMessageSendUncertain['data']) {
+    super(message, { cause })
+    this.data = data
+  }
+}
+
 /** 把宿主抛的错误（RemoteError 带 code / details）变成可以过线的样子。 */
 export function errorPayload(error: unknown): { code: string; message: string; details?: unknown } {
   if (error instanceof UsageError) {

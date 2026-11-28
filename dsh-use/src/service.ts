@@ -9,7 +9,7 @@ import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { pendingRestart, type PendingRestart } from '../../tooling/runtime/restart-state.mjs'
 import { formatNotifyTarget, parseAgyNotifyTarget } from './agy-notify.ts'
-import { CommandFailure, errorPayload, UsageError, splitEndpoint, describeEndpoint, parameterSchemas, collectStream, type GatewayLike, type TypertLocalLike } from './gateway.ts'
+import { CommandFailure, FirstMessageSendUncertain, errorPayload, UsageError, splitEndpoint, describeEndpoint, parameterSchemas, collectStream, type GatewayLike, type TypertLocalLike } from './gateway.ts'
 import { buildTranscript, clock, oneLine, renderTurn, turnLine, type RawEvent, type Transcript } from './transcript.ts'
 import { pick, routeKey, tierOf, verdictLine, publicTier, fromSharedPick, clock as shortClock, type Tier, type TierTable, type UsageReportLike, type ModelTiersLike, type ModelJudgement, type PickResult } from './models.ts'
 import { findInterruptedUser, scanLostMessages } from './lost-messages.ts'
@@ -994,9 +994,16 @@ export class RemoteService {
         }
       }
       requestId = randomUUID()
-      const admitted = obj(await this.call('session/prompt', { request: { requestId, sessionId: id, mode: 'queue', content: [{ type: 'text', text: message }], clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone } }))
+      const recovery = { created: true, sessionId: id, since, requestId, sent: null } as const
+      const recoveryText = `会话 ${id} 已创建，首条消息的收件状态未知。请用 dsh-use status ${id} 查询原会话。`
+      let admitted: Json
+      try {
+        admitted = obj(await this.call('session/prompt', { request: { requestId, sessionId: id, mode: 'queue', content: [{ type: 'text', text: message }], clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone } }))
+      } catch (error) {
+        throw new FirstMessageSendUncertain(recoveryText, error, recovery)
+      }
       if (admitted.accepted !== true) {
-        throw new CommandFailure('会话已创建，首条消息的收件状态未知。请用返回的会话编号查询状态，避免重复创建。', 'send-unconfirmed', { created: true, sessionId: id, since, requestId, sent: null })
+        throw new CommandFailure(recoveryText, 'send-unconfirmed', recovery)
       }
       this.deps.log(`send ${id} mode=queue chars=${message.length}`)
       lines.push(`第一条消息已发出，起点 seq ${since}。`, `等它跑完：dsh-use wait ${short(id)} --since ${since}`)

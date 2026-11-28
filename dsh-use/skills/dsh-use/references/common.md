@@ -6,7 +6,11 @@
 
 发送回执的 `sent`、`requestId`、`sessionId`、`since` 只证明接收，不能说任务已完成。派单默认带 `--notify`（DSH 会话或 Antigravity 桌面终端里写 `self`，Antigravity Python REPL 内核显式写 `agy:<会话编号>`），由插件在目标真做完后送一次通知；要当场拿结果就用 `wait --settled`。判断做没做完只认这两条路给的状态，不看目标回复里的字。先保存回执，再在后续调用继续等同一个 `since`；超时、取消或等待失败不能重新发送。发送回包丢失时可能已经送达，先查询状态和历史，不自动重发。远程发送后的 `wait` 也必须指定原机器，CLI 用相同 `-H`，Python 用相同 `host`。
 
-新任务用 `new <工作区或绝对路径> "任务与验收标准" --tier normal`。成功发送首条消息时，保存 `data.sessionId`、`data.since` 和 `data.requestId`。只创建空会话时，`data.sent` 为 `false`。收到 `send-unconfirmed` 时，`error.details` 保留已建会话的编号、起点和请求编号，`sent` 为 `null`。用这个会话编号查 `status` 和 `read` 核对收件，重新执行 `new` 会再建一条会话。绝对路径只开会话，不登记工作区。`chat` 将发送与等待合并，正常返回的所有等待结果保留 `receipt`。等待失败后仍用原回执继续等。
+新任务用 `new <工作区或绝对路径> "任务与验收标准" --tier normal`。成功发送首条消息时，保存 `data.sessionId`、`data.since` 和 `data.requestId`。只创建空会话时，`data.sent` 为 `false`。绝对路径只开会话，不登记工作区。
+
+会话已创建、首问收件未知时，普通终端会显示可查询的会话编号。JSON 和 Python 回执中，`send-unconfirmed` 的恢复信息在 `error.details`，首问发送抛错时在顶层 `data`，两者的 `sent` 均为 `null`。用 `sessionId` 查询原会话，按发送前的 `since` 续等。有原始收件记录时，可用 `requestId` 核对是否为同一次请求。若整份回包丢失，先用 `sessions --include-blank` 列出同一目标上的近期会话，再查候选会话的状态和历史。创建与发送结果在查清前都算未知。
+
+`chat` 将发送与等待合并，正常返回的所有等待结果保留 `receipt`。等待失败后仍用原回执继续等。
 
 自动维护用 `dsh-use --local new /绝对仓库路径 "任务" --if-idle --json`。`--if-idle` 是不带值的开关，不等待空闲：已有运行会话、真实排队消息或不支持重启恢复的后台任务时退出 2，错误码 `idle-required`；已有活着的重启执行进程时退出 2，错误码 `restart-pending`。这两种拒绝都不创建会话、不发送。模型选好后、创建前会复查，发送前再复查。若已经创建才被挡，退出 1，返回 `{ok:false,status:"failed",error:{code,message},data:{created:true,sessionId,workspace,since,sent:false,model}}`，保存真实 `sessionId`，不要重放 `new`。读不到重启状态且不是文件不存在、状态损坏或空闲检查不可用时明确失败，不当作空闲。普通 `new` 不加此开关，沿用正常行为。
 

@@ -27,6 +27,8 @@ dsh-use wait WORKER_SESSION --since RECEIPT_SEQUENCE --settled --json
 
 Replace the uppercase placeholders with actual returned values. `--settled` checks more than an idle session: queued work, background jobs, child agents, and automatically continuing goals can prevent completion. Inspect the exit status and structured outcome. Waiting for input, timing out, failing, and being aborted are different outcomes. Even a successful completion must still be checked against the requested deliverable.
 
+When `new` creates a session and sends its first message, a failed request can still return the session ID. The terminal prints a command to inspect that session. In JSON and Python results, `send-unconfirmed` carries recovery fields in `error.details`. An exception while sending the first message carries them in top-level `data`. In both cases, `sent: null` means delivery is unknown. Inspect the original `sessionId` and continue waiting from the pre-send sequence `since`. If the original receipt record is available, match it to `requestId`. If the entire response was lost, run `dsh-use sessions --include-blank` on the same host and inspect recent sessions before deciding whether to send anything again.
+
 ## Use supervision for longer assignments
 
 The embedded `dsh-supervise` workflow separates planning and acceptance from execution. The lead writes a task brief with the objective, boundaries, checklist, expected evidence, and conditions for reporting a problem. The worker carries out that brief. A useful brief defines an endpoint the worker can actually achieve, such as producing a reviewable patch, rather than depending on someone else's later approval.
