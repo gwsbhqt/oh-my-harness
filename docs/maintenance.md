@@ -64,10 +64,15 @@ test -f "$AGY_DIR/LICENSE"
 test -x "$AGY_DIR/scripts/start_mcp.sh"
 test -x "$AGY_DIR/skills/agy-use/scripts/agy-use"
 (cd "$OUT" && shasum -a 256 ./*.tgz > DSH-SHA256SUMS)
-AGY_UNSORTED="$OUT/AGY-SHA256SUMS.unsorted"
+(
+AGY_UNSORTED=$(mktemp "$OUT/.AGY-SHA256SUMS.XXXXXX")
+AGY_SORTED="$AGY_UNSORTED.sorted"
+trap 'rm -f "$AGY_UNSORTED" "$AGY_SORTED"' EXIT
+trap 'exit 1' HUP INT TERM
 (cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + > "$AGY_UNSORTED")
-LC_ALL=C sort "$AGY_UNSORTED" > "$OUT/AGY-SHA256SUMS"
-rm "$AGY_UNSORTED"
+LC_ALL=C sort "$AGY_UNSORTED" > "$AGY_SORTED"
+mv "$AGY_SORTED" "$OUT/AGY-SHA256SUMS"
+)
 ```
 
 若另行运行 AGY 的 Python 测试，macOS 可能因 Unix socket 路径过长报 `AF_UNIX path too long`；保留失败日志，改用更短的临时 `TMPDIR` 后重跑。
@@ -85,16 +90,18 @@ test "$(cat "$OUT/SOURCE_COMMIT")" = "$REV"
 (cd "$OUT" && shasum -a 256 -c DSH-SHA256SUMS)
 test -x "$AGY_DIR/scripts/start_mcp.sh"
 test -x "$AGY_DIR/skills/agy-use/scripts/agy-use"
-AGY_EXPECTED="$OUT/AGY-SHA256SUMS.expected"
-AGY_CURRENT="$OUT/AGY-SHA256SUMS.current"
-LC_ALL=C sort "$OUT/AGY-SHA256SUMS" > "$AGY_EXPECTED"
-(cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + > "$AGY_CURRENT.unsorted")
-LC_ALL=C sort "$AGY_CURRENT.unsorted" > "$AGY_CURRENT"
-diff -u "$AGY_EXPECTED" "$AGY_CURRENT"
-rm "$AGY_EXPECTED" "$AGY_CURRENT" "$AGY_CURRENT.unsorted"
+(
+AGY_TMP=$(mktemp -d "${TMPDIR:-/tmp}/agy-verify.XXXXXX")
+trap 'rm -rf "$AGY_TMP"' EXIT
+trap 'exit 1' HUP INT TERM
+LC_ALL=C sort "$OUT/AGY-SHA256SUMS" > "$AGY_TMP/expected"
+(cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + > "$AGY_TMP/current.unsorted")
+LC_ALL=C sort "$AGY_TMP/current.unsorted" > "$AGY_TMP/current"
+diff -u "$AGY_TMP/expected" "$AGY_TMP/current"
+)
 ```
 
-这些检查不需要网络或源码。生成与接收都先完成扫描再排序，读取失败会非零中止，不会把部分输出当成完整清单。DSH 的单个归档哈希覆盖包内全部内容；AGY 的清单差异会指出普通文件的内容变化、额外文件和缺文件。AGY 清单不检查目录结构、符号链接或其他文件类型，权限检查也只覆盖上述两个命令。不再要求接收方为了发现额外文件而重新构建。
+这些检查不需要网络或源码。生成与接收都先完成扫描再排序，读取或排序失败会非零中止。生成在同目录写临时文件，成功后再改为正式名，不会留下部分正式结果或替换既有完整清单；接收只在新建的系统临时目录写临时文件，并在退出时清理，所以交付目录可以只读。DSH 的单个归档哈希覆盖包内全部内容；AGY 的清单差异会指出普通文件的内容变化、额外文件和缺文件。AGY 清单不检查目录结构、符号链接或其他文件类型，权限检查也只覆盖上述两个命令。不再要求接收方为了发现额外文件而重新构建。
 
 平台安装沿用现有入口。DSH：把入门页 profile 中的 `link:` 依赖改为指向已校验 `.tgz` 的绝对 `file:` 路径，保留组合包登记，再用 DSH 所配 pnpm 安装、运行启动检查并重启。Antigravity：执行 `agy plugin install "$AGY_DIR"`，再用 `agy plugin list --json` 核对。只做临时验收时，为 AGY 命令设置一个新的空 `HOME`；先确认 `plugin list --json` 为 `[]`，不要操作日常 App。
 

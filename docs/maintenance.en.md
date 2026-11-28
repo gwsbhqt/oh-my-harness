@@ -64,10 +64,15 @@ test -f "$AGY_DIR/LICENSE"
 test -x "$AGY_DIR/scripts/start_mcp.sh"
 test -x "$AGY_DIR/skills/agy-use/scripts/agy-use"
 (cd "$OUT" && shasum -a 256 ./*.tgz > DSH-SHA256SUMS)
-AGY_UNSORTED="$OUT/AGY-SHA256SUMS.unsorted"
+(
+AGY_UNSORTED=$(mktemp "$OUT/.AGY-SHA256SUMS.XXXXXX")
+AGY_SORTED="$AGY_UNSORTED.sorted"
+trap 'rm -f "$AGY_UNSORTED" "$AGY_SORTED"' EXIT
+trap 'exit 1' HUP INT TERM
 (cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + > "$AGY_UNSORTED")
-LC_ALL=C sort "$AGY_UNSORTED" > "$OUT/AGY-SHA256SUMS"
-rm "$AGY_UNSORTED"
+LC_ALL=C sort "$AGY_UNSORTED" > "$AGY_SORTED"
+mv "$AGY_SORTED" "$OUT/AGY-SHA256SUMS"
+)
 ```
 
 If you also run AGY's Python tests on macOS, a long Unix socket path can fail with `AF_UNIX path too long`; keep the failure log and rerun with a shorter temporary `TMPDIR`.
@@ -85,16 +90,18 @@ test "$(cat "$OUT/SOURCE_COMMIT")" = "$REV"
 (cd "$OUT" && shasum -a 256 -c DSH-SHA256SUMS)
 test -x "$AGY_DIR/scripts/start_mcp.sh"
 test -x "$AGY_DIR/skills/agy-use/scripts/agy-use"
-AGY_EXPECTED="$OUT/AGY-SHA256SUMS.expected"
-AGY_CURRENT="$OUT/AGY-SHA256SUMS.current"
-LC_ALL=C sort "$OUT/AGY-SHA256SUMS" > "$AGY_EXPECTED"
-(cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + > "$AGY_CURRENT.unsorted")
-LC_ALL=C sort "$AGY_CURRENT.unsorted" > "$AGY_CURRENT"
-diff -u "$AGY_EXPECTED" "$AGY_CURRENT"
-rm "$AGY_EXPECTED" "$AGY_CURRENT" "$AGY_CURRENT.unsorted"
+(
+AGY_TMP=$(mktemp -d "${TMPDIR:-/tmp}/agy-verify.XXXXXX")
+trap 'rm -rf "$AGY_TMP"' EXIT
+trap 'exit 1' HUP INT TERM
+LC_ALL=C sort "$OUT/AGY-SHA256SUMS" > "$AGY_TMP/expected"
+(cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + > "$AGY_TMP/current.unsorted")
+LC_ALL=C sort "$AGY_TMP/current.unsorted" > "$AGY_TMP/current"
+diff -u "$AGY_TMP/expected" "$AGY_TMP/current"
+)
 ```
 
-These checks need neither network access nor source code. Generation and receipt both finish scanning before sorting, so a read failure returns non-zero and partial output is never treated as a complete manifest. The single archive hash covers every file in the DSH package. For AGY, the manifest difference identifies changed content, extra regular files, and missing regular files. The AGY inventory does not check directory structure, symbolic links, or other file types, and the permission checks cover only the two commands above. Recipients no longer need another build just to detect extra files.
+These checks need neither network access nor source code. Generation and receipt both finish scanning before sorting, so a read or sort failure returns non-zero. Generation writes temporary files in the output directory and renames the completed result into place, never leaving a partial official manifest or replacing an existing complete one after a failure. Receipt writes temporary files only in a newly created system temporary directory and removes them on exit, so the delivered directory can remain read-only. The single archive hash covers every file in the DSH package. For AGY, the manifest difference identifies changed content, extra regular files, and missing regular files. The AGY inventory does not check directory structure, symbolic links, or other file types, and the permission checks cover only the two commands above. Recipients no longer need another build just to detect extra files.
 
 Use the existing platform installation paths. For DSH, replace the getting-started profile's `link:` dependency with an absolute `file:` path to the verified `.tgz`, preserve the bundle registration, then install with Harness's pnpm, run its startup check, and restart. For Antigravity, run `agy plugin install "$AGY_DIR"`, then confirm with `agy plugin list --json`. For temporary acceptance only, give the AGY commands a new empty `HOME`; first confirm that `plugin list --json` returns `[]`, and do not touch the daily app.
 
