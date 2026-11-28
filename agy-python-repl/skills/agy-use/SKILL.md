@@ -21,12 +21,16 @@ agy-use get 11112222
 
 ## 新建与向指定已有会话发消息
 
-新建会话时，把首条任务传给 `new` 并启用等待，即可核对首轮回复。只传标题创建空会话时，回执只确认会话已创建。
+把首条任务传给 `new`，可以当场等待，也可以先保存创建回执。稍后核对首轮回复时，用回执中的会话编号、`since_step` 和 `prompt`，并启用首条用户输入匹配。只传标题会创建空会话。
+
+```sh
+agy-use new "请只回复 READY。" --title "smoke-check"
+agy-use wait 11112222 --since-step -1 --expected-prompt "请只回复 READY。" --allow-user-input --timeout 120
+```
 
 `send` 先核对当前桌面会话并保存发送前的步号。启用等待后，它按收件正文找到这一条消息，再读取同一轮的最终答复。若先发送、稍后再等，请保留回执中的会话编号、`since_step` 和 `prompt`。
 
 ```sh
-agy-use new "请只回复 READY。" --title "smoke-check" --wait --timeout 60
 agy-use send 11112222 "请继续核对上一轮结果。" --wait --timeout 120
 agy-use wait 11112222 --since-step 4 --expected-prompt "请继续核对上一轮结果。" --timeout 120
 ```

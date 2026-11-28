@@ -18,7 +18,7 @@
 | `get(conversation_id, *, include_archived=True, include_metadata=True, ...)` | `get 会话编号 [--active-only] [--no-metadata]` | `ConversationService/GetConversation` + `agentapi get-conversation-metadata` + 本地 `transcript.jsonl` 摘要 |
 | `new(prompt="", *, project_id=None, environment_id=None, title=None, model=None, tags=None, wait=False, timeout=120, poll_interval=0.5, ...)` | `new [提示] [--project-id ID] [--title 标题] [--model 模型] [--tag T] [--wait] [--timeout 秒]` | `ConversationService/CreateConversation`，可选轮询等待完成 |
 | `send(conversation_id, prompt, *, title=None, wait=False, timeout=120, poll_interval=0.5, ...)` | `send 会话编号 提示 [--title 标题] [--wait] [--timeout 秒]` | 先 `GetConversation` 确认目标存在，再调用 `agentapi send-message` |
-| `wait(conversation_id, *, since_step=None, since_time=None, expected_prompt=None, timeout=120, poll_interval=0.5, ...)` | `wait 会话编号 [--since-step N] [--since-time ISO] [--expected-prompt 正文] [--timeout 秒]` | 轮询 `GetConversation` 与 `transcript.jsonl`（含截断回落 `transcript_full.jsonl`） |
+| `wait(conversation_id, *, since_step=None, since_time=None, expected_prompt=None, allow_user_input=False, timeout=120, poll_interval=0.5, ...)` | `wait 会话编号 [--since-step N] [--since-time ISO] [--expected-prompt 正文] [--allow-user-input] [--timeout 秒]` | 轮询 `GetConversation` 与 `transcript.jsonl`（含截断回落 `transcript_full.jsonl`） |
 | `read(conversation_id, *, from_step=0, limit=50, full=False, ...)` | `read 会话编号 [--from-step N] [--limit N] [--full]` | 读取本地 `transcript.jsonl`（或 `transcript_full.jsonl`）与 `GetConversation` |
 | `last(conversation_id, *, chars=4000, ...)` | `last 会话编号 [--chars N]` | 提取最近一条 `PLANNER_RESPONSE` |
 | `rename(conversation_id, title, ...)` | `rename 会话编号 新标题` | `ConversationService/UpdateConversation` |
@@ -27,6 +27,8 @@
 | `delete(conversation_id, ...)` | `delete 会话编号` | `ConversationService/DeleteConversation` |
 
 ### 目标定位与送达核实约定
+
+带首条任务的 `new` 回执包含 `created=true`、`conversation_id`、`since_step=-1` 和原样的 `prompt`。在同一会话续等时，Python 传 `allow_user_input=True`，命令行加 `--allow-user-input`，以识别 App 保存的首条用户输入。`send` 的任务按默认设置核对 App 的消息收件记录。
 
 - **精确目标**：`get`、`send`、`wait`、`read`、`last`、`rename`、`archive`、`update`、`delete` 传入完整 UUID 时直接通过 `GetConversation` 核对；传入至少 4 个字符的不完整前缀时执行列表扫描，若匹配到 0 个返回 `target-not-found`，匹配到多个返回 `ambiguous-target`，若 `next_page_token` 非空（扫描未完成）则一律拒绝判唯并返回 `incomplete-prefix-scan`，绝不自动猜测。
 - **先验后发**：`agentapi send-message` 在某些不存在的会话编号上可能仍退出 0，因此 Sidecar 会在调用 `agentapi send-message` 前先向 `ConversationService/GetConversation` 确认目标存在。

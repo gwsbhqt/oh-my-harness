@@ -545,6 +545,31 @@ class AppBridgeTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.2)
         self.assertEqual(len(self._agentapi_calls()), 1)
 
+    async def test_deferred_first_prompt_can_be_verified_from_its_receipt(self) -> None:
+        await self._start_bridge()
+        prompt = "check the first reply"
+        created = await agy_use.new(prompt, socket_path=self.sock_path)
+        self.assertTrue(created["ok"], created)
+        receipt = created["receipt"]
+        self.assertEqual(receipt["prompt"], prompt)
+        self.assertEqual(receipt["since_step"], -1)
+        waited = await agy_use.wait(
+            receipt["conversation_id"], since_step=receipt["since_step"],
+            expected_prompt=receipt["prompt"], allow_user_input=receipt["created"],
+            timeout=5, poll_interval=0.05, socket_path=self.sock_path,
+        )
+        self.assertTrue(waited["ok"], waited)
+        self.assertEqual(waited["response"], f"CREATED:{prompt}")
+        cli = await asyncio.to_thread(
+            subprocess.run,
+            [sys.executable, str(SKILL / "scripts/agy-use"), "wait", receipt["conversation_id"],
+             "--since-step", str(receipt["since_step"]), "--expected-prompt", receipt["prompt"],
+             "--allow-user-input", "--timeout", "5", "--socket", str(self.sock_path)],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(cli.returncode, 0, cli.stderr)
+        self.assertEqual(json.loads(cli.stdout)["response"], waited["response"])
+
     async def test_new_read_last_update_rename_archive_delete_and_cli(self) -> None:
         await self._start_bridge()
         created = await agy_use.new("hello new", title="Fresh", model="flash", wait=True,

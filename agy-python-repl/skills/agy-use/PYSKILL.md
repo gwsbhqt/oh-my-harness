@@ -21,12 +21,20 @@ detail = await skills.agy_use.get("11112222")
 
 ## 新建与向指定已有会话发消息
 
-新建会话时，把首条任务传给 `new` 并启用等待，即可核对首轮回复。只传标题创建空会话时，回执只确认会话已创建。
+把首条任务传给 `new`，可以当场等待，也可以先保存创建回执。稍后核对首轮回复时，用回执中的会话编号、`since_step` 和 `prompt`，并启用首条用户输入匹配。只传标题会创建空会话。
+
+```python
+created = await skills.agy_use.new("请只回复 READY。", title="smoke-check")
+receipt = created["receipt"]
+reply = await skills.agy_use.wait(
+    receipt["conversation_id"], since_step=receipt["since_step"],
+    expected_prompt=receipt["prompt"], allow_user_input=receipt["created"], timeout=120,
+)
+```
 
 `send` 先核对当前桌面会话并保存发送前的步号。启用等待后，它按收件正文找到这一条消息，再读取同一轮的最终答复。若先发送、稍后再等，请保留回执中的会话编号、`since_step` 和 `prompt`。
 
 ```python
-created = await skills.agy_use.new("请只回复 READY。", title="smoke-check", wait=True, timeout=60)
 sent = await skills.agy_use.send("11112222", "请继续核对上一轮结果。", wait=True, timeout=120)
 receipt = sent["receipt"]
 waited = await skills.agy_use.wait(receipt["conversation_id"], since_step=receipt["since_step"],

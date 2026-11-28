@@ -533,6 +533,8 @@ async def new(
         "sent": has_prompt,
         "since_step": -1,
     }
+    if has_prompt:
+        receipt["prompt"] = prompt
     if not wait or not has_prompt or not isinstance(conv_id, str):
         return {
             "ok": True,

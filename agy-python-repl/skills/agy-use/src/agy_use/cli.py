@@ -103,6 +103,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--since-step", type=int, default=argparse.SUPPRESS, help="基准 step_index（来自 send 回执）")
     p.add_argument("--since-time", help="基准更新时间 ISO 字符串")
     p.add_argument("--expected-prompt", help="要求在基线后匹配到该正文的 App 收件步骤才确认完成")
+    p.add_argument("--allow-user-input", action="store_true", help="核对 new 回执时允许匹配首条用户输入")
     p.add_argument("--poll-interval", type=float, default=argparse.SUPPRESS, help="轮询间隔秒数")
     _add_app_common(p, unbounded_timeout=True)
 
