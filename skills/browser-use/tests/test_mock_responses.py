@@ -94,6 +94,14 @@ class MockTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(OSError):
             request(upstream)
 
+    def assert_disconnected(self, client):
+        try:
+            data = client.recv(1)
+        except ConnectionResetError:
+            # Closing the listener can reset a connection still queued for accept.
+            return
+        self.assertEqual(data, b"")
+
     async def test_validation_precedes_google_and_the_responder(self):
         for option in (
             {"dedicated": False}, {"dedicated": 1}, {"url": "https://127.0.0.1:8123/api"},
@@ -156,7 +164,7 @@ class MockTests(unittest.IsolatedAsyncioTestCase):
         idle = socket.create_connection(("127.0.0.1", urlsplit(source).port), timeout=2)
         with idle:
             cleared = await self.mocks.clear(7)
-            self.assertEqual(idle.recv(1), b"")
+            self.assert_disconnected(idle)
         self.assertEqual(cleared, observed | {"state": "cleared"})
         self.assert_offline(source)
         self.assertFalse(self.mocks.has(7))
