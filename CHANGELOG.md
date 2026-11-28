@@ -10,7 +10,7 @@
 - browser-use 为 Cra 和 Chrome 提供同一套网页操作和调试接口。Chrome 连接已开启调试的指定实例。原有服务、命令和演示保存在[迁移前的版本](https://github.com/gwsbhqt/oh-my-harness/blob/archive/browser-use-before-mcp/docs/browser-use.md)。
 
 - 首页收敛到主要能力与使用入口，新增双语文档导航、上手指南、架构图、配置分工和维护路线；总览图适配桌面与手机。
-- 新增 `shot-sheet`，支持截图拼图、GIF 与视频抽帧、前后对比和图片标注，附独立打包与虚构媒体验证。
+- `shot-sheet` 支持截图拼图、GIF 与视频抽帧、前后对比和图片标注。需要在图下加标题时，给 `sheet` 指定 `label_position="below"`，或在命令行加 `--label-position below`。默认在图上显示标题。
 - 新增无需安装组件依赖的公开内容检查，核对文档链接、许可、发布边界与通用敏感内容模式；持续集成自动发现插件。
 - 维护约束与回归样例使用中性说明和合成输入，保留必要的技术原因与原始故障形状。
 - 明确会话控制与可选模型额度集成的边界。

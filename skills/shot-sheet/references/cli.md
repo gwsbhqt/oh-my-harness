@@ -17,7 +17,7 @@ shot-sheet media-sheet --help
 
 | 命令 | 参数与默认值 |
 | --- | --- |
-| `sheet` | `--panels` 必填 JSON，元素为 `[路径,标题]` 或 `[路径,标题,来源行]`；`--out` 必填；`--title`、`--subtitle` 可省略；`--cols` 默认 2；`--notes` 为 `[标题,说明]` 列表；`--cell` 默认 `[1200,750]`；`--max-edge` 默认 3900；`--upscale` 默认 false |
+| `sheet` | `--panels` 必填 JSON，元素为 `[路径,标题]` 或 `[路径,标题,来源行]`；`--out` 必填；`--title`、`--subtitle` 可省略；`--cols` 默认 2；`--notes` 为 `[标题,说明]` 列表；`--cell` 默认 `[1200,750]`；`--max-edge` 默认 3900；`--upscale` 默认 false；`--label-position` 为 `above`（默认，标题在图片上方）或 `below`（标题移到图片下方，编号、来源行一起移动，面板顺序、几何与脚注不变） |
 | `compare` | `--pairs` 必填 JSON，元素为 `[改前路径,改后路径]` 或再加一个标题；`--out` 必填；`--title` 可省略；`--labels` 默认 `["改前","改后"]`；`--cell` 默认 `[880,550]`；`--max-edge` 默认 3900 |
 | `annotate` | `--image` 与 `--boxes` 必填；每框为 `[x,y,宽,高]`；`--out` 可省略，由函数生成路径；`--start` 默认 1；`--width` 默认 6；`--max-edge` 默认 3900 |
 | `extract-frames` | `--source` 和 `--out-dir` 必填；默认均分全长取 8 帧；`--count` 设置帧数，`--start` / `--end` 设置秒数范围，`--interval` 按秒间隔取帧，`--times` 用 JSON 列表指定采样秒数；`--frame-max-edge` 限制单帧长边，`--prefix` 默认 `frame`，`--max-frames` 默认 200。`--timeout` 可为每次 `ffprobe` 或 `ffmpeg` 调用设置等待上限，单位为秒，须为有限正数，默认等待命令完成 |

@@ -47,7 +47,7 @@ shot-sheet media-sheet --source demo.gif --out timeline.png --count 8 --cols 4
 shot-sheet extract-frames --source demo.mp4 --out-dir frames --times '[1.0,3.5,8.0]'
 ```
 
-Python 接口提供 `sheet`、`compare`、`annotate`、`extract_frames`、`media_sheet` 五个同步函数。完整参数见[命令参考](references/cli.md)及[图像函数](src/shot_sheet/__init__.py)、[媒体函数](src/shot_sheet/media.py)。
+Python 接口提供 `sheet`、`compare`、`annotate`、`extract_frames`、`media_sheet` 五个同步函数。完整参数见[命令参考](references/cli.md)及[图像函数](src/shot_sheet/__init__.py)、[媒体函数](src/shot_sheet/media.py)。审查图默认把标题放在图片上方；需要放在图片下方时给 `sheet` 传 `label_position="below"`（命令行 `--label-position below`），整体尺寸与脚注不变。
 
 ## 输出与限制
 

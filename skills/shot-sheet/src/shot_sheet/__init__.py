@@ -8,6 +8,7 @@ from __future__ import annotations
 import glob
 import os
 import warnings
+from typing import Literal
 from PIL import Image, ImageDraw, ImageFont
 
 FONTS = [
@@ -127,7 +128,7 @@ def sheet(panels: list[tuple[str, str] | tuple[str, str, str]], out: str, *,
           title: str | None = None, subtitle: str | None = None, cols: int = 2,
           notes: list[tuple[str, str]] | None = None,
           cell: tuple[int, int] = (1200, 750), max_edge: int = DEFAULT_MAX_EDGE,
-          upscale: bool = False):
+          upscale: bool = False, label_position: Literal["above", "below"] = "above"):
     """网格审查大图。
 
     panels: [(图片路径, 中文标题)] 或 [(图片路径, 中文标题, 灰色来源行)]，按行优先编号排版。
@@ -135,11 +136,15 @@ def sheet(panels: list[tuple[str, str] | tuple[str, str, str]], out: str, *,
     notes: 可省；[(小标题, 正文)]，放进末行余白，末行满了就整行追加在网格下面。
     cell: 每格图片的宽、高像素，两个正整数；max_edge 是成品长边上限。
     upscale 为 True 时等比放大尺寸小于格子的图片，默认不放大。
+    label_position 为 "above"（默认）时标题在图片上方，为 "below" 时标题移到图片下方；
+    编号、来源行一起移动，面板顺序、脚注和 source 字段都不变，整体几何只换标签带位置。
     返回 {"out", "width", "height"}。长边保证 ≤ max_edge。
     """
     _validate_geometry(cell, max_edge)
     if type(upscale) is not bool:
         raise ValueError("upscale 必须是布尔值")
+    if label_position not in ("above", "below"):
+        raise ValueError('label_position 只能是 "above" 或 "below"')
     if not panels:
         raise ValueError("panels 至少需要一张图片")
     if type(cols) is not int or cols <= 0:
@@ -196,17 +201,23 @@ def sheet(panels: list[tuple[str, str] | tuple[str, str, str]], out: str, *,
         r, c = divmod(i, cols)
         x = M + c * (cw + GAP)
         y = head + M + r * (LABEL_H + ch + GAP)
-        _chip(dr, x, y + 10, i + 1)
-        dr.text((x + 58, y + 6), label, font=font(32, 1), fill=INK)
+        # 标签带固定在每格顶部（above）或底部（below），图片摆到另一侧；整格高度不变。
+        if label_position == "below":
+            img_y, band_y = y, y + ch
+        else:
+            img_y, band_y = y + LABEL_H, y
+        _chip(dr, x, band_y + 10, i + 1)
+        dr.text((x + 58, band_y + 6), label, font=font(32, 1), fill=INK)
         if source:
             f = font(20)
-            dr.text((x + cw - dr.textlength(source, font=f), y + 20), source, font=f, fill=SUB)
-        img.paste(_contain(_open(path), cw, ch, upscale=upscale), (x, y + LABEL_H))
-        dr.rectangle((x - 1, y + LABEL_H - 1, x + cw, y + LABEL_H + ch), outline=BORDER, width=2)
+            dr.text((x + cw - dr.textlength(source, font=f), band_y + 20), source, font=f, fill=SUB)
+        img.paste(_contain(_open(path), cw, ch, upscale=upscale), (x, img_y))
+        dr.rectangle((x - 1, img_y - 1, x + cw, img_y + ch), outline=BORDER, width=2)
     if notes and place == "spare":
         notes_w = spare_cols * cw + (spare_cols - 1) * GAP
         x0 = M + last_row_count * (cw + GAP)
-        y0 = head + M + (rows - 1) * (LABEL_H + ch + GAP) + LABEL_H
+        # 说明卡与最后一行图片对齐；标签带在下方时图片贴行顶，上方时在标签带之后。
+        y0 = head + M + (rows - 1) * (LABEL_H + ch + GAP) + (0 if label_position == "below" else LABEL_H)
         x1 = x0 + notes_w
         y1 = y0 + ch
         dr.rounded_rectangle((x0, y0, x1, y1), radius=16, fill=WHITE, outline=BORDER, width=2)

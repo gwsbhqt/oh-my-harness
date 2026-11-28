@@ -47,7 +47,7 @@ shot-sheet media-sheet --source demo.gif --out timeline.png --count 8 --cols 4
 shot-sheet extract-frames --source demo.mp4 --out-dir frames --times '[1.0,3.5,8.0]'
 ```
 
-The Python API exposes five synchronous functions: `sheet`, `compare`, `annotate`, `extract_frames`, and `media_sheet`. See the [CLI reference](references/cli.md), [image functions](src/shot_sheet/__init__.py), and [media functions](src/shot_sheet/media.py) for full parameters.
+The Python API exposes five synchronous functions: `sheet`, `compare`, `annotate`, `extract_frames`, and `media_sheet`. See the [CLI reference](references/cli.md), [image functions](src/shot_sheet/__init__.py), and [media functions](src/shot_sheet/media.py) for full parameters. Review sheets place captions above each image by default; to place them below instead, pass `label_position="below"` to `sheet` (CLI: `--label-position below`). Overall size and footnotes stay the same.
 
 ## Results and limitations
 

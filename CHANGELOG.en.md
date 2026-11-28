@@ -10,7 +10,7 @@
 - browser-use exposes the same page and debugging APIs for Cra and Chrome. Chrome connects to the specified instance with debugging enabled. The [archived version](https://github.com/gwsbhqt/oh-my-harness/blob/archive/browser-use-before-mcp/docs/browser-use.en.md) preserves the previous service, commands and demo.
 
 - Focus the home page on main capabilities and entry points. Add paired documentation navigation, getting-started, architecture, configuration-boundary, and maintenance guides, with desktop and mobile overview diagrams.
-- Add `shot-sheet` for screenshot contact sheets, GIF and video frame extraction, before/after comparisons, and annotations, with independent packaging and fictional-media checks.
+- `shot-sheet` creates screenshot grids, samples GIFs and videos, compares images, and adds annotations. To put captions below images, pass `label_position="below"` to `sheet`, or use `--label-position below` in the CLI. Captions appear above images by default.
 - Add a public-content check that needs no component dependency installation, covering documentation links, licensing, release boundaries, and general sensitive-content patterns. Discover plugins automatically in CI.
 - Use neutral maintenance guidance and synthetic regression inputs while retaining technical constraints and original failure shapes.
 - Clarify the boundary between session control and optional model quota integrations.

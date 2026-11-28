@@ -77,3 +77,37 @@ def test_cli_media_sheet_and_extract_frames(tmp_path):
     assert invalid.returncode != 0
     assert "timeout" in json.loads(invalid.stderr)["message"]
     assert not invalid_out.exists()
+
+
+def test_cli_label_position_below_moves_caption(tmp_path):
+    """命令行显式 --label-position below：标题落到图片下方；默认不带该参数仍是上方。"""
+    before = tmp_path / "p1.png"
+    after = tmp_path / "p2.png"
+    Image.new("RGB", (400, 300), (0, 100, 200)).save(before)
+    Image.new("RGB", (400, 300), (200, 50, 50)).save(after)
+    panels = [[str(before), "第一屏"], [str(after), "第二屏"]]
+
+    out_below = tmp_path / "below.png"
+    result = subprocess.run([sys.executable, str(SCRIPT), "sheet", "--panels", json.dumps(panels),
+                             "--out", str(out_below), "--max-edge", "1200", "--label-position", "below"],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    below = json.loads(result.stdout)
+    with Image.open(out_below) as im:
+        assert im.size == (below["width"], below["height"])
+
+    out_above = tmp_path / "above.png"
+    result2 = subprocess.run([sys.executable, str(SCRIPT), "sheet", "--panels", json.dumps(panels),
+                              "--out", str(out_above), "--max-edge", "1200"],
+                             capture_output=True, text=True)
+    assert result2.returncode == 0, result2.stderr
+    # 默认(上方)与下方尺寸应一致（几何只换标签位置）
+    assert below["width"] == json.loads(result2.stdout)["width"]
+
+    # 非法值被拒绝，退出码非 0，且不产出文件
+    bad = tmp_path / "bad.png"
+    invalid = subprocess.run([sys.executable, str(SCRIPT), "sheet", "--panels", json.dumps(panels),
+                              "--out", str(bad), "--label-position", "middle"],
+                             capture_output=True, text=True)
+    assert invalid.returncode != 0
+    assert not bad.exists()

@@ -31,7 +31,7 @@ shot-sheet extract-frames --source demo.mp4 --out-dir frames --times '[1.0,3.5,8
 
 ## 网格审查
 
-每张图给路径、标题，也可带灰色来源行。主标题、来源说明、列数与末行余白的说明按实际任务填写。
+每张图给路径、标题，也可带灰色来源行。主标题、来源说明、列数与末行余白的说明按实际任务填写。默认标题在图片上方；需要把标题放到图片下方时，给 `sheet` 显式传 `label_position="below"`（命令行用 `--label-position below`），编号和来源行一起下移，图片顺序、整体尺寸和脚注都不变。
 
 ```bash
 shot-sheet sheet --panels '[["shots/01.png","组件库 · 1/2","components.html?sheet=1"],["shots/02.png","组件库 · 2/2","components.html?sheet=2"]]' --out review-sheet.png --title "项目名 — 方案名" --subtitle "本次组件库截图" --cols 2 --notes '[["设计语言","像一本做得很细的账本……"]]'

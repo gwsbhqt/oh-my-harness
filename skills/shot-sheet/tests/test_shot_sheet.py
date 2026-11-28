@@ -283,3 +283,87 @@ def test_ffprobe_and_ffmpeg_timeouts_raise_clear_errors(tmp_path, monkeypatch):
     with pytest.raises(TimeoutError, match=r"ffmpeg.*抽帧超时"):
         shot_sheet.media_sheet(str(video), str(existing), times=[0.25], timeout=0.05, overwrite=True)
     assert existing.read_bytes() == b"original"
+
+
+def _solid(path, size, color):
+    Image.new("RGB", size, color).save(path)
+    return str(path)
+
+
+def test_sheet_label_below_places_caption_under_image():
+    """label_position="below"：标签带移到图片下方，几何与默认一致，仅换位置。"""
+    import tempfile
+    d = __import__("pathlib").Path(tempfile.mkdtemp())
+    shots = [_solid(d / f"{i}.png", (1600, 1000), c) for i, c in enumerate([(0, 100, 200), (200, 50, 50)])]
+    out = str(d / "below.png")
+    r = shot_sheet.sheet([(shots[0], "第一屏"), (shots[1], "第二屏")], out,
+                         title="下方标题", max_edge=1200, label_position="below")
+    im = Image.open(out).convert("RGB")
+    assert (im.width, im.height) == (r["width"], r["height"])
+    # 找到第一格图片（实心色块）的上下边界：下方布局时图片应贴着标题区下方就开始，
+    # 且格底部再出现标签带（背景色/说明区），即图片底部不在整张图最底部。
+    W = im.width
+    cw = (W - 2 * 48 - 32) // 2
+    x = 48 + cw // 2
+    target = (0, 100, 200)
+    ys = [y for y in range(im.height - 1) if im.getpixel((x, y)) == target and im.getpixel((x, y + 1)) == target]
+    assert ys, "第一格图片应可见"
+    top, bottom = min(ys), max(ys)
+    # 下方布局：图片紧接标题区（head=110 只有 title + M=48），顶边应接近 158；
+    # 图片底边之后还有标签带，所以 bottom 明显小于画布最底。
+    assert top < 175, top
+    assert bottom < im.height - 20, bottom
+
+
+def test_sheet_label_above_is_default_and_caption_over_image():
+    """默认 label_position="above"：标签带在图片上方，与旧行为一致。"""
+    import tempfile
+    d = __import__("pathlib").Path(tempfile.mkdtemp())
+    shots = [_solid(d / f"{i}.png", (1600, 1000), c) for i, c in enumerate([(0, 100, 200), (200, 50, 50)])]
+    out = str(d / "above.png")
+    r = shot_sheet.sheet([(shots[0], "第一屏"), (shots[1], "第二屏")], out, title="上方标题", max_edge=1200)
+    im = Image.open(out).convert("RGB")
+    cw = (im.width - 2 * 48 - 32) // 2
+    x = 48 + cw // 2
+    target = (0, 100, 200)
+    ys = [y for y in range(im.height - 1) if im.getpixel((x, y)) == target and im.getpixel((x, y + 1)) == target]
+    top = min(ys)
+    # 上方布局：图片顶边 = head(110) + M(48) + LABEL_H(72) ≈ 230
+    assert 220 <= top <= 240, top
+
+
+def test_sheet_label_position_rejects_unknown_value():
+    import tempfile
+    import pytest
+    d = __import__("pathlib").Path(tempfile.mkdtemp())
+    shot = _solid(d / "a.png", (400, 300), (0, 100, 200))
+    with pytest.raises(ValueError, match="label_position"):
+        shot_sheet.sheet([(shot, "x")], str(d / "bad.png"), label_position="middle")
+
+
+def test_sheet_label_below_keeps_source_and_panel_order():
+    """下方布局保留来源行与面板顺序：三格各配来源，输出尺寸与上方布局相同（几何不变）。"""
+    import tempfile
+    d = __import__("pathlib").Path(tempfile.mkdtemp())
+    colors = [(0, 100, 200), (200, 50, 50), (50, 180, 80)]
+    shots = [_solid(d / f"{i}.png", (1600, 1000), c) for i, c in enumerate(colors)]
+    panels = [(shots[i], f"第{i+1}屏", f"来源{i+1}") for i in range(3)]
+    ra = shot_sheet.sheet(panels, str(d / "a.png"), title="标题", cols=2, max_edge=1400, label_position="above")
+    rb = shot_sheet.sheet(panels, str(d / "b.png"), title="标题", cols=2, max_edge=1400, label_position="below")
+    assert (ra["width"], ra["height"]) == (rb["width"], rb["height"])
+    # 面板顺序不变：三色块在下方布局里仍按行优先出现。取每格图片中心颜色核对。
+    im = Image.open(str(d / "b.png")).convert("RGB")
+    cw = (im.width - 2 * 48 - 32) // 2
+    ch = (ra["height"] - 110 - 2 * 48 - 72 - 32) // 2  # 两行，每行 LABEL_H+ch；粗算仅取中心可容忍误差
+    # 直接按已知几何：第一格图片中心
+    # 简化：扫三个目标色的出现次数均 > 0 且位置顺序符合行优先
+    found = {}
+    for y in range(im.height):
+        for xx in (48 + cw // 2, 48 + cw + 32 + cw // 2):
+            p = im.getpixel((min(xx, im.width - 1), y))
+            if p in colors and p not in found:
+                found[p] = y
+    assert all(c in found for c in colors), found
+    # 第一行第一格(蓝) 比 第一行第二格(红) 在视觉上属于同一行；第三格(绿) 在下一行更靠下
+    assert found[colors[0]] == found[colors[1]], found
+    assert found[colors[2]] > found[colors[0]], found
