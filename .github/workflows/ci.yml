@@ -148,3 +148,9 @@ jobs:
             printf 'Failed test suites: %s\n' "${ci_failures[@]}"
             exit 1
           fi
+      - name: Test agy-python-repl app bridge
+        working-directory: agy-python-repl
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-project --python 3.12 python -m unittest tests.test_app_bridge_lifecycle tests.test_app_bridge_socket -v
