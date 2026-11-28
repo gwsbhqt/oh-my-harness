@@ -107,13 +107,20 @@ if cmd == "send-message":
                 f"json.dumps({{'step_index': {next_idx + 2}, 'source': 'MODEL', 'type': 'GENERIC', 'status': 'DONE', 'content': 'ok'}})+'\\n'+"
                 f"json.dumps({{'step_index': {next_idx + 3}, 'source': 'MODEL', 'type': 'PLANNER_RESPONSE', 'status': 'DONE', 'model': 'demo-model', 'content': {('ECHO:' + content)!r}}})+'\\n')"
             )])
-        elif mode == "cancelled_tool_only":
+        elif mode in ("idle_tool_only", "idle_receipt_only", "next_input_reply", "idle_receipt_cancelling"):
             steps.append({"step_index": next_idx, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE",
                           "created_at": "2026-01-01T00:00:05Z", "content": wrapped})
-            steps.append({"step_index": next_idx + 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
-                          "created_at": "2026-01-01T00:00:05Z", "model": "demo-model",
-                          "tool_calls": [{"name": "read_file", "args": {"Path": "/tmp/a"}}]})
-            convs[cid]["state"]["runState"] = "RUN_STATE_IDLE"
+            if mode == "idle_tool_only":
+                steps.append({"step_index": next_idx + 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                              "tool_calls": [{"name": "read_file", "args": {"Path": "/tmp/a"}}]})
+            if mode == "next_input_reply":
+                steps.extend([
+                    {"step_index": next_idx + 1, "type": "USER_INPUT", "status": "DONE", "content": "Next task"},
+                    {"step_index": next_idx + 2, "type": "PLANNER_RESPONSE", "status": "DONE", "content": "Next answer"},
+                ])
+            convs[cid]["state"]["runState"] = (
+                "RUN_STATE_CANCELLING" if mode == "idle_receipt_cancelling" else "RUN_STATE_IDLE"
+            )
             convs[cid]["state"]["updateTime"] = "2026-01-01T00:00:06Z"
             convs_file.write_text(json.dumps(convs), encoding="utf-8")
             tfile.write_text("\n".join(json.dumps(s) for s in steps) + "\n", encoding="utf-8")
@@ -621,6 +628,7 @@ class AppBridgeTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError) as caught:
             await task
         self.assertTrue(caught.exception.receipt["cancelled"])
+        self.assertEqual(caught.exception.receipt["cancellation_scope"], "wait")
         self.assertEqual(caught.exception.receipt["conversation_id"], "11112222-bbbb-0000-0000-000000000002")
 
         mod = _load_bridge_module()
@@ -666,6 +674,40 @@ class AppBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res["receipt_step_index"], 2)
         self.assertEqual(res["reply_step_index"], 5)
 
+    async def test_wait_resumes_after_timeout_and_preserves_explicit_wait_cancellation(self) -> None:
+        target = "11112222-bbbb-0000-0000-000000000002"
+        sock = await self._start_bridge_with_new_socket("idle_receipt_cancelling")
+        sent = await agy_use.send(target, "WAIT_FOR_RESULT", wait=True, timeout=0.2,
+                                  poll_interval=0.05, socket_path=sock)
+        self.assertEqual(sent["status"], "timeout")
+        self.assertEqual(sent["run_state"], "RUN_STATE_CANCELLING")
+        self.assertTrue(sent["sent"])
+        self.assertTrue(sent["receipt_confirmed"])
+        self.assertNotIn("cancelled", sent)
+        receipt = sent["receipt"]
+        wait_args = {"since_step": receipt["since_step"], "expected_prompt": receipt["prompt"],
+                     "socket_path": sock, "poll_interval": 0.05}
+        task = asyncio.create_task(agy_use.wait(target, timeout=5, **wait_args))
+        await asyncio.sleep(0.15)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError) as caught:
+            await task
+        self.assertEqual(caught.exception.receipt["status"], "cancelled")
+        self.assertEqual(caught.exception.receipt["cancellation_scope"], "wait")
+
+        convs_file = self.convs_file
+        convs = json.loads(convs_file.read_text())
+        convs[target]["state"]["runState"] = "RUN_STATE_IDLE"
+        transcript = self.app_data / "brain" / target / ".system_generated" / "logs" / "transcript.jsonl"
+        with transcript.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps({"step_index": sent["receipt_step_index"] + 1, "type": "PLANNER_RESPONSE",
+                                     "status": "DONE", "content": "Late answer"}) + "\n")
+        convs_file.write_text(json.dumps(convs))
+        finished = await agy_use.wait(target, timeout=1, **wait_args)
+        self.assertEqual(finished["status"], "completed")
+        self.assertEqual(finished["response"], "Late answer")
+        self.assertEqual(len(self._agentapi_calls()), 1)
+
     async def _start_bridge_with_new_socket(self, mode: str) -> Path:
         sock = self.root / f"{mode}.sock"
         env = {
@@ -699,7 +741,7 @@ class AppBridgeTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0.02)
         return sock
 
-    async def test_send_wait_rejects_unrelated_only_cancelled_empty_and_duplicate_bodies(self) -> None:
+    async def test_send_wait_rejects_unrelated_only_unanswered_empty_and_duplicate_bodies(self) -> None:
         # 1. Unrelated message + reply while IDLE must NOT confirm our send; times out keeping receipt.
         sock_unrel = await self._start_bridge_with_new_socket("unrelated_only")
         unrel = await agy_use.send(
@@ -731,24 +773,36 @@ class AppBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(scoped["ok"], scoped)
         self.assertEqual(scoped["response"], "ECHO:SCOPED_MSG")
 
-        # 3. Cancelled turn with only tool_calls and no final PLANNER_RESPONSE -> cancelled-without-response.
-        self.seed_conversations()
-        (self.state_dir / "agentapi_calls.jsonl").unlink(missing_ok=True)
-        sock_cancel = await self._start_bridge_with_new_socket("cancelled_tool_only")
-        cancelled = await agy_use.send(
-            "11112222-bbbb-0000-0000-000000000002",
-            "ABORT_ME",
-            wait=True,
-            timeout=3,
-            poll_interval=0.05,
-            socket_path=sock_cancel,
-        )
-        self.assertFalse(cancelled["ok"])
-        self.assertFalse(cancelled["timed_out"])
-        self.assertTrue(cancelled["sent"])
-        self.assertEqual(cancelled["error_code"], "cancelled-without-response")
-        self.assertEqual(cancelled["receipt"]["prompt"], "ABORT_ME")
-        self.assertEqual(len(self._agentapi_calls()), 1)
+        # 3. Idle with only tool activity or receipt, or a final from the next input.
+        for mode in ("idle_tool_only", "idle_receipt_only", "next_input_reply"):
+            with self.subTest(mode=mode):
+                self.seed_conversations()
+                (self.state_dir / "agentapi_calls.jsonl").unlink(missing_ok=True)
+                sock = await self._start_bridge_with_new_socket(mode)
+                unanswered = await agy_use.send(
+                    "11112222-bbbb-0000-0000-000000000002",
+                    "NO_FINAL", wait=True, timeout=0.4, poll_interval=0.05, socket_path=sock,
+                )
+                self.assertFalse(unanswered["ok"])
+                only_receipt = mode == "idle_receipt_only"
+                self.assertEqual(unanswered["timed_out"], only_receipt)
+                self.assertTrue(unanswered["sent"])
+                self.assertTrue(unanswered["receipt_confirmed"])
+                self.assertEqual(unanswered["status"], "timeout" if only_receipt else "unanswered")
+                self.assertEqual(unanswered["error_code"], "wait-timeout" if only_receipt else "no-final-response")
+                self.assertNotIn("cancelled", unanswered)
+                self.assertNotIn("response", unanswered)
+                self.assertEqual(unanswered["receipt"]["prompt"], "NO_FINAL")
+                self.assertGreater(unanswered["receipt_step_index"], unanswered["since_step"])
+                self.assertEqual(len(self._agentapi_calls()), 1)
+                if mode == "next_input_reply":
+                    for baseline in (unanswered["since_step"], unanswered["receipt_step_index"]):
+                        scoped = await agy_use.wait(
+                            unanswered["conversation_id"], since_step=baseline,
+                            timeout=1, poll_interval=0.05, socket_path=sock,
+                        )
+                        self.assertEqual(scoped["status"], "unanswered")
+                        self.assertNotIn("response", scoped)
 
         # 4. Empty final PLANNER_RESPONSE -> empty-response, preserves receipt, no retry.
         self.seed_conversations()

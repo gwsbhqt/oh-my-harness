@@ -44,7 +44,7 @@ waited_receipt = await skills.agy_use.wait(receipt["conversation_id"], since_ste
                                            expected_prompt=receipt["prompt"], receipt_only=True, timeout=20)
 ```
 
-发送或等待超时、断开或取消时，保留已有回执。用回执中的 `since_step` 和原正文继续等，或用 `read` 检查同一会话里的后续事件。
+`status=unanswered` 且 `receipt_confirmed=true` 表示 App 已收件，当前没有观察到这一轮的最终文字，原因未知。工具可能已经执行，成果也可能已写出。请用 `read` 检查原会话，不要重发。发送或等待超时、断开或本地中断时也保留回执，需要复核时用原来的 `since_step` 和正文再次调用 `wait`。
 
 ## 读取回复与管理桌面会话
 

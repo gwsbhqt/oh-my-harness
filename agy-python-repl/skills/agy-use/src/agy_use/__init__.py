@@ -275,7 +275,30 @@ async def wait(
     last_update_time = ""
     last_step_index: int | None = None
     last_events: list[dict[str, Any]] = []
+    receipt_idx: int | None = None
     last_conv = resolved["conversation"]
+
+    def _receipt_fields() -> dict[str, Any]:
+        if receipt_idx is None:
+            return {}
+        return {"receipt_confirmed": True, "receipt_step_index": receipt_idx, "since_step": since_step}
+
+    def _unanswered_payload() -> dict[str, Any]:
+        return {
+            "ok": False,
+            "timed_out": False,
+            "status": "unanswered",
+            "error_code": "no-final-response",
+            "error": "未观察到本轮最终答复，原因未知。请读取原会话，不要重发。",
+            "socket": socket_used,
+            "conversation_id": exact_id,
+            "run_state": last_run_state,
+            "update_time": last_update_time,
+            "last_step_index": last_step_index,
+            "events": last_events,
+            "conversation": normalize_conversation(last_conv),
+            **_receipt_fields(),
+        }
 
     def _timeout_payload(err_msg: str | None = None) -> dict[str, Any]:
         if receipt_only:
@@ -302,6 +325,7 @@ async def wait(
             "last_step_index": last_step_index,
             "events": last_events,
             "conversation": normalize_conversation(last_conv),
+            **_receipt_fields(),
         }
 
     async def _sleep_or_timeout(err_msg: str | None = None) -> dict[str, Any] | None:
@@ -339,6 +363,8 @@ async def wait(
                 idle_grace_used = False
 
             first_step = max(0, since_step + 1) if since_step is not None else 0
+            if since_step is not None and expected_prompt is None:
+                first_step = max(0, since_step)
             transcript = await call_bridge(
                 "read_transcript",
                 {"conversation_id": exact_id, "full": False, "from_step": first_step},
@@ -373,6 +399,7 @@ async def wait(
             last_events = new_steps
 
             if expected_prompt is not None:
+                receipt_idx = None
                 matching = [
                     s for s in new_steps
                     if receipt_matches(s, expected_prompt, exact_id, allow_user_input=allow_user_input)
@@ -407,12 +434,12 @@ async def wait(
                     }
                 if len(matching) == 1:
                     receipt_step = matching[0]
-                    receipt_idx = receipt_step.get("step_index")
+                    match_idx = receipt_step.get("step_index")
                     if receipt_only:
                         valid_idx = (
-                            isinstance(receipt_idx, int)
-                            and not isinstance(receipt_idx, bool)
-                            and (since_step is None or receipt_idx > since_step)
+                            isinstance(match_idx, int)
+                            and not isinstance(match_idx, bool)
+                            and (since_step is None or match_idx > since_step)
                         )
                         if not valid_idx:
                             return _compact_receipt_payload({
@@ -421,7 +448,7 @@ async def wait(
                                 "status": "error",
                                 "receipt_confirmed": False,
                                 "error_code": "invalid-receipt-step",
-                                "error": f"收件步骤索引 {receipt_idx!r} 未严格大于基线 since_step={since_step!r}",
+                                "error": f"收件步骤索引 {match_idx!r} 未严格大于基线 since_step={since_step!r}",
                                 "run_state": last_run_state,
                                 "update_time": last_update_time,
                                 "last_step_index": last_step_index,
@@ -431,16 +458,22 @@ async def wait(
                             "timed_out": False,
                             "status": "received",
                             "receipt_confirmed": True,
-                            "receipt_step_index": receipt_idx,
+                            "receipt_step_index": match_idx,
                             "run_state": last_run_state,
                             "update_time": last_update_time,
                             "last_step_index": last_step_index,
                         }, exact_id=exact_id, since_step=since_step)
+                    if not isinstance(match_idx, int) or isinstance(match_idx, bool):
+                        timed = await _sleep_or_timeout()
+                        if timed is not None:
+                            return timed
+                        continue
+                    receipt_idx = match_idx
                     segment: list[dict[str, Any]] = []
                     bounded_by_next_input = False
                     for s in new_steps:
                         idx = s.get("step_index")
-                        if isinstance(idx, int) and isinstance(receipt_idx, int) and idx > receipt_idx:
+                        if isinstance(idx, int) and idx > receipt_idx:
                             if is_input_or_receipt_step(s, exact_id):
                                 bounded_by_next_input = True
                                 break
@@ -482,26 +515,28 @@ async def wait(
                                 "events": new_steps,
                                 "conversation": normalize_conversation(last_conv),
                             }
-                        if seen_running or bounded_by_next_input or bool(segment):
-                            if idle_grace_used or bounded_by_next_input:
-                                return {
-                                    "ok": False,
-                                    "timed_out": False,
-                                    "status": "cancelled",
-                                    "error_code": "cancelled-without-response",
-                                    "error": "目标会话已结束或取消，但收件步骤之后未出现非空最终 PLANNER_RESPONSE",
-                                    "socket": socket_used,
-                                    "conversation_id": exact_id,
-                                    "run_state": last_run_state,
-                                    "update_time": last_update_time,
-                                    "last_step_index": last_step_index,
-                                    "receipt_step_index": receipt_idx,
-                                    "events": new_steps,
-                                    "conversation": normalize_conversation(last_conv),
-                                }
+                        if idle_grace_used or bounded_by_next_input:
+                            return _unanswered_payload()
+                        if seen_running or segment:
                             idle_grace_used = True
+                    elif bounded_by_next_input and not finals:
+                        return _unanswered_payload()
             else:
-                finals = [s for s in new_steps if is_final_planner_response(s)]
+                segment = new_steps
+                bounded_by_next_input = False
+                if since_step is not None:
+                    baseline_ended = since_step == -1 or any(
+                        step.get("step_index") == since_step and is_final_planner_response(step)
+                        for step in steps
+                    )
+                    for position, step in enumerate(new_steps):
+                        if position == 0 and baseline_ended:
+                            continue
+                        if is_input_or_receipt_step(step, exact_id):
+                            segment = new_steps[:position]
+                            bounded_by_next_input = True
+                            break
+                finals = [s for s in segment if is_final_planner_response(s)]
                 non_empty = [s for s in finals if step_text(s).strip()]
                 if last_run_state == "RUN_STATE_IDLE":
                     if since_step is not None:
@@ -536,22 +571,9 @@ async def wait(
                                 "events": new_steps,
                                 "conversation": normalize_conversation(last_conv),
                             }
+                        if bounded_by_next_input or (seen_running and idle_grace_used):
+                            return _unanswered_payload()
                         if seen_running:
-                            if idle_grace_used:
-                                return {
-                                    "ok": False,
-                                    "timed_out": False,
-                                    "status": "cancelled",
-                                    "error_code": "cancelled-without-response",
-                                    "error": "目标会话已结束或取消，未产生非空最终 PLANNER_RESPONSE",
-                                    "socket": socket_used,
-                                    "conversation_id": exact_id,
-                                    "run_state": last_run_state,
-                                    "update_time": last_update_time,
-                                    "last_step_index": last_step_index,
-                                    "events": new_steps,
-                                    "conversation": normalize_conversation(last_conv),
-                                }
                             idle_grace_used = True
                     elif since_time is not None:
                         if (last_update_time > since_time) or seen_running:
@@ -619,6 +641,8 @@ async def wait(
         if receipt_only:
             cancelled.receipt = _compact_receipt_payload(cancelled_out, exact_id=exact_id, since_step=since_step)  # type: ignore[attr-defined]
         else:
+            cancelled_out.update(_receipt_fields())
+            cancelled_out["cancellation_scope"] = "wait"
             cancelled_out["socket"] = socket_used
             cancelled_out["events"] = last_events
             cancelled.receipt = cancelled_out  # type: ignore[attr-defined]
@@ -855,6 +879,20 @@ async def send(
                 sent=True,
                 since_step=since_step,
             )
+        else:
+            existing = getattr(cancelled, "receipt", None)
+            cancelled.receipt = {  # type: ignore[attr-defined]
+                "ok": False,
+                "cancelled": True,
+                "timed_out": False,
+                "status": "cancelled",
+                "cancellation_scope": "wait",
+                "conversation_id": exact_id,
+                **(existing if isinstance(existing, dict) else {}),
+                "sent": True,
+                "baseline": baseline,
+                "receipt": receipt,
+            }
         raise
     if wait_receipt:
         return _compact_receipt_payload(waited, exact_id=exact_id, sent=True, since_step=since_step)
