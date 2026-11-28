@@ -477,6 +477,9 @@ async def wait(
                             if is_input_or_receipt_step(s, exact_id):
                                 bounded_by_next_input = True
                                 break
+                            # The App can post its SDK startup notice before the model begins work.
+                            if s.get("type") == "SYSTEM_MESSAGE" and s.get("source") == "SYSTEM_SDK":
+                                continue
                             segment.append(s)
 
                     finals = [s for s in segment if is_final_planner_response(s)]

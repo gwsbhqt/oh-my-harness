@@ -741,6 +741,94 @@ class AppBridgeTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0.02)
         return sock
 
+    def _write_transcript(self, steps: list[dict]) -> None:
+        logs = self.app_data / "brain" / "11112222-bbbb-0000-0000-000000000002" / ".system_generated" / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        (logs / "transcript.jsonl").write_text(
+            "\n".join(json.dumps(s) for s in steps) + "\n", encoding="utf-8",
+        )
+
+    @staticmethod
+    def _sdk_startup_notice(step_index: int) -> dict:
+        return {
+            "step_index": step_index, "source": "SYSTEM_SDK", "type": "SYSTEM_MESSAGE", "status": "DONE",
+            "created_at": "2026-01-01T00:00:05Z",
+            "content": "<SYSTEM_MESSAGE>\nSDK startup notice: session ready.\n</SYSTEM_MESSAGE>",
+        }
+
+    async def test_sdk_startup_notice_does_not_answer_early(self) -> None:
+        self.seed_conversations()
+        self._write_transcript([
+            {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE",
+             "created_at": "2026-01-01T00:00:05Z", "content": "SDK_ONLY_PROMPT"},
+            self._sdk_startup_notice(1),
+        ])
+        sock = await self._start_bridge_with_new_socket("baseline")
+        import time
+        t0 = time.monotonic()
+        res = await agy_use.wait(
+            "11112222-bbbb-0000-0000-000000000002", since_step=-1, expected_prompt="SDK_ONLY_PROMPT",
+            allow_user_input=True, timeout=1.0, poll_interval=0.05, socket_path=sock,
+        )
+        elapsed = time.monotonic() - t0
+        self.assertFalse(res["ok"])
+        self.assertTrue(res["timed_out"])
+        self.assertEqual(res["status"], "timeout")
+        self.assertEqual(res["error_code"], "wait-timeout")
+        self.assertTrue(res["receipt_confirmed"])
+        self.assertEqual(res["receipt_step_index"], 0)
+        self.assertNotIn("cancelled", res)
+        self.assertGreaterEqual(elapsed, 0.8)
+
+    async def test_sdk_startup_notice_still_completes_on_a_late_normal_reply(self) -> None:
+        self.seed_conversations()
+        base = [
+            {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE",
+             "created_at": "2026-01-01T00:00:05Z", "content": "SDK_LATE_PROMPT"},
+            self._sdk_startup_notice(1),
+        ]
+        self._write_transcript(base)
+        sock = await self._start_bridge_with_new_socket("baseline")
+
+        async def _late() -> None:
+            await asyncio.sleep(0.6)
+            self._write_transcript(base + [
+                {"step_index": 2, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                 "model": "demo-model", "created_at": "2026-01-01T00:00:07Z", "content": "LATE_NORMAL_REPLY"},
+            ])
+
+        task = asyncio.create_task(_late())
+        res = await agy_use.wait(
+            "11112222-bbbb-0000-0000-000000000002", since_step=-1, expected_prompt="SDK_LATE_PROMPT",
+            allow_user_input=True, timeout=4, poll_interval=0.05, socket_path=sock,
+        )
+        await task
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(res["status"], "completed")
+        self.assertEqual(res["response"], "LATE_NORMAL_REPLY")
+        self.assertEqual(res["receipt_step_index"], 0)
+
+    async def test_sdk_startup_notice_then_next_different_user_input_is_still_a_boundary(self) -> None:
+        self.seed_conversations()
+        self._write_transcript([
+            {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE",
+             "created_at": "2026-01-01T00:00:05Z", "content": "SDK_THEN_NEXT_PROMPT"},
+            self._sdk_startup_notice(1),
+            {"step_index": 2, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE",
+             "created_at": "2026-01-01T00:00:06Z", "content": "A DIFFERENT NEXT TURN"},
+        ])
+        sock = await self._start_bridge_with_new_socket("baseline")
+        res = await agy_use.wait(
+            "11112222-bbbb-0000-0000-000000000002", since_step=-1, expected_prompt="SDK_THEN_NEXT_PROMPT",
+            allow_user_input=True, timeout=2, poll_interval=0.05, socket_path=sock,
+        )
+        self.assertFalse(res["ok"])
+        self.assertFalse(res["timed_out"])
+        self.assertEqual(res["status"], "unanswered")
+        self.assertEqual(res["error_code"], "no-final-response")
+        self.assertTrue(res["receipt_confirmed"])
+        self.assertEqual(res["receipt_step_index"], 0)
+
     async def test_send_wait_rejects_unrelated_only_unanswered_empty_and_duplicate_bodies(self) -> None:
         # 1. Unrelated message + reply while IDLE must NOT confirm our send; times out keeping receipt.
         sock_unrel = await self._start_bridge_with_new_socket("unrelated_only")
