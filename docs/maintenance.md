@@ -79,7 +79,7 @@ mv "$AGY_SORTED" "$OUT/AGY-SHA256SUMS"
 
 DSH 成品是 `.tgz`，其中必须有 `lib/index.js`、构建清单和 Prime 来源清单；AGY 成品是通过严格校验的 `$AGY_DIR` 独立目录。交付时同时保留 `SOURCE_COMMIT`、两个 `SHA256SUMS` 和成品。文件名中的版本不能代替提交和哈希；哈希用于辨认与完整性检查，不等同签名。
 
-若收到 ZIP，先解压到一个新的空目录，再 `cd` 到实际含 `SOURCE_COMMIT` 的目录；不要覆盖已有解压目录，以免旧文件残留。`REV` 填维护者声明的完整提交；下面沿用示例提交。DSH 用 `shasum -c` 核对整个 `.tgz`；AGY 把交付清单和现场清单分别排序后比较，因此也接受早期未排序的完整清单，同时核对两个交付命令仍有执行权限：
+若收到 ZIP，先解压到一个新的空目录，再 `cd` 到实际含 `SOURCE_COMMIT` 的目录；不要覆盖已有解压目录，以免旧文件残留。`REV` 填维护者声明的完整提交；下面沿用示例提交。DSH 用 `shasum -c` 核对整个 `.tgz`；AGY 只去掉两边 `shasum` 行中摘要和模式分隔符后文件名开头可选的一个 `./`，再分别排序比较，因此接受两种正式前缀写法和早期未排序的完整清单，同时核对两个交付命令仍有执行权限：
 
 ```sh
 set -e
@@ -94,14 +94,17 @@ test -x "$AGY_DIR/skills/agy-use/scripts/agy-use"
 AGY_TMP=$(mktemp -d "${TMPDIR:-/tmp}/agy-verify.XXXXXX")
 trap 'rm -rf "$AGY_TMP"' EXIT
 trap 'exit 1' HUP INT TERM
-LC_ALL=C sort "$OUT/AGY-SHA256SUMS" > "$AGY_TMP/expected"
-(cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + > "$AGY_TMP/current.unsorted")
+AGY_NORMALIZE='s/^([0-9a-f]{64} [ *])\.\//\1/'
+sed -E "$AGY_NORMALIZE" "$OUT/AGY-SHA256SUMS" > "$AGY_TMP/expected.unsorted"
+LC_ALL=C sort "$AGY_TMP/expected.unsorted" > "$AGY_TMP/expected"
+(cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + > "$AGY_TMP/current.raw")
+sed -E "$AGY_NORMALIZE" "$AGY_TMP/current.raw" > "$AGY_TMP/current.unsorted"
 LC_ALL=C sort "$AGY_TMP/current.unsorted" > "$AGY_TMP/current"
 diff -u "$AGY_TMP/expected" "$AGY_TMP/current"
 )
 ```
 
-这些检查不需要网络或源码。生成与接收都先完成扫描再排序，读取或排序失败会非零中止。生成在同目录写临时文件，成功后再改为正式名，不会留下部分正式结果或替换既有完整清单；接收只在新建的系统临时目录写临时文件，并在退出时清理，所以交付目录可以只读。DSH 的单个归档哈希覆盖包内全部内容；AGY 的清单差异会指出普通文件的内容变化、额外文件和缺文件。AGY 清单不检查目录结构、符号链接或其他文件类型，权限检查也只覆盖上述两个命令。不再要求接收方为了发现额外文件而重新构建。
+这些检查不需要网络或源码。生成与接收都先完成扫描再排序，读取、规范化或排序失败会非零中止。生成在同目录写临时文件，成功后再改为正式名，不会留下部分正式结果或替换既有完整清单；接收只在新建的系统临时目录写临时文件，并在退出时清理，所以交付目录可以只读。比较不去重，也不清理路径其他部分。DSH 的单个归档哈希覆盖包内全部内容；AGY 的清单差异会指出普通文件的内容变化、额外文件和缺文件。AGY 清单不检查目录结构、符号链接或其他文件类型，权限检查也只覆盖上述两个命令。不再要求接收方为了发现额外文件而重新构建。
 
 平台安装沿用现有入口。DSH：把入门页 profile 中的 `link:` 依赖改为指向已校验 `.tgz` 的绝对 `file:` 路径，保留组合包登记，再用 DSH 所配 pnpm 安装、运行启动检查并重启。Antigravity：执行 `agy plugin install "$AGY_DIR"`，再用 `agy plugin list --json` 核对。只做临时验收时，为 AGY 命令设置一个新的空 `HOME`；先确认 `plugin list --json` 为 `[]`，不要操作日常 App。
 
