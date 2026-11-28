@@ -1739,12 +1739,20 @@ ${state.log ? `日志：${String(state.log)}` : ''}`)
     if (missing.length > 0) throw new UsageError(`运行中的远程控制插件还不支持 ${missing.join('、')}（--settled / --notify）。先部署并重启 DSH，再重试；本次没有发送消息`, 'protocol-mismatch')
   }
 
-  /** `--notify self`：换成发起命令的 DSH 会话（读 DSH_SESSION_ID）；子代理的编号是裸 UUID，没有可通知的会话。 */
+  /** `--notify self`：换成发起命令的 DSH 会话（读 DSH_SESSION_ID）或 Antigravity 会话（读 ANTIGRAVITY_CONVERSATION_ID）。 */
   function resolveNotifySelf(options: Record<string, unknown>): void {
     if (options['notify'] !== 'self') return
     const self = env['DSH_SESSION_ID']
-    if (typeof self !== 'string' || !self.startsWith('session-')) throw new UsageError('--notify self 只能在 DSH 会话（bash 工具或 Python 内核）里用；这里没有可通知的会话编号，请写明会话。本次没有发送消息', 'notify-self-unavailable')
-    options['notify'] = self
+    if (typeof self === 'string' && self.startsWith('session-')) {
+      options['notify'] = self
+      return
+    }
+    const agySelf = env['ANTIGRAVITY_CONVERSATION_ID']?.trim()
+    if (typeof agySelf === 'string' && agySelf !== '' && !agySelf.startsWith('-') && !/[\s\0]/.test(agySelf)) {
+      options['notify'] = `agy:${agySelf}`
+      return
+    }
+    throw new UsageError('--notify self 只能在 DSH 会话（bash 工具或 Python 内核）或 Antigravity 桌面会话里用；这里没有可通知的会话编号，请写明会话（或 agy:<会话编号>）。本次没有发送消息', 'notify-self-unavailable')
   }
 
   async function main(argv: string[]): Promise<number> {

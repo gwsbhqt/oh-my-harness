@@ -4,7 +4,7 @@
 
 [← 文档导航](README.md) · [全部部件](components.md)
 
-在 Antigravity 桌面应用中，按工作台说明打包并安装插件，再在同一条新对话先算 `samples = [3, 5, 8]` 的长度，下一格用 `sum(samples)`。依次得到 `3` 和 `16`，就验证了数据跨格保留。[安装 Antigravity 工作台](../agy-python-repl/README.md#install)
+在 Antigravity 桌面应用中安装工作台后，另开一条对话。让助手在第一格定义 `samples = [3, 5, 8]` 并计算 `len(samples)`，第二格只运行 `sum(samples)`。展开该对话的两次 `run_code` 调用，两次状态均应为 `ok`，结果依次是 `3` 和 `16`。[安装 Antigravity 工作台](../agy-python-repl/README.md#install)
 
 在终端直接处理图片，可以先用自己的两张图生成一张拼图。[独立命令行示例](../skills/shot-sheet/README.md#常用操作)
 

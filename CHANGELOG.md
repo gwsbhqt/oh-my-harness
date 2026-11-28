@@ -4,6 +4,9 @@
 
 ## 未发布
 
+- 从 Antigravity 桌面对话交给 DSH 的任务，现在能把待答、完成和中止状态送回原对话。使用 `--notify agy:<会话>`。通知只携带任务编号、状态和监听编号，收件无法确认时可按监听记录核对。
+- 桌面工作台自带的 `agy-use` 新建首轮回执可直接用于等待。使用 `--wait-receipt` 可在原对话收到消息时返回精简回执，包含发送前的步号和收件步号。
+
 - browser-use 为 Cra 和 Chrome 提供同一套网页操作和调试接口。Chrome 连接已开启调试的指定实例。原有服务、命令和演示保存在[迁移前的版本](https://github.com/gwsbhqt/oh-my-harness/blob/archive/browser-use-before-mcp/docs/browser-use.md)。
 
 - 首页收敛到主要能力与使用入口，新增双语文档导航、上手指南、架构图、配置分工和维护路线；总览图适配桌面与手机。

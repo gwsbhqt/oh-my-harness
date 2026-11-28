@@ -28,11 +28,13 @@ agy-use new "请只回复 READY。" --title "smoke-check"
 agy-use wait 11112222 --since-step -1 --expected-prompt "请只回复 READY。" --allow-user-input --timeout 120
 ```
 
-`send` 先核对当前桌面会话并保存发送前的步号。启用等待后，它按收件正文找到这一条消息，再读取同一轮的最终答复。若先发送、稍后再等，请保留回执中的会话编号、`since_step` 和 `prompt`。
+`send` 先核对当前桌面会话并保存发送前的步号。启用等待后，它按收件正文找到这一条消息，再读取同一轮的最终答复；若只需严格确认对方已收件、不等本轮结束，使用只等收件确认选项（只返回确认标志、步骤索引和必要错误/状态字段，不输出事件或对话资料）。若先发送、稍后再等，请保留回执中的会话编号、`since_step` 和 `prompt`。
 
 ```sh
 agy-use send 11112222 "请继续核对上一轮结果。" --wait --timeout 120
+agy-use send 11112222 "请收件。" --wait-receipt --timeout 20
 agy-use wait 11112222 --since-step 4 --expected-prompt "请继续核对上一轮结果。" --timeout 120
+agy-use wait 11112222 --since-step 4 --expected-prompt "请收件。" --receipt-only --timeout 20
 ```
 
 发送或等待超时、断开或取消时，保留已有回执。用回执中的 `since_step` 和原正文继续等，或用 `read` 检查同一会话里的后续事件。
@@ -46,4 +48,15 @@ agy-use read 11112222 --from-step 0 --limit 20
 agy-use last 11112222 --chars 4000
 agy-use rename 11112222 "新的会话标题"
 agy-use archive 11112222
+```
+
+## 与 DSH 跨宿主派单与做完通知协作
+
+从 Antigravity 桌面会话向本机 DSH 派单并要求真做完后只回传当前 AGY 会话一次时，使用 `dsh-use` 的 `--notify`（底层由 DSH 按 `wait --settled` 终态判定后，调用本机 `agy-use send --wait-receipt` 经 `bridge.sock` 严格确认收件一次并仅传任务编号、明确状态和 watch ID，不读密钥且未确认收件不重发）：终端工具中环境带 `ANTIGRAVITY_CONVERSATION_ID` 时可直接传 `self`，Python REPL 内核不继承该环境变量，须显式传 `agy:<当前AGY会话UUID>`。
+
+```sh
+# 在 Antigravity 终端工具（含 ANTIGRAVITY_CONVERSATION_ID）中：
+dsh-use send <DSH会话> "任务目标与验收标准" --notify self --json
+# 或显式指定目标 AGY 会话：
+dsh-use send <DSH会话> "任务目标与验收标准" --notify agy:11112222-bbbb-0000-0000-000000000002 --json
 ```

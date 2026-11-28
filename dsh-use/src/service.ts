@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { pendingRestart, type PendingRestart } from '../../tooling/runtime/restart-state.mjs'
+import { formatNotifyTarget, parseAgyNotifyTarget } from './agy-notify.ts'
 import { CommandFailure, errorPayload, UsageError, splitEndpoint, describeEndpoint, parameterSchemas, collectStream, type GatewayLike, type TypertLocalLike } from './gateway.ts'
 import { buildTranscript, clock, oneLine, renderTurn, turnLine, type RawEvent, type Transcript } from './transcript.ts'
 import { pick, routeKey, tierOf, verdictLine, publicTier, fromSharedPick, clock as shortClock, type Tier, type TierTable, type UsageReportLike, type ModelTiersLike, type ModelJudgement, type PickResult } from './models.ts'
@@ -145,6 +146,8 @@ export interface Deps {
   settleMs?: number
   /** 登记派单做完通知（`--notify`）；不给就不支持。 */
   watchDone?: (request: { target: string; notify: string; since: number; targetTitle?: string }) => Promise<{ id: string; path: string; reused?: boolean }>
+  /** 核对并解析 `agy:<会话>` 通知目标；不给就不支持通知 Antigravity 会话。 */
+  agyNotify?: { resolve(target: string): Promise<string> }
 }
 
 /** `wait` 在几次检查之间保留的状态：空闲观察起点、真做完的稳定起点、最近一次没做完的原因。 */
@@ -1005,7 +1008,13 @@ export class RemoteService {
   /** 发送前核对「做完通知谁」：找得到、没存档、不是目标自己，宿主也支持登记。 */
   private async resolveNotify(raw: string, target?: string): Promise<string> {
     if (this.deps.watchDone === undefined) throw new CommandFailure('这个 DSH 的远程控制插件不支持做完通知；没有发送消息', 'notify-unsupported')
-    if (raw.trim() === 'self') throw new UsageError('--notify self 要经 dsh-use 命令行在 DSH 会话里用，由命令行换成发起的会话；没有发送消息')
+    if (raw.trim() === 'self') throw new UsageError('--notify self 要经 dsh-use 命令行在 DSH 会话或 Antigravity 会话里用，由命令行换成发起的会话；没有发送消息')
+    const agyTarget = parseAgyNotifyTarget(raw)
+    if (agyTarget !== undefined) {
+      if (!agyTarget) throw new UsageError('agy: 后面要写 Antigravity 会话编号或唯一前缀；没有发送消息', 'invalid-argument')
+      if (this.deps.agyNotify === undefined) throw new CommandFailure('这个 DSH 不支持通知 Antigravity 会话；没有发送消息', 'agy-notify-unsupported')
+      return this.deps.agyNotify.resolve(agyTarget)
+    }
     const { id } = await this.resolve(raw)
     if (id === target) throw new UsageError('--notify 不能是目标会话自己')
     await this.assertNotArchived(id)
@@ -1016,14 +1025,15 @@ export class RemoteService {
   private async registerNotify(request: { target: string; notify: string; since: number; targetTitle?: string }): Promise<{ line: string; data: Json }> {
     try {
       const watch = await this.deps.watchDone!(request)
+      const receiver = formatNotifyTarget(request.notify)
       if (watch.reused === true) {
         return {
-          line: `做完通知沿用已登记的那条（${watch.id.slice(0, 8)}）：会话 ${short(request.target)} 真做完后只给会话 ${short(request.notify)} 送一次。`,
+          line: `做完通知沿用已登记的那条（${watch.id.slice(0, 8)}）：会话 ${short(request.target)} 真做完后只给${receiver}送一次。`,
           data: { watchId: watch.id, session: request.notify, record: watch.path, reused: true },
         }
       }
       return {
-        line: `做完通知已登记（${watch.id.slice(0, 8)}）：会话 ${short(request.target)} 真做完后给会话 ${short(request.notify)} 送一次结果，失败或中止也会送；DSH 重启不丢。`,
+        line: `做完通知已登记（${watch.id.slice(0, 8)}）：会话 ${short(request.target)} 真做完后给${receiver}送一次结果，失败或中止也会送；DSH 重启不丢。`,
         data: { watchId: watch.id, session: request.notify, record: watch.path },
       }
     } catch (error) {

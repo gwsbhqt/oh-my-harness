@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Tasks delegated from Antigravity Desktop to DSH can return a question, completion, or cancellation status to the originating conversation. Use `--notify agy:<conversation>`. The notice contains the task ID, state, and watch ID. Check the watch record when receipt is uncertain.
+- The `agy-use` skill bundled with the desktop workbench returns a first-message receipt that can be passed directly to `wait`. Use `--wait-receipt` to receive a compact record with the pre-send step and the matching receipt step as soon as the message appears in the original conversation.
+
 - browser-use exposes the same page and debugging APIs for Cra and Chrome. Chrome connects to the specified instance with debugging enabled. The [archived version](https://github.com/gwsbhqt/oh-my-harness/blob/archive/browser-use-before-mcp/docs/browser-use.en.md) preserves the previous service, commands and demo.
 
 - Focus the home page on main capabilities and entry points. Add paired documentation navigation, getting-started, architecture, configuration-boundary, and maintenance guides, with desktop and mobile overview diagrams.

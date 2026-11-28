@@ -73,7 +73,7 @@ await skills.dsh_use.use()
 
 ## 派任务与保存回执
 
-用户授权派单后，任务描述写清目标、限制和验收标准；目标会话看不到当前完整对话。派单时用 `notify` 登记做完通知，目标真做完后由 DSH 给派单会话送一条插件通知，派单方不用另起轮询，也不怕 DSH 重启；在 DSH 会话里写 `notify="self"` 就是通知自己。
+用户授权派单后，任务描述写清目标、限制和验收标准；目标会话看不到当前完整对话。派单时用 `notify` 登记做完通知，目标真做完后由 DSH 给派单会话送一条插件通知，派单方不用另起轮询，也不怕 DSH 重启；在 DSH 会话或 Antigravity 桌面终端（`ANTIGRAVITY_CONVERSATION_ID`）里写 `notify="self"` 就是通知自己；在 Antigravity Python REPL（`run_code`）中因内核不继承 `ANTIGRAVITY_CONVERSATION_ID`，需显式传 `notify="agy:<AGY会话编号>"`（仅复用本机 `agy-use send --wait-receipt` 与 `bridge.sock`，不读密钥也不改标题；只传任务编号、明确状态和 watch ID，已提交但收件未确认标 `unconfirmed` 且绝不重发）。
 
 ```python
 sent = await skills.dsh_use.send("会话编号", "任务目标、限制和验收标准", notify="self")
@@ -83,6 +83,8 @@ if sent["exit_code"] == 0 and sent.get("ok"):
 
 ```python
 await skills.dsh_use.new("工作区名或绝对路径", "任务与验收标准", tier="normal", notify="self")
+# 在 Antigravity Python REPL 中显式指定 AGY 回调会话：
+await skills.dsh_use.send("会话编号", "任务目标、限制和验收标准", notify="agy:<AGY会话编号>")
 ```
 
 「真做完」只看宿主的实时状态：这一轮结束、没在跑、没有排队消息，名下和子代理名下没有在跑的后台任务，子代理不在干活，持续目标不会自动续跑，且保持 3 秒。目标一轮结束后还挂着自己的后台任务时不算做完，任务跑完它被叫醒接着做，最后才通知。不要再看回复里的字（「在等」「跑完了」）判断做没做完。通知只送一次，同一个目标多次带 `--notify` 也只送一次；失败、中止、会话不见了也送并写明；中途停下等回答会先另送一条提醒。通知对象一般和目标在同一台 DSH 上；用 `-H` 派到别的机器时写 `self`，由本机后台观察进程盯远端，真做完后通知本机发起会话（`chat` 不支持跨机器 `self`）。

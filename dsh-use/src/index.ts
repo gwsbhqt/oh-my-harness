@@ -27,6 +27,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { type ContextFormed } from '@deepseek-ai/dsh-llm'
 import { deliverNotice, type SessionControllerLike } from './notice.ts'
+import { createAgyNotifier, parseAgyNotifyTarget } from './agy-notify.ts'
 import { DoneWatcher } from './done-watch.ts'
 import { DesktopNotifications, sendDesktopNotification, showSystemNotification } from './desktop-notifications.ts'
 import { ownerGateway, type ConnectionLike, type HostGatewayLike } from '../../tooling/runtime/gateway.mjs'
@@ -230,6 +231,12 @@ export async function apply(ctx: Context, config: ConfigCells): Promise<void> {
   const desktopNotifications = new DesktopNotifications()
   ctx.effect(() => () => desktopNotifications.dispose(), 'dsh-use: desktop notifications')
   const page = new MachinePage(realMachineDeps(dshHome()), () => plain({ machines: live(config.machines) as Layout['machines'], services: live(config.services) as Layout['services'] }))
+  const agyNotifier = createAgyNotifier({
+    log: (line) => {
+      audit(line)
+      logger.info(line)
+    },
+  })
   const service: RemoteService = new RemoteService({
     machines: page,
     gateway: ownerGateway((ctx as unknown as { typertGateway: HostGatewayLike }).typertGateway, (ctx as unknown as { connection: ConnectionLike }).connection),
@@ -248,6 +255,9 @@ export async function apply(ctx: Context, config: ConfigCells): Promise<void> {
     watchDone: async (request): Promise<{ id: string; path: string; reused?: boolean }> => {
       const record = await watcher.add(request)
       return { id: record.id, path: watcher.path(record.id), ...(record.reused === true ? { reused: true } : {}) }
+    },
+    agyNotify: {
+      resolve: (target) => agyNotifier.resolve(target),
     },
     automaticSelect: () => ctx.get('modelSelectAutomatic') as AutomaticSelectLike | undefined,
     webUrl: (base) => {
@@ -378,6 +388,8 @@ export async function apply(ctx: Context, config: ConfigCells): Promise<void> {
     check: (target, since, memo): Promise<CommandResult | undefined> => service.checkSettled(target, since, memo),
     title: async (target): Promise<string | undefined> => (await service.resolve(target)).title,
     deliver: async (sessionId, text, summary) => {
+      const agyId = parseAgyNotifyTarget(sessionId)
+      if (agyId !== undefined) return agyNotifier.deliver(agyId, text, summary)
       const controller = ctx.get('sessionController') as SessionControllerLike | undefined
       if (controller === undefined || typeof controller.resolveAgent !== 'function') throw new Error('会话控制器不可用')
       return deliverNotice(controller, sessionId, text, summary)

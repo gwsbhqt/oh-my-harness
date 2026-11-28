@@ -173,6 +173,16 @@ if cmd == "send-message":
             convs_file.write_text(json.dumps(convs), encoding="utf-8")
             tfile.write_text("\n".join(json.dumps(s) for s in steps) + "\n", encoding="utf-8")
             (logs / "transcript_full.jsonl").write_text("\n".join(json.dumps(s) for s in full_steps) + "\n", encoding="utf-8")
+        elif mode == "large_private_same_turn":
+            steps.append({"step_index": next_idx, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE",
+                          "created_at": "2026-01-01T00:00:05Z", "content": wrapped})
+            steps.append({"step_index": next_idx + 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                          "created_at": "2026-01-01T00:00:05Z", "model": "demo-model",
+                          "content": "ADJACENT_PRIVATE_SECRET_" + ("Z" * 2_500_000)})
+            convs[cid]["state"]["runState"] = "RUN_STATE_RUNNING"
+            convs[cid]["state"]["updateTime"] = "2026-01-01T00:00:05Z"
+            convs_file.write_text(json.dumps(convs), encoding="utf-8")
+            tfile.write_text("\n".join(json.dumps(s) for s in steps) + "\n", encoding="utf-8")
         elif mode == "delayed":
             steps.append({"step_index": next_idx, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE",
                           "created_at": "2026-01-01T00:00:05Z", "content": wrapped})
@@ -834,6 +844,424 @@ class AppBridgeTests(unittest.IsolatedAsyncioTestCase):
             missing = await agy_use.get("99999999-9999-9999-9999-999999999999", socket_path=self.sock_path)
             self.assertFalse(missing["ok"])
             self.assertEqual(missing["error_code"], "target-not-found")
+
+    async def test_wait_receipt_confirms_inbox_while_running_and_refuses_unconfirmed_without_retry(self) -> None:
+        target = "11112222-bbbb-0000-0000-000000000002"
+        with self.assertRaises(ValueError):
+            await agy_use.send(target, "bad", wait=True, wait_receipt=True, socket_path=self.sock_path)
+        with self.assertRaises(ValueError):
+            await agy_use.wait(target, receipt_only=True, socket_path=self.sock_path)
+
+        # 1. stays_running: send(wait_receipt=True) confirms unique inbox receipt even before IDLE or reply.
+        sock_running = await self._start_bridge_with_new_socket("stays_running")
+        rec = await agy_use.send(
+            target,
+            "RECEIPT_RUNNING",
+            wait_receipt=True,
+            timeout=2,
+            poll_interval=0.05,
+            socket_path=sock_running,
+        )
+        self.assertTrue(rec["ok"], rec)
+        self.assertTrue(rec["sent"])
+        self.assertTrue(rec["receipt_confirmed"])
+        self.assertEqual(rec["status"], "received")
+        self.assertEqual(rec["since_step"], 1)
+        self.assertEqual(rec["receipt_step_index"], 2)
+        self.assertGreater(rec["receipt_step_index"], rec["since_step"])
+        self.assertEqual(rec["run_state"], "RUN_STATE_RUNNING")
+        self.assertEqual(len(self._agentapi_calls()), 1)
+
+        # CLI --wait-receipt + wait --receipt-only on delayed turn.
+        self.seed_conversations()
+        (self.state_dir / "agentapi_calls.jsonl").unlink(missing_ok=True)
+        cli_send = await asyncio.to_thread(
+            subprocess.run,
+            [sys.executable, str(SKILL / "scripts/agy-use"), "send", target, "CLI_RECEIPT",
+             "--wait-receipt", "--timeout", "2", "--poll-interval", "0.05", "--socket", str(sock_running)],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(cli_send.returncode, 0, cli_send.stderr)
+        cli_send_json = json.loads(cli_send.stdout)
+        self.assertTrue(cli_send_json["receipt_confirmed"])
+        self.assertEqual(cli_send_json["status"], "received")
+
+        self.seed_conversations()
+        sock_delayed = await self._start_bridge_with_new_socket("delayed")
+        sent_only = await agy_use.send(target, "DELAYED_RECEIPT", socket_path=sock_delayed)
+        self.assertTrue(sent_only["ok"])
+        cli_wait = await asyncio.to_thread(
+            subprocess.run,
+            [sys.executable, str(SKILL / "scripts/agy-use"), "wait", target,
+             "--since-step", str(sent_only["receipt"]["since_step"]),
+             "--expected-prompt", "DELAYED_RECEIPT", "--receipt-only",
+             "--timeout", "2", "--poll-interval", "0.05", "--socket", str(sock_delayed)],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(cli_wait.returncode, 0, cli_wait.stderr)
+        cli_wait_json = json.loads(cli_wait.stdout)
+        self.assertTrue(cli_wait_json["receipt_confirmed"])
+        self.assertEqual(cli_wait_json["status"], "received")
+
+        # 2. agentapi accepted (sent=True), yet transcript only gets unrelated step -> unconfirmed, no resend.
+        self.seed_conversations()
+        (self.state_dir / "agentapi_calls.jsonl").unlink(missing_ok=True)
+        sock_unrel = await self._start_bridge_with_new_socket("unrelated_only")
+        missing_receipt = await agy_use.send(
+            target,
+            "MISSING_IN_TRANSCRIPT",
+            wait_receipt=True,
+            timeout=0.3,
+            poll_interval=0.05,
+            socket_path=sock_unrel,
+        )
+        self.assertFalse(missing_receipt["ok"])
+        self.assertTrue(missing_receipt["sent"])
+        self.assertFalse(missing_receipt["receipt_confirmed"])
+        self.assertEqual(missing_receipt["since_step"], 1)
+        self.assertNotIn("receipt_step_index", missing_receipt)
+        self.assertTrue(missing_receipt["timed_out"])
+        self.assertEqual(missing_receipt["status"], "timeout")
+        self.assertEqual(len(self._agentapi_calls()), 1)
+
+        # 3. agentapi accepted (sent=True), duplicate same-body steps -> ambiguous, receipt_confirmed=False, no resend.
+        self.seed_conversations()
+        (self.state_dir / "agentapi_calls.jsonl").unlink(missing_ok=True)
+        sock_dup = await self._start_bridge_with_new_socket("duplicate_same_body")
+        dup_receipt = await agy_use.send(
+            target,
+            "DUP_RECEIPT",
+            wait_receipt=True,
+            timeout=3,
+            poll_interval=0.05,
+            socket_path=sock_dup,
+        )
+        self.assertFalse(dup_receipt["ok"])
+        self.assertTrue(dup_receipt["sent"])
+        self.assertFalse(dup_receipt["receipt_confirmed"])
+        self.assertEqual(dup_receipt["since_step"], 1)
+        self.assertNotIn("receipt_step_index", dup_receipt)
+        self.assertEqual(dup_receipt["error_code"], "ambiguous-reply")
+        self.assertEqual(len(self._agentapi_calls()), 1)
+        forbidden = {"events", "conversation", "baseline", "receipt", "agentapi", "response", "socket"}
+        for payload in (rec, cli_send_json, cli_wait_json, missing_receipt, dup_receipt):
+            self.assertEqual(forbidden & set(payload.keys()), set(), payload)
+
+        # 4. CancelledError during receipt_only preserves compact cancelled receipt without events/metadata.
+        cancel_task = asyncio.create_task(
+            agy_use.wait(
+                target,
+                since_step=1,
+                expected_prompt="NEVER_ARRIVES",
+                receipt_only=True,
+                timeout=10,
+                poll_interval=0.05,
+                socket_path=sock_unrel,
+            )
+        )
+        await asyncio.sleep(0.15)
+        cancel_task.cancel()
+        with self.assertRaises(asyncio.CancelledError) as caught_cancel:
+            await cancel_task
+        creceipt = caught_cancel.exception.receipt
+        self.assertTrue(creceipt["cancelled"])
+        self.assertFalse(creceipt["receipt_confirmed"])
+        self.assertEqual(creceipt["status"], "cancelled")
+        self.assertEqual(creceipt["since_step"], 1)
+        self.assertEqual(creceipt["conversation_id"], target)
+        self.assertEqual(forbidden & set(creceipt.keys()), set(), creceipt)
+
+    async def test_wait_receipt_strips_large_adjacent_private_payload_and_metadata(self) -> None:
+        target = "11112222-bbbb-0000-0000-000000000002"
+        convs = json.loads(self.convs_file.read_text(encoding="utf-8"))
+        convs[target]["annotations"]["title"] = "SECRET_CONV_TITLE_XYZ"
+        convs[target]["state"]["summary"] = "SECRET_SUMMARY_XYZ"
+        self.convs_file.write_text(json.dumps(convs), encoding="utf-8")
+
+        tfile = self.app_data / "brain" / target / ".system_generated" / "logs" / "transcript.jsonl"
+        tfile.write_text(
+            "\n".join([
+                json.dumps({"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE", "content": "OLD_PRIVATE_USER_XYZ"}),
+                json.dumps({"step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE", "content": "OLD_PRIVATE_REPLY_" + ("Q" * 300_000)}),
+            ]) + "\n",
+            encoding="utf-8",
+        )
+
+        sock_large = await self._start_bridge_with_new_socket("large_private_same_turn")
+        cli = await asyncio.to_thread(
+            subprocess.run,
+            [sys.executable, str(SKILL / "scripts/agy-use"), "send", target, "COMPACT_NOTICE_ONLY",
+             "--wait-receipt", "--timeout", "5", "--poll-interval", "0.05", "--socket", str(sock_large)],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(cli.returncode, 0, cli.stderr)
+        self.assertLess(len(cli.stdout.encode("utf-8")), 2048)
+        data = json.loads(cli.stdout)
+        self.assertTrue(data["ok"], data)
+        self.assertTrue(data["sent"])
+        self.assertTrue(data["receipt_confirmed"])
+        self.assertEqual(data["status"], "received")
+        self.assertEqual(data["conversation_id"], target)
+        self.assertEqual(data["since_step"], 1)
+        self.assertEqual(data["receipt_step_index"], 2)
+        self.assertEqual(data["last_step_index"], 3)
+        self.assertGreater(data["receipt_step_index"], data["since_step"])
+        for leak in (
+            "SECRET_CONV_TITLE_XYZ",
+            "SECRET_SUMMARY_XYZ",
+            "OLD_PRIVATE_USER_XYZ",
+            "OLD_PRIVATE_REPLY_",
+            "ADJACENT_PRIVATE_SECRET_",
+            "ZZZZZZ",
+            '"events"',
+            '"conversation"',
+            '"baseline"',
+            '"receipt"',
+            '"agentapi"',
+            '"response"',
+            '"socket"',
+        ):
+            self.assertNotIn(leak, cli.stdout)
+
+        # Same check for standalone wait --receipt-only CLI when large same-turn content exists.
+        cli_wait = await asyncio.to_thread(
+            subprocess.run,
+            [sys.executable, str(SKILL / "scripts/agy-use"), "wait", target,
+             "--since-step", "1", "--expected-prompt", "COMPACT_NOTICE_ONLY", "--receipt-only",
+             "--timeout", "5", "--poll-interval", "0.05", "--socket", str(sock_large)],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(cli_wait.returncode, 0, cli_wait.stderr)
+        self.assertLess(len(cli_wait.stdout.encode("utf-8")), 2048)
+        wait_data = json.loads(cli_wait.stdout)
+        self.assertTrue(wait_data["receipt_confirmed"])
+        self.assertEqual(wait_data["since_step"], 1)
+        self.assertEqual(wait_data["receipt_step_index"], 2)
+        self.assertNotIn("ADJACENT_PRIVATE_SECRET_", cli_wait.stdout)
+        self.assertNotIn("SECRET_CONV_TITLE_XYZ", cli_wait.stdout)
+
+        # Empty transcript boundary (-1 -> 0): send --wait-receipt preserves since_step=-1 and receipt_step_index=0.
+        self.seed_conversations()
+        tfile.write_text("", encoding="utf-8")
+        empty_res = await agy_use.send(
+            target,
+            "FIRST_STEP_ZERO",
+            wait_receipt=True,
+            timeout=5,
+            poll_interval=0.05,
+            socket_path=sock_large,
+        )
+        self.assertTrue(empty_res["ok"], empty_res)
+        self.assertTrue(empty_res["sent"])
+        self.assertTrue(empty_res["receipt_confirmed"])
+        self.assertEqual(empty_res["since_step"], -1)
+        self.assertEqual(empty_res["receipt_step_index"], 0)
+        self.assertGreater(empty_res["receipt_step_index"], empty_res["since_step"])
+        self.assertNotIn("baseline", empty_res)
+
+        # Normal wait=True keeps existing full fields (baseline, receipt, events, conversation, response).
+        self.seed_conversations()
+        sock_fast = await self._start_bridge_with_new_socket("fast")
+        normal = await agy_use.send(target, "NORMAL_WAIT", wait=True, timeout=5, poll_interval=0.05, socket_path=sock_fast)
+        self.assertTrue(normal["ok"], normal)
+        for kept in ("baseline", "receipt", "events", "conversation", "response"):
+            self.assertIn(kept, normal)
+        self.assertEqual(normal["baseline"]["last_step_index"], 1)
+
+    async def test_receipt_safety_boundaries_and_synthetic_faults(self) -> None:
+        target = "11112222-bbbb-0000-0000-000000000002"
+        await self._start_bridge()
+
+        # 1. receipt_only requires integer since_step >= -1 (prevents matching historical steps).
+        with self.assertRaises(ValueError):
+            await agy_use.wait(target, expected_prompt="hi", receipt_only=True, socket_path=self.sock_path)
+        with self.assertRaises(ValueError):
+            await agy_use.wait(target, since_step=-2, expected_prompt="hi", receipt_only=True, socket_path=self.sock_path)
+        cli_missing_since = await asyncio.to_thread(
+            subprocess.run,
+            [sys.executable, str(SKILL / "scripts/agy-use"), "wait", target,
+             "--expected-prompt", "hi", "--receipt-only", "--socket", str(self.sock_path)],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(cli_missing_since.returncode, 2)
+
+        # 2. Pre-send invalid poll_interval fails BEFORE calling send_message.
+        (self.state_dir / "agentapi_calls.jsonl").unlink(missing_ok=True)
+        with self.assertRaises(ValueError):
+            await agy_use.send(target, "BAD_POLL", wait_receipt=True, poll_interval=0, socket_path=self.sock_path)
+        self.assertEqual(len(self._agentapi_calls()), 0)
+
+        # 3. Non-empty pre-send transcript lacking valid last_step_index -> refuses to send (sent=False).
+        real_call = agy_use._client.call_bridge
+
+        async def bad_baseline_call(op, params=None, *, socket_path=None, timeout=15.0):
+            if op == "read_transcript":
+                return {"ok": True, "exists": True, "total_steps": 3, "last_step_index": None, "steps": []}
+            return await real_call(op, params, socket_path=socket_path, timeout=timeout)
+
+        with patch("agy_use.call_bridge", side_effect=bad_baseline_call):
+            refused = await agy_use.send(target, "REFUSE_BAD_BASELINE", wait_receipt=True, socket_path=self.sock_path)
+        self.assertFalse(refused["ok"])
+        self.assertFalse(refused["sent"])
+        self.assertFalse(refused["receipt_confirmed"])
+        self.assertEqual(refused["error_code"], "invalid-baseline")
+        self.assertEqual(len(self._agentapi_calls()), 0)
+
+        # 4. send(wait_receipt=True) CancelledError after send preserves sent=True, since_step, receipt_confirmed=False.
+        sock_unrel = await self._start_bridge_with_new_socket("unrelated_only")
+        (self.state_dir / "agentapi_calls.jsonl").unlink(missing_ok=True)
+        cancel_send = asyncio.create_task(
+            agy_use.send(
+                target,
+                "CANCEL_AFTER_SEND",
+                wait_receipt=True,
+                timeout=10,
+                poll_interval=0.05,
+                socket_path=sock_unrel,
+            )
+        )
+        async with asyncio.timeout(5):
+            while not (self.state_dir / "agentapi_calls.jsonl").exists():
+                await asyncio.sleep(0.02)
+        await asyncio.sleep(0.15)
+        cancel_send.cancel()
+        with self.assertRaises(asyncio.CancelledError) as caught_send_cancel:
+            await cancel_send
+        cancel_receipt = caught_send_cancel.exception.receipt
+        self.assertTrue(cancel_receipt["cancelled"])
+        self.assertTrue(cancel_receipt["sent"])
+        self.assertEqual(cancel_receipt["since_step"], 1)
+        self.assertFalse(cancel_receipt["receipt_confirmed"])
+        self.assertEqual(cancel_receipt["conversation_id"], target)
+        for hidden in ("events", "conversation", "baseline", "receipt", "agentapi"):
+            self.assertNotIn(hidden, cancel_receipt)
+
+        # 5. Truncated short transcript while full fallback lags -> must NOT confirm until full covers candidate steps.
+        wrapped_match = "<SYSTEM_MESSAGE>\n[Message] timestamp=2026-01-01T00:00:05Z sender=peer priority=MESSAGE_PRIORITY_HIGH content=LAG_CHECK\n</SYSTEM_MESSAGE>"
+        wrapped_other = "<SYSTEM_MESSAGE>\n[Message] timestamp=2026-01-01T00:00:06Z sender=peer priority=MESSAGE_PRIORITY_HIGH content=OTHER_STEP\n</SYSTEM_MESSAGE>"
+        full_polls = {"n": 0}
+
+        async def lagging_full_call(op, params=None, *, socket_path=None, timeout=15.0):
+            if op == "read_transcript" and not (params or {}).get("full"):
+                return {
+                    "ok": True,
+                    "exists": True,
+                    "total_steps": 4,
+                    "last_step_index": 3,
+                    "steps": [
+                        {"step_index": 2, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE", "content": wrapped_match},
+                        {"step_index": 3, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE", "content": "truncated...", "truncated_fields": ["content"]},
+                    ],
+                }
+            if op == "read_transcript" and (params or {}).get("full"):
+                full_polls["n"] += 1
+                if full_polls["n"] == 1:
+                    # Lags behind: missing candidate step 3 even though step 2 is present!
+                    return {
+                        "ok": True,
+                        "exists": True,
+                        "total_steps": 3,
+                        "last_step_index": 2,
+                        "steps": [
+                            {"step_index": 2, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE", "content": wrapped_match},
+                        ],
+                    }
+                return {
+                    "ok": True,
+                    "exists": True,
+                    "total_steps": 4,
+                    "last_step_index": 3,
+                    "steps": [
+                        {"step_index": 2, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE", "content": wrapped_match},
+                        {"step_index": 3, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE", "content": wrapped_other},
+                    ],
+                }
+            return await real_call(op, params, socket_path=socket_path, timeout=timeout)
+
+        with patch("agy_use.call_bridge", side_effect=lagging_full_call):
+            caught_up = await agy_use.wait(
+                target,
+                since_step=1,
+                expected_prompt="LAG_CHECK",
+                receipt_only=True,
+                timeout=2,
+                poll_interval=0.05,
+                socket_path=self.sock_path,
+            )
+        self.assertGreaterEqual(full_polls["n"], 2)
+        self.assertTrue(caught_up["ok"], caught_up)
+        self.assertTrue(caught_up["receipt_confirmed"])
+        self.assertEqual(caught_up["receipt_step_index"], 2)
+
+        async def permanently_lagging_full_call(op, params=None, *, socket_path=None, timeout=15.0):
+            if op == "read_transcript" and not (params or {}).get("full"):
+                return {
+                    "ok": True,
+                    "exists": True,
+                    "total_steps": 4,
+                    "last_step_index": 3,
+                    "steps": [
+                        {"step_index": 2, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE", "content": wrapped_match},
+                        {"step_index": 3, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE", "content": "truncated...", "truncated_fields": ["content"]},
+                    ],
+                }
+            if op == "read_transcript" and (params or {}).get("full"):
+                return {
+                    "ok": True,
+                    "exists": True,
+                    "total_steps": 3,
+                    "last_step_index": 2,
+                    "steps": [
+                        {"step_index": 2, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE", "content": wrapped_match},
+                    ],
+                }
+            return await real_call(op, params, socket_path=socket_path, timeout=timeout)
+
+        with patch("agy_use.call_bridge", side_effect=permanently_lagging_full_call):
+            never_confirmed = await agy_use.wait(
+                target,
+                since_step=1,
+                expected_prompt="LAG_CHECK",
+                receipt_only=True,
+                timeout=0.25,
+                poll_interval=0.05,
+                socket_path=self.sock_path,
+            )
+        self.assertFalse(never_confirmed["ok"])
+        self.assertTrue(never_confirmed["timed_out"])
+        self.assertFalse(never_confirmed["receipt_confirmed"])
+
+        # 6. Socket write before drain failure marks wrote=True -> uncertain=True, sent=None (never sent=False).
+        class _FakeWriter:
+            def __init__(self) -> None:
+                self.bytes_written = 0
+
+            def write(self, data: bytes) -> None:
+                self.bytes_written += len(data)
+
+            async def drain(self) -> None:
+                raise OSError("broken pipe during drain")
+
+            def close(self) -> None:
+                pass
+
+            async def wait_closed(self) -> None:
+                pass
+
+        async def _fake_open_unix_connection(*_args, **_kwargs):
+            return object(), _FakeWriter()
+
+        with patch("agy_use._client.asyncio.open_unix_connection", side_effect=_fake_open_unix_connection):
+            drain_fail = await agy_use._client.call_bridge(
+                "send_message",
+                {"conversation_id": target, "prompt": "WRITE_THEN_DRAIN_FAIL"},
+                socket_path=self.sock_path,
+                timeout=2,
+            )
+        self.assertFalse(drain_fail["ok"])
+        self.assertIsNone(drain_fail["sent"])
+        self.assertTrue(drain_fail["uncertain"])
+        self.assertEqual(drain_fail["error_code"], "bridge-disconnected")
 
     def test_skill_and_pyskill_are_isomorphic_and_sidecar_valid(self) -> None:
         def skeleton(text: str) -> str:

@@ -65,8 +65,8 @@ async def call_bridge(
             timeout=min(seconds, 5.0),
         )
         writer.write(payload.encode("utf-8"))
-        await asyncio.wait_for(writer.drain(), timeout=min(seconds, 5.0))
         wrote = True
+        await asyncio.wait_for(writer.drain(), timeout=min(seconds, 5.0))
         raw = await asyncio.wait_for(reader.readline(), timeout=seconds)
     except asyncio.LimitOverrunError as err:
         return {

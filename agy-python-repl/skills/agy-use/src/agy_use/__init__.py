@@ -162,8 +162,70 @@ async def _load_full_if_truncated(
     if not full_res.get("ok"):
         return steps, full_res
     if full_res.get("exists") and isinstance(full_res.get("steps"), list):
-        return full_res["steps"], None
+        full_steps = full_res["steps"]
+        full_by_idx = {
+            s.get("step_index"): s
+            for s in full_steps
+            if isinstance(s.get("step_index"), int) and not isinstance(s.get("step_index"), bool)
+        }
+        missing = [
+            s.get("step_index")
+            for s in candidate_steps
+            if (
+                not isinstance(s.get("step_index"), int)
+                or isinstance(s.get("step_index"), bool)
+                or s.get("step_index") not in full_by_idx
+                or (has_truncated_fields(s) and has_truncated_fields(full_by_idx[s["step_index"]]))
+            )
+        ]
+        if not missing:
+            return full_steps, None
+        return steps, {
+            "ok": False,
+            "error_code": "transcript-incomplete",
+            "error": f"完整转录落后于短转录，尚缺少或未解截断候选步骤 {missing!r}",
+        }
     return steps, {"ok": False, "error_code": "transcript-incomplete", "error": "完整转录尚不可用，暂时无法核实全文"}
+
+
+_RECEIPT_ONLY_FIELDS = (
+    "ok",
+    "status",
+    "timed_out",
+    "cancelled",
+    "sent",
+    "uncertain",
+    "receipt_confirmed",
+    "conversation_id",
+    "since_step",
+    "receipt_step_index",
+    "last_step_index",
+    "matching_receipt_steps",
+    "run_state",
+    "update_time",
+    "error_code",
+    "error",
+    "scan_incomplete",
+)
+
+
+def _compact_receipt_payload(
+    payload: dict[str, Any],
+    *,
+    exact_id: str | None = None,
+    sent: bool | None = None,
+    since_step: int | None = None,
+) -> dict[str, Any]:
+    """裁剪只等收件确认的返回值，剔除转录事件、会话资料、baseline 与 agentapi 原文。"""
+    out = {k: payload[k] for k in _RECEIPT_ONLY_FIELDS if k in payload}
+    if exact_id is not None:
+        out["conversation_id"] = exact_id
+    if sent is not None:
+        out["sent"] = sent
+    if since_step is not None:
+        out["since_step"] = since_step
+    out["receipt_confirmed"] = bool(out.get("ok") is True and out.get("receipt_confirmed") is True)
+    return out
 
 
 async def wait(
@@ -173,19 +235,26 @@ async def wait(
     since_time: str | None = None,
     expected_prompt: str | None = None,
     allow_user_input: bool = False,
+    receipt_only: bool = False,
     timeout: float = 120,
     poll_interval: float = 0.5,
     socket_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """等待指定的 Antigravity App 桌面会话完成收件与非空最终答复。"""
+    """等待指定的 Antigravity App 桌面会话完成收件（及可选非空最终答复）。"""
     seconds = validate_seconds(timeout, allow_zero=True)
     interval = validate_seconds(poll_interval, name="poll_interval")
-    if since_step is not None and (isinstance(since_step, bool) or not isinstance(since_step, int)):
-        raise ValueError("since_step 必须是整数")
+    if since_step is not None and (isinstance(since_step, bool) or not isinstance(since_step, int) or since_step < -1):
+        raise ValueError("since_step 必须是大于等于 -1 的整数")
     if expected_prompt is not None and (not isinstance(expected_prompt, str) or not expected_prompt.strip()):
         raise ValueError("expected_prompt 不能为空")
     if not isinstance(allow_user_input, bool):
         raise ValueError("allow_user_input 必须是布尔值")
+    if not isinstance(receipt_only, bool):
+        raise ValueError("receipt_only 必须是布尔值")
+    if receipt_only and expected_prompt is None:
+        raise ValueError("receipt_only=True 需要提供 expected_prompt")
+    if receipt_only and since_step is None:
+        raise ValueError("receipt_only=True 需要提供大于等于 -1 的整数 since_step")
 
     resolved = await resolve_conversation(
         conversation_id,
@@ -195,7 +264,7 @@ async def wait(
         timeout=min(15.0, seconds) if seconds else 15.0,
     )
     if not resolved.get("ok"):
-        return resolved
+        return _compact_receipt_payload(resolved, since_step=since_step) if receipt_only else resolved
     exact_id = resolved["conversation_id"]
     socket_used = resolved.get("socket")
 
@@ -208,6 +277,43 @@ async def wait(
     last_events: list[dict[str, Any]] = []
     last_conv = resolved["conversation"]
 
+    def _timeout_payload(err_msg: str | None = None) -> dict[str, Any]:
+        if receipt_only:
+            return _compact_receipt_payload({
+                "ok": False,
+                "timed_out": True,
+                "status": "timeout",
+                "error_code": "wait-timeout",
+                "error": err_msg or f"等待会话 {exact_id} 收件确认超过 {seconds:g} 秒",
+                "run_state": last_run_state,
+                "update_time": last_update_time,
+                "last_step_index": last_step_index,
+            }, exact_id=exact_id, since_step=since_step)
+        return {
+            "ok": False,
+            "timed_out": True,
+            "status": "timeout",
+            "error_code": "wait-timeout",
+            "error": err_msg or f"等待会话 {exact_id} 完成超过 {seconds:g} 秒",
+            "socket": socket_used,
+            "conversation_id": exact_id,
+            "run_state": last_run_state,
+            "update_time": last_update_time,
+            "last_step_index": last_step_index,
+            "events": last_events,
+            "conversation": normalize_conversation(last_conv),
+        }
+
+    async def _sleep_or_timeout(err_msg: str | None = None) -> dict[str, Any] | None:
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return _timeout_payload(err_msg)
+            await asyncio.sleep(min(interval, remaining))
+        else:
+            await asyncio.sleep(interval)
+        return None
+
     try:
         while True:
             step_timeout = 10.0 if deadline is None else max(0.5, min(10.0, deadline - time.monotonic()))
@@ -218,6 +324,8 @@ async def wait(
                 timeout=step_timeout,
             )
             if not current.get("ok"):
+                if receipt_only:
+                    return _compact_receipt_payload(current, exact_id=exact_id, since_step=since_step)
                 current["conversation_id"] = exact_id
                 current["events"] = last_events
                 return current
@@ -238,6 +346,8 @@ async def wait(
                 timeout=step_timeout,
             )
             if not transcript.get("ok"):
+                if receipt_only:
+                    return _compact_receipt_payload(transcript, exact_id=exact_id, since_step=since_step)
                 transcript["conversation_id"] = exact_id
                 transcript["events"] = last_events
                 return transcript
@@ -249,6 +359,13 @@ async def wait(
                 exact_id, steps, new_steps, from_step=first_step, socket_path=socket_path, timeout=step_timeout,
             )
             if full_err is not None:
+                if full_err.get("error_code") == "transcript-incomplete":
+                    timed = await _sleep_or_timeout(str(full_err.get("error") or ""))
+                    if timed is not None:
+                        return timed
+                    continue
+                if receipt_only:
+                    return _compact_receipt_payload(full_err, exact_id=exact_id, since_step=since_step)
                 full_err["conversation_id"] = exact_id
                 full_err["events"] = last_events
                 return full_err
@@ -261,6 +378,18 @@ async def wait(
                     if receipt_matches(s, expected_prompt, exact_id, allow_user_input=allow_user_input)
                 ]
                 if len(matching) > 1:
+                    if receipt_only:
+                        return _compact_receipt_payload({
+                            "ok": False,
+                            "timed_out": False,
+                            "status": "ambiguous",
+                            "error_code": "ambiguous-reply",
+                            "error": f"基线之后出现 {len(matching)} 条同正文收件步骤，存在并发歧义，拒绝确认收件",
+                            "run_state": last_run_state,
+                            "update_time": last_update_time,
+                            "last_step_index": last_step_index,
+                            "matching_receipt_steps": [s.get("step_index") for s in matching],
+                        }, exact_id=exact_id, since_step=since_step)
                     return {
                         "ok": False,
                         "timed_out": False,
@@ -279,6 +408,34 @@ async def wait(
                 if len(matching) == 1:
                     receipt_step = matching[0]
                     receipt_idx = receipt_step.get("step_index")
+                    if receipt_only:
+                        valid_idx = (
+                            isinstance(receipt_idx, int)
+                            and not isinstance(receipt_idx, bool)
+                            and (since_step is None or receipt_idx > since_step)
+                        )
+                        if not valid_idx:
+                            return _compact_receipt_payload({
+                                "ok": False,
+                                "timed_out": False,
+                                "status": "error",
+                                "receipt_confirmed": False,
+                                "error_code": "invalid-receipt-step",
+                                "error": f"收件步骤索引 {receipt_idx!r} 未严格大于基线 since_step={since_step!r}",
+                                "run_state": last_run_state,
+                                "update_time": last_update_time,
+                                "last_step_index": last_step_index,
+                            }, exact_id=exact_id, since_step=since_step)
+                        return _compact_receipt_payload({
+                            "ok": True,
+                            "timed_out": False,
+                            "status": "received",
+                            "receipt_confirmed": True,
+                            "receipt_step_index": receipt_idx,
+                            "run_state": last_run_state,
+                            "update_time": last_update_time,
+                            "last_step_index": last_step_index,
+                        }, exact_id=exact_id, since_step=since_step)
                     segment: list[dict[str, Any]] = []
                     bounded_by_next_input = False
                     for s in new_steps:
@@ -445,39 +602,26 @@ async def wait(
                             "conversation": normalize_conversation(last_conv),
                         }
 
-            if deadline is not None:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return {
-                        "ok": False,
-                        "timed_out": True,
-                        "status": "timeout",
-                        "error_code": "wait-timeout",
-                        "error": f"等待会话 {exact_id} 完成超过 {seconds:g} 秒",
-                        "socket": socket_used,
-                        "conversation_id": exact_id,
-                        "run_state": last_run_state,
-                        "update_time": last_update_time,
-                        "last_step_index": last_step_index,
-                        "events": last_events,
-                        "conversation": normalize_conversation(last_conv),
-                    }
-                await asyncio.sleep(min(interval, remaining))
-            else:
-                await asyncio.sleep(interval)
+            timed = await _sleep_or_timeout()
+            if timed is not None:
+                return timed
     except asyncio.CancelledError as cancelled:
-        cancelled.receipt = {  # type: ignore[attr-defined]
+        cancelled_out: dict[str, Any] = {
             "ok": False,
             "cancelled": True,
             "timed_out": False,
             "status": "cancelled",
-            "socket": socket_used,
             "conversation_id": exact_id,
             "run_state": last_run_state,
             "update_time": last_update_time,
             "last_step_index": last_step_index,
-            "events": last_events,
         }
+        if receipt_only:
+            cancelled.receipt = _compact_receipt_payload(cancelled_out, exact_id=exact_id, since_step=since_step)  # type: ignore[attr-defined]
+        else:
+            cancelled_out["socket"] = socket_used
+            cancelled_out["events"] = last_events
+            cancelled.receipt = cancelled_out  # type: ignore[attr-defined]
         raise
 
 
@@ -564,18 +708,26 @@ async def send(
     *,
     title: str | None = None,
     wait: bool = False,
+    wait_receipt: bool = False,
     timeout: float = 120,
     poll_interval: float = 0.5,
     socket_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """向 Antigravity App 中指定的已有会话发送消息，返回回执并可选等待本轮回复。"""
+    """向 Antigravity App 中指定的已有会话发送消息，返回回执并可选核对收件或等待回复。"""
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("prompt 不能为空")
     if not isinstance(wait, bool):
         raise ValueError("wait 必须是布尔值")
-    seconds = validate_seconds(timeout, allow_zero=wait)
+    if not isinstance(wait_receipt, bool):
+        raise ValueError("wait_receipt 必须是布尔值")
+    if wait and wait_receipt:
+        raise ValueError("wait 与 wait_receipt 不能同时为 True")
+    waiting = wait or wait_receipt
+    seconds = validate_seconds(timeout, allow_zero=waiting)
+    if waiting:
+        validate_seconds(poll_interval, name="poll_interval")
 
-    pre_timeout = max(5.0, min(15.0, seconds)) if (wait and seconds) else (min(15.0, seconds) if seconds else 15.0)
+    pre_timeout = max(5.0, min(15.0, seconds)) if (waiting and seconds) else (min(15.0, seconds) if seconds else 15.0)
     resolved = await resolve_conversation(
         conversation_id,
         include_archived=True,
@@ -584,7 +736,7 @@ async def send(
         timeout=pre_timeout,
     )
     if not resolved.get("ok"):
-        return {**resolved, "sent": False}
+        return _compact_receipt_payload(resolved, sent=False) if wait_receipt else {**resolved, "sent": False}
 
     exact_id = resolved["conversation_id"]
     conv = resolved["conversation"]
@@ -596,11 +748,42 @@ async def send(
         timeout=pre_timeout,
     )
     if not transcript.get("ok"):
+        if wait_receipt:
+            return _compact_receipt_payload(transcript, exact_id=exact_id, sent=False)
         return {**transcript, "conversation_id": exact_id, "sent": False}
 
+    last_idx = transcript.get("last_step_index")
+    total_steps = transcript.get("total_steps", 0)
+    valid_nonempty = isinstance(last_idx, int) and not isinstance(last_idx, bool) and last_idx >= 0
+    valid_empty = (
+        last_idx is None
+        and isinstance(total_steps, int)
+        and not isinstance(total_steps, bool)
+        and total_steps == 0
+    )
+    if not (valid_nonempty or valid_empty):
+        err_out: dict[str, Any] = {
+            "ok": False,
+            "timed_out": False,
+            "sent": False,
+            "uncertain": False,
+            "conversation_id": exact_id,
+            "error_code": "invalid-baseline",
+            "error": f"发送前非空转录缺少合法基准步号 (total_steps={total_steps!r}, last_step_index={last_idx!r})，拒绝发送",
+        }
+        if wait_receipt:
+            return _compact_receipt_payload(err_out, exact_id=exact_id, sent=False)
+        err_out["baseline"] = {
+            "last_step_index": last_idx,
+            "total_steps": total_steps,
+            "update_time": str(state_obj.get("updateTime") or ""),
+            "run_state": str(state_obj.get("runState") or ""),
+        }
+        return err_out
+
     baseline = {
-        "last_step_index": transcript.get("last_step_index"),
-        "total_steps": transcript.get("total_steps", 0),
+        "last_step_index": last_idx,
+        "total_steps": total_steps,
         "update_time": str(state_obj.get("updateTime") or ""),
         "run_state": str(state_obj.get("runState") or ""),
     }
@@ -608,21 +791,23 @@ async def send(
     send_params: dict[str, Any] = {"conversation_id": exact_id, "prompt": prompt}
     if title is not None:
         send_params["title"] = str(title)
-    send_timeout = max(5.0, min(30.0, seconds)) if (wait and seconds) else (min(30.0, seconds) if seconds else 30.0)
+    send_timeout = max(5.0, min(30.0, seconds)) if (waiting and seconds) else (min(30.0, seconds) if seconds else 30.0)
     sent = await call_bridge(
         "send_message",
         send_params,
         socket_path=socket_path,
         timeout=send_timeout,
     )
+    since_step = baseline["last_step_index"] if baseline["last_step_index"] is not None else -1
     if not sent.get("ok"):
+        if wait_receipt:
+            return _compact_receipt_payload(sent, exact_id=exact_id, since_step=since_step)
         return {
             **sent,
             "conversation_id": exact_id,
             "baseline": baseline,
         }
 
-    since_step = baseline["last_step_index"] if baseline["last_step_index"] is not None else -1
     receipt = {
         "conversation_id": exact_id,
         "sent": True,
@@ -631,7 +816,7 @@ async def send(
         "baseline": baseline,
         "agentapi": sent.get("agentapi"),
     }
-    if not wait:
+    if not waiting:
         return {
             "ok": True,
             "timed_out": False,
@@ -643,15 +828,36 @@ async def send(
             "receipt": receipt,
         }
 
-    waited = await globals()["wait"](
-        exact_id,
-        since_step=since_step,
-        since_time=baseline["update_time"] or None,
-        expected_prompt=prompt,
-        timeout=seconds,
-        poll_interval=poll_interval,
-        socket_path=socket_path,
-    )
+    try:
+        waited = await globals()["wait"](
+            exact_id,
+            since_step=since_step,
+            since_time=baseline["update_time"] or None,
+            expected_prompt=prompt,
+            receipt_only=wait_receipt,
+            timeout=seconds,
+            poll_interval=poll_interval,
+            socket_path=socket_path,
+        )
+    except asyncio.CancelledError as cancelled:
+        if wait_receipt:
+            existing = getattr(cancelled, "receipt", None)
+            base = existing if isinstance(existing, dict) else {}
+            cancelled.receipt = _compact_receipt_payload(  # type: ignore[attr-defined]
+                {
+                    "ok": False,
+                    "cancelled": True,
+                    "timed_out": False,
+                    "status": "cancelled",
+                    **base,
+                },
+                exact_id=exact_id,
+                sent=True,
+                since_step=since_step,
+            )
+        raise
+    if wait_receipt:
+        return _compact_receipt_payload(waited, exact_id=exact_id, sent=True, since_step=since_step)
     return {**waited, "sent": True, "baseline": baseline, "receipt": receipt}
 
 

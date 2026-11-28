@@ -4,7 +4,7 @@
 
 [← Documentation](README.en.md) · [All components](components.en.md)
 
-For the Antigravity desktop app, build and install the workbench. In a new conversation, ask for the length of `samples = [3, 5, 8]`, then ask for `sum(samples)` in a second cell. The results should be `3` and `16`. [Install the Antigravity workbench](../agy-python-repl/README.md#install)
+After installing the Antigravity workbench, open a new desktop conversation. In the first cell, define `samples = [3, 5, 8]` and run `len(samples)`. In the second, run only `sum(samples)`. Expand both `run_code` calls in that conversation. Both should have `status="ok"`, with results `3` and `16`. [Install the Antigravity workbench](../agy-python-repl/README.md#install)
 
 To try an independent CLI, make a contact sheet from two of your own images. [Standalone image examples](../skills/shot-sheet/README.en.md#common-operations)
 

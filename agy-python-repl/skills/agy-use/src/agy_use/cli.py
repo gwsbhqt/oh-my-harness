@@ -94,6 +94,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("prompt", help="发送给指定会话的内容")
     p.add_argument("--title", help="消息标题")
     p.add_argument("--wait", action="store_true", help="发送后等待本轮完成并返回回复")
+    p.add_argument("--wait-receipt", action="store_true", help="发送后只核对桌面会话收件步骤，不等待回复完成")
     p.add_argument("--poll-interval", type=float, default=argparse.SUPPRESS, help="轮询间隔秒数")
     _add_app_common(p, unbounded_timeout=True)
 
@@ -104,6 +105,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--since-time", help="基准更新时间 ISO 字符串")
     p.add_argument("--expected-prompt", help="要求在基线后匹配到该正文的 App 收件步骤才确认完成")
     p.add_argument("--allow-user-input", action="store_true", help="核对 new 回执时允许匹配首条用户输入")
+    p.add_argument("--receipt-only", action="store_true", help="只核对 expected-prompt 对应的唯一收件步骤，收到即返回")
     p.add_argument("--poll-interval", type=float, default=argparse.SUPPRESS, help="轮询间隔秒数")
     _add_app_common(p, unbounded_timeout=True)
 

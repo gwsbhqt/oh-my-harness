@@ -35,11 +35,15 @@ agy plugin install "$bundle_dir"
 agy plugin list --json
 ```
 
+Open a new Antigravity desktop conversation and ask for two workbench calls. In the first, set `samples = [3, 5, 8]` and run `len(samples)`. In the second, run only `sum(samples)`. Open the two `run_code` results in that conversation. They should show `status="ok"` with `result="3"` and `result="16"`.
+
 The workbench gives each conversation guidance on choosing tools. During a review, load related files together in `run_code` and reuse their contents for follow-up questions. Use native tools for a single lookup, edits, images, Git and project commands. An existing conversation can receive updated guidance on its next model invocation once Antigravity has loaded the new hooks. When a snapshot is being saved, the first Python cell waits for it.
 
 See the [agy-use skill](skills/agy-use/SKILL.md) to send messages to an existing desktop conversation and read its replies. Antigravity handles Python tool permissions. For a headless CLI run with an empty answer, inspect `result.denied_actions` and the tool events. The CLI can exit successfully after a tool was denied. [Headless mode](https://antigravity.google/docs/cli/headless/) · [Permissions](https://antigravity.google/docs/permissions/)
 
 Enable `agy-python-repl/app-bridge` in Antigravity’s Sidecars settings for desktop control. Its default Unix socket lives under the current user’s state directory. For a custom `AGY_USE_SOCKET`, choose a directory owned by and writable only by that user. [Sidecar configuration](https://antigravity.google/docs/sidecars.md)
+
+For cross-host handoffs from Antigravity to DSH with a single settled completion notice back to the originating Antigravity conversation, pass `--notify self` in Antigravity shell commands (`ANTIGRAVITY_CONVERSATION_ID`) or `notify="agy:<conversation_id>"` in Python REPL (`skills.dsh_use.send` / `new`), which sends a minimal status-only notice via `agy-use send --wait-receipt` over `bridge.sock` without reading secrets or renaming the target conversation.
 
 ## Testing
 

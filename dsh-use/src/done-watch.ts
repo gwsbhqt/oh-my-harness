@@ -6,14 +6,14 @@
  * 监听记录落盘在 `$DSH_HOME/dsh-use/done-watches/<编号>.json`，插件启动时读回来接着盯，DSH 重启不丢；
  * 送之前先把记录标成 delivering，重启后看到 delivering 不再重送，宁可少送不重送。
  *
- * 同一个目标、同一个通知对象只留一条在等的监听：做完是一件事，派单方每次插话都带 --notify 时
- * 必须复用现有监听，避免同一次完成产生重复通知。
+ * 同一个目标和通知对象只复用仍在等待任务结束的监听。旧任务开始最终投递后，新派单使用自己的监听。
  *
  * @module
  */
 import { randomUUID } from 'node:crypto'
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { AgyDeliveryError, parseAgyNotifyTarget } from './agy-notify.ts'
 import type { CommandResult } from './service.ts'
 
 export interface DoneWatchRecord {
@@ -23,10 +23,10 @@ export interface DoneWatchRecord {
   notify: string
   since: number
   createdAt: number
-  state: 'watching' | 'delivering' | 'delivered' | 'failed' | 'merged'
+  state: 'watching' | 'delivering' | 'delivered' | 'failed' | 'merged' | 'unconfirmed'
   /** state 为 merged 时，并进了哪一条。 */
   mergedInto?: string
-  /** 已经通知过的提问（按提问编号），同一个提问只送一次。 */
+  /** 已通知的提问编号。AGY 在发送前也用它记录投递意图，防止重启重发。 */
   asked: string[]
   attempts: number
   outcome?: string
@@ -110,6 +110,29 @@ function questionNotice(record: DoneWatchRecord, outcome: CommandResult): { text
   }
 }
 
+function agyStateLabel(status: string | undefined): string {
+  if (status === undefined || status === 'ok') return 'completed'
+  return status
+}
+
+/** 跨宿主发给 Antigravity 的完成通知只保留最小去敏元数据：DSH 任务编号、明确状态和 watch ID。 */
+function agyFinalNotice(record: DoneWatchRecord, outcome: CommandResult | 'gone'): { text: string; summary: string; outcome: string } {
+  const status = outcome === 'gone' ? 'gone' : (outcome.status ?? 'ok')
+  const state = outcome === 'gone' ? 'gone' : agyStateLabel(status)
+  return {
+    outcome: status,
+    summary: `dsh-use: ${record.target} ${state}`,
+    text: `dsh-use notice: task=${record.target} state=${state} watch=${record.id}`,
+  }
+}
+
+function agyQuestionNotice(record: DoneWatchRecord): { text: string; summary: string } {
+  return {
+    summary: `dsh-use: ${record.target} waiting-input`,
+    text: `dsh-use notice: task=${record.target} state=waiting-input watch=${record.id}`,
+  }
+}
+
 function questionKeys(outcome: CommandResult): string[] {
   const data = (typeof outcome.data === 'object' && outcome.data !== null ? outcome.data : {}) as { questions?: { callId?: unknown; id?: unknown }[] }
   return (data.questions ?? []).map((q, i) => String(q.callId ?? q.id ?? i))
@@ -120,6 +143,7 @@ export class DoneWatcher {
   private readonly records = new Map<string, DoneWatchRecord>()
   private readonly memos = new Map<string, Record<string, unknown>>()
   private readonly adding = new Map<string, Promise<DoneWatchRecord>>()
+  private restoring: Promise<void> | undefined
   private timer: ReturnType<typeof setInterval> | undefined
   private unsubscribe: (() => void) | undefined
   private running = false
@@ -132,8 +156,22 @@ export class DoneWatcher {
 
   private now(): number { return this.deps.now?.() ?? Date.now() }
 
-  /** 读回没送完的监听接着盯；上次正送到一半的标成失败，不重送。 */
+  /** 恢复仍在等的监听。中断的最终投递不重送。 */
   async start(): Promise<void> {
+    this.restoring = this.restore()
+    await this.restoring
+    this.restoring = undefined
+    if (this.stopped) return
+    this.unsubscribe = this.deps.onStatus((sessionId) => {
+      if ([...this.records.values()].some((r) => r.target === sessionId)) this.kick()
+    })
+    this.timer = setInterval(() => { if (this.records.size > 0) this.kick() }, this.deps.intervalMs ?? 5000)
+    this.timer.unref?.()
+    if (this.records.size > 0) this.deps.log(`done-watch 接着盯 ${this.records.size} 条`)
+    this.kick()
+  }
+
+  private async restore(): Promise<void> {
     await mkdir(this.deps.dir, { recursive: true, mode: 0o700 })
     for (const name of await readdir(this.deps.dir)) {
       if (!name.endsWith('.json')) continue
@@ -143,18 +181,11 @@ export class DoneWatcher {
       catch (error) { this.deps.log(`done-watch 读不了 ${name}：${error instanceof Error ? error.message : String(error)}`); continue }
       if (record.state === 'watching') this.records.set(record.id, { ...record, asked: record.asked ?? [], attempts: record.attempts ?? 0 })
       else if (record.state === 'delivering') {
-        await this.save({ ...record, state: 'failed', finishedAt: this.now(), error: '上次送通知时 DSH 退出了，确认不了送到没有，按只送一次不再重送' })
+        const state = parseAgyNotifyTarget(record.notify) === undefined ? 'failed' : 'unconfirmed'
+        await this.save({ ...record, state, finishedAt: this.now(), error: '上次送通知时 DSH 退出了，确认不了送到没有，按只送一次不再重送' })
       } else if ((record.finishedAt ?? record.createdAt) < this.now() - KEEP_FINISHED_MS) await rm(path, { force: true })
     }
     await this.mergeDuplicates()
-    if (this.stopped) return
-    this.unsubscribe = this.deps.onStatus((sessionId) => {
-      if ([...this.records.values()].some((r) => r.target === sessionId)) this.kick()
-    })
-    this.timer = setInterval(() => { if (this.records.size > 0) this.kick() }, this.deps.intervalMs ?? 5000)
-    this.timer.unref?.()
-    if (this.records.size > 0) this.deps.log(`done-watch 接着盯 ${this.records.size} 条`)
-    this.kick()
   }
 
   stop(): void {
@@ -167,12 +198,14 @@ export class DoneWatcher {
     return [...this.records.values()]
   }
 
-  /** 同一目标、同一通知对象已有在等的监听就沿用它；起点保留更早的那个，不影响「真做完」的判定。 */
+  /** 复用仍在等待任务结束的监听，保留它的起点。 */
   async add(input: { target: string; notify: string; since: number; targetTitle?: string }): Promise<DoneWatchRecord & { reused?: boolean }> {
-    // 新记录要先落盘才进内存表，同一对目标和通知对象同时登记时，第二个要等第一个写完再沿用它。
+    if (this.restoring !== undefined) await this.restoring
     const key = `${input.target}\0${input.notify}`
-    const inflight = this.adding.get(key)
-    const existing = this.pendingFor(input.target, input.notify) ?? (inflight === undefined ? undefined : await inflight)
+    for (let inflight = this.adding.get(key); inflight !== undefined; inflight = this.adding.get(key)) {
+      await inflight
+    }
+    const existing = this.pendingFor(input.target, input.notify)
     if (existing !== undefined) {
       this.deps.log(`done-watch reuse ${existing.id} target=${input.target} notify=${input.notify} since=${input.since}`)
       this.kick()
@@ -194,17 +227,24 @@ export class DoneWatcher {
   }
 
   private pendingFor(target: string, notify: string): DoneWatchRecord | undefined {
-    return [...this.records.values()].filter((r) => r.target === target && r.notify === notify)
+    return [...this.records.values()]
+      .filter((r) => r.target === target && r.notify === notify && r.state === 'watching' && r.outcome === undefined)
       .sort((a, b) => a.createdAt - b.createdAt)[0]
   }
 
   /** 读回的记录里同一目标、同一通知对象有多条在等的，只留最早一条，其余标成 merged。 */
   private async mergeDuplicates(): Promise<void> {
     for (const record of [...this.records.values()]) {
+      if (record.outcome !== undefined) continue
       const keep = this.pendingFor(record.target, record.notify)
       if (keep === undefined || keep.id === record.id) continue
-      this.records.delete(record.id)
+      if (record.asked.some((key) => !keep.asked.includes(key))) {
+        const asked = [...new Set([...keep.asked, ...record.asked])]
+        await this.save({ ...keep, asked })
+        keep.asked = asked
+      }
       await this.save({ ...record, state: 'merged', mergedInto: keep.id, finishedAt: this.now() })
+      this.records.delete(record.id)
       this.deps.log(`done-watch ${record.id} merged into ${keep.id}`)
     }
   }
@@ -215,13 +255,18 @@ export class DoneWatcher {
 
   private async save(record: DoneWatchRecord): Promise<void> {
     const tmp = join(this.deps.dir, `.${record.id}.${randomUUID()}.tmp`)
-    await writeFile(tmp, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 })
-    await rename(tmp, this.path(record.id))
+    try {
+      await writeFile(tmp, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 })
+      await rename(tmp, this.path(record.id))
+    } catch (error) {
+      await rm(tmp, { force: true }).catch(() => {})
+      throw error
+    }
   }
 
   /** 状态变化和定时器都走这里；同一时间只跑一遍，跑的时候来的请求合并成下一遍。 */
   kick(): void {
-    if (this.stopped) return
+    if (this.stopped || this.restoring !== undefined) return
     if (this.running) { this.again = true; return }
     this.running = true
     void (async () => {
@@ -238,8 +283,13 @@ export class DoneWatcher {
     })()
   }
 
-  /** 查一次；跑完返回 true（已送或已放弃）。 */
+  /** 查一次，送完或放弃后返回 true。 */
   async step(record: DoneWatchRecord): Promise<boolean> {
+    if (record.state === 'delivering') return false
+    if (record.state !== 'watching') {
+      if (this.records.has(record.id)) await this.finish(record)
+      return true
+    }
     const memo = this.memos.get(record.id) ?? {}
     this.memos.set(record.id, memo)
     let outcome: CommandResult | 'gone' | undefined
@@ -249,24 +299,44 @@ export class DoneWatcher {
       outcome = 'gone'
     }
     if (outcome === undefined || (outcome !== 'gone' && (outcome.status === 'running' || outcome.status === 'timeout'))) return false
-    if (outcome !== 'gone' && this.deps.title !== undefined) {
+    const agyTarget = parseAgyNotifyTarget(record.notify) !== undefined
+    if (outcome !== 'gone' && !agyTarget && this.deps.title !== undefined) {
       const title = await this.deps.title(record.target).catch(() => undefined)
       if (title !== undefined && title.trim() !== '') record.targetTitle = title
     }
     if (outcome !== 'gone' && outcome.status === 'waiting-input') {
       const fresh = questionKeys(outcome).filter((k) => !record.asked.includes(k))
       if (fresh.length === 0) return false
+      if (agyTarget) {
+        await this.deliverAgyQuestion(record, fresh)
+        return false
+      }
       const { text, summary } = questionNotice(record, outcome)
-      await this.deps.deliver(record.notify, text, summary)
+      try {
+        await this.deps.deliver(record.notify, text, summary)
+      } catch (error) {
+        if ((error as { unconfirmed?: unknown } | null)?.unconfirmed === true) {
+          record.asked.push(...fresh)
+          await this.save(record)
+          this.deps.log(`done-watch ${record.id} 提问通知已提交但收件未确认，不再重送：${error instanceof Error ? error.message : String(error)}`)
+          return false
+        }
+        throw error
+      }
       record.asked.push(...fresh)
       await this.save(record)
       this.deps.log(`done-watch ${record.id} asked ${fresh.join(',')}`)
       return false
     }
-    const notice = finalNotice(record, outcome)
+    const notice = agyTarget ? agyFinalNotice(record, outcome) : finalNotice(record, outcome)
     record.state = 'delivering'
     record.outcome = notice.outcome
-    await this.save(record)
+    try {
+      await this.save(record)
+    } catch (error) {
+      record.state = 'watching'
+      throw error
+    }
     try {
       await this.deps.deliver(record.notify, notice.text, notice.summary)
       record.state = 'delivered'
@@ -275,19 +345,52 @@ export class DoneWatcher {
     } catch (error) {
       record.attempts++
       record.error = error instanceof Error ? error.message : String(error)
-      if (record.attempts < MAX_ATTEMPTS) {
+      const permanent = (error as { permanent?: unknown } | null)?.permanent === true
+      const unconfirmed = agyTarget
+        ? !(error instanceof AgyDeliveryError) || error.unconfirmed
+        : (error as { unconfirmed?: unknown } | null)?.unconfirmed === true
+      if (unconfirmed) {
+        record.state = 'unconfirmed'
+        record.finishedAt = this.now()
+      } else if (!permanent && record.attempts < MAX_ATTEMPTS) {
         record.state = 'watching'
         await this.save(record)
         this.deps.log(`done-watch ${record.id} 送通知失败（第 ${record.attempts} 次），稍后再试：${record.error}`)
         return false
+      } else {
+        record.state = 'failed'
+        record.finishedAt = this.now()
       }
-      record.state = 'failed'
-      record.finishedAt = this.now()
     }
+    await this.finish(record)
+    return true
+  }
+
+  private async deliverAgyQuestion(record: DoneWatchRecord, fresh: string[]): Promise<void> {
+    const previous = record.asked
+    const asked = [...previous, ...fresh]
+    await this.save({ ...record, asked })
+    record.asked = asked
+    const { text, summary } = agyQuestionNotice(record)
+    try {
+      await this.deps.deliver(record.notify, text, summary)
+      this.deps.log(`done-watch ${record.id} asked ${fresh.join(',')}`)
+    } catch (error) {
+      if (error instanceof AgyDeliveryError && !error.unconfirmed && !error.permanent) {
+        await this.save({ ...record, asked: previous })
+        record.asked = previous
+        throw error
+      }
+      const detail = error instanceof Error ? error.message : String(error)
+      const status = error instanceof AgyDeliveryError && error.permanent ? '永久拒绝' : '收件未确认'
+      this.deps.log(`done-watch ${record.id} 提问通知${status}，不再重送：${detail}`)
+    }
+  }
+
+  private async finish(record: DoneWatchRecord): Promise<void> {
     await this.save(record)
     this.records.delete(record.id)
     this.memos.delete(record.id)
     this.deps.log(`done-watch ${record.id} ${record.state} outcome=${record.outcome}${record.error === undefined ? '' : ` error=${record.error}`}`)
-    return true
   }
 }
