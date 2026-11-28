@@ -39,7 +39,7 @@ computer-use --local owner 计算器 release --scope task-a --lease LEASE --json
 | `windows APP` | 只读发现稳定原生窗口引用；不激活、不 claim 浏览器 |
 | `window-close APP --window-ref JSON --authorized` | 只关闭该引用的窗口并核对消失 |
 | `apps` | 列出运行中的应用（名称 / bundle id / pid / 窗口数 / 谁在前台） |
-| `apps --all` | 列出 Dock / 控制中心 / 菜单栏图标这类系统 UI 进程 |
+| `apps --all` | 列出 Dock / 控制中心 / 菜单栏图标这类系统 UI 进程；默认 `apps` 不含无 Dock 图标的窗口（如后台/演示 App）。`apps`/`apps --all` 每项只有名称、bundle id、pid、窗口数、是否前台，**不含窗口标题**。已知应用名或 bundle id 时用 `windows <应用名或 bundle id>` 只列该应用窗口、按标题核对；只知道标题且无法确定所属应用时先问清应用名，不在多个窗口间逐个猜 |
 | `menu <app>` | 列出应用的菜单栏（File / Edit / View …） |
 | `menu <app> "File"` | 列出该菜单下的项（带快捷键和禁用状态） |
 | `menu <app> "File" "存储"` | 点击菜单项。**很多功能只在菜单里，够不着按钮时走这条** |
