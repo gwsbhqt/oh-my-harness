@@ -12,6 +12,8 @@ On first launch, uv prepares Python and the locked dependencies for the current 
 
 Once prepared, the local tool can restart with uv in offline mode (`UV_OFFLINE=1`). This setting controls dependency downloads. Desktop conversations using a cloud model still need a connection to the model service.
 
+For project Python skills, set `cwd` to the project directory in the first call to a new kernel. At startup, the workbench looks for Python skills in `.agents/skills/`. To use another project’s skills, start a new kernel in that project. Run `await skills.describe("skill-name")` to read the instructions for a known skill.
+
 To try an independent CLI, make a contact sheet from two of your own images. [Standalone image examples](../skills/shot-sheet/README.en.md#common-operations)
 
 The steps below install persistent Python in DSH.
