@@ -106,7 +106,7 @@ diff -u "$AGY_TMP/expected" "$AGY_TMP/current"
 
 这些检查不需要网络或源码。生成与接收都先完成扫描再排序，读取、规范化或排序失败会非零中止。生成在同目录写临时文件，成功后再改为正式名，不会留下部分正式结果或替换既有完整清单；接收只在新建的系统临时目录写临时文件，并在退出时清理，所以交付目录可以只读。比较不去重，也不清理路径其他部分。DSH 的单个归档哈希覆盖包内全部内容；AGY 的清单差异会指出普通文件的内容变化、额外文件和缺文件。AGY 清单不检查目录结构、符号链接或其他文件类型，权限检查也只覆盖上述两个命令。不再要求接收方为了发现额外文件而重新构建。
 
-平台安装沿用现有入口。DSH：把入门页 profile 中的 `link:` 依赖改为指向已校验 `.tgz` 的绝对 `file:` 路径，保留组合包登记，再用 DSH 所配 pnpm 安装、运行启动检查并重启。安装 Antigravity 插件时，执行 `agy plugin validate "$AGY_DIR" --strict && agy plugin install "$AGY_DIR"`，再用 `agy plugin list --json` 核对。严格校验能在覆盖现有安装前检出损坏的工具或钩子配置。只做临时验收时，为 AGY 命令设置一个新的空 `HOME`；先确认 `plugin list --json` 为 `[]`，不要操作日常 App。
+平台安装沿用现有入口。DSH：把入门页 profile 中的 `link:` 依赖改为指向已校验 `.tgz` 的绝对 `file:` 路径，保留组合包登记，再用 DSH 所配 pnpm 安装、运行启动检查并重启。安装 Antigravity 插件时，执行 `agy plugin validate "$AGY_DIR" --strict && agy plugin install "$AGY_DIR"`，再用 `agy plugin list --json` 核对。严格校验能在覆盖现有安装前检出损坏的工具或钩子配置。覆盖升级或回退后，重新启动 Antigravity 工作台的 MCP 服务，再开新内核做一次实际调用。旧服务可能继续使用先前的代码，也可能在创建内核时报目录不存在。只做临时验收时，为 AGY 命令设置一个新的空 `HOME`；先确认 `plugin list --json` 为 `[]`，不要操作日常 App。
 
 宿主输入不能互换：DSH 的 `file:` 必须指向通过 `DSH-SHA256SUMS` 检查的 `.tgz`，不能指向 `$AGY_DIR`；Antigravity 必须安装通过上述目录清单检查的 `$AGY_DIR`，不能安装 `.tgz`。pnpm 能把本地目录安装成依赖并返回成功，但这不会产生可加载的 DSH 插件，所以安装命令退出 0 不能代替宿主输入检查。
 

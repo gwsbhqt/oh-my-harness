@@ -121,3 +121,38 @@ it('does not count a configured root twice when the project is the directory tha
     assert.doesNotMatch(context, /shadowed|Project Python skill roots/)
   } finally { await runtime.disposeAll(); rmSync(home, { recursive: true, force: true }) }
 })
+
+it('guides an unknown skill lookup into a new session started in the project', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-repl-missing-hint-'))
+  const trusted = join(dir, 'trusted')
+  const project = join(dir, 'project')
+  mkdirSync(join(project, '.git'), { recursive: true })
+  addSkill(trusted, 'demo-reader', 'global')
+  addSkill(join(project, '.agents', 'skills'), 'project-reader', 'fictional-project')
+  const runtime = await runtimeWith({ skillRoots: [trusted] })
+  try {
+    const outside = runtime.sessionFor('outside', dir)
+    const direct = await outside.runCell('skills.demo_readr', new Map())
+    assert.match(direct.error?.message ?? '', /did you mean skills.demo_reader/)
+    assert.match(direct.error?.message ?? '', /await skills\.list\(\).*new DSH session/)
+
+    const described = await outside.runCell([
+      'import os',
+      `os.chdir(${JSON.stringify(project)})`,
+      'absent, member = (await skills.describe(["project-reader", "demo_reader.absent"]))["items"]',
+      'print(absent["status"], absent["reason"])',
+      'print(member["reason"])',
+    ].join('\n'), new Map())
+    assert.equal(described.error, undefined)
+    assert.match(described.logs.join(''), /unknown.*await skills\.list\(\).*new DSH session/)
+    assert.match(described.logs.join(''), /no such public module member\s*$/)
+
+    const retried = await outside.runCell('await skills.retry("project-reader")', new Map())
+    assert.match(retried.error?.message ?? '', /KeyError: .*Unknown skill 'project-reader'.*new DSH session/)
+
+    const inside = runtime.sessionFor('inside', project)
+    const found = await inside.runCell('entry = (await skills.describe("project-reader"))["items"][0]\nprint(entry["status"], skills.project_reader.ORIGIN)', new Map())
+    assert.equal(found.error, undefined)
+    assert.match(found.logs.join(''), /available fictional-project/)
+  } finally { await runtime.disposeAll(); rmSync(dir, { recursive: true, force: true }) }
+})

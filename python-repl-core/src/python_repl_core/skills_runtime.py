@@ -11,6 +11,12 @@ from pathlib import Path
 from typing import Any
 
 
+_SKILL_LOOKUP_HINT = (
+    "Call `await skills.list()` to see the names discovered by this kernel. "
+    "If you expected a project skill, start a new kernel or session in the project directory."
+)
+
+
 class _SkillsNamespace:
     """Exposes discovered Python skills as `skills.<import_name>`."""
 
@@ -69,7 +75,7 @@ class _SkillsNamespace:
             raise AttributeError(f"Skill {name!r} was not loaded due to duplicate conflict")
         if name in self._failed:
             raise AttributeError(self._failure(name, name))
-        raise AttributeError(f"No Python skill named {name!r}. Call `await skills.list()` to see available skills.")
+        raise AttributeError(f"No Python skill named {name!r}. {_SKILL_LOOKUP_HINT}")
 
     def _failure(self, key: str, display_name: str) -> str:
         status = "has invalid instructions" if self._entries[key].get("document_error") else "failed to import"
@@ -97,7 +103,7 @@ class _SkillsNamespace:
             raise KeyError(f"Skill {import_name!r} was not loaded due to duplicate definitions of {key!r}")
         entry = self._entries.get(key)
         if entry is None or import_name not in (entry["name"], entry["import_name"]):
-            raise KeyError(f"Unknown skill {import_name!r}")
+            raise KeyError(f"Unknown skill {import_name!r}. {_SKILL_LOOKUP_HINT}")
         return entry
 
     async def retry(self, import_name: str) -> dict[str, str]:

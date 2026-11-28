@@ -28,6 +28,15 @@ from typing import Any
 
 from dsh_kernel import _Namespace, _page
 
+#: Appended to lookups that name a skill the kernel never discovered. A DSH kernel
+#: discovers project skills (.agents/skills) only when its session starts in that
+#: project's workspace, so the recovery step is to start a fresh session there —
+#: switching cwd inside a running kernel does not rediscover anything.
+_SKILL_RECOVERY_HINT = (
+    "Call `await skills.list()` to see the names this kernel discovered. "
+    "If you expected a project skill, start a new DSH session in the project directory."
+)
+
 #: Static markers that a module wants Prime's host, which this deployment has
 #: no intention of providing. Detection is a diagnostic, never a security gate:
 #: a dynamic import inside a function body will only surface when it runs.
@@ -306,7 +315,9 @@ class _SkillsNamespace(_Namespace):
             raise TypeError("target must be a skill name")
         matches = self._named_records(target, for_retry=True)
         if len(matches) != 1:
-            raise KeyError(f"{'Ambiguous' if matches else 'Unknown'} skill {target!r}")
+            if matches:
+                raise KeyError(f"Ambiguous skill {target!r}")
+            raise KeyError(f"Unknown skill {target!r}. {_SKILL_RECOVERY_HINT}")
         record = matches[0]
         name = record.get("import_name")
         if record["status"] == "available":
@@ -389,8 +400,13 @@ class _SkillsNamespace(_Namespace):
                 if member.isidentifier() and not keyword.iskeyword(member) and not member.startswith("_"):
                     records = [r for r in catalog if r.get("import_name") == name]
             if len(records) != 1:
-                items.append({"id": target, "status": "unknown" if not records else "unavailable",
-                              "reason": "no unique loaded skill or public member matches this target" if not records else "; ".join(r.get("reason", "ambiguous skill id") for r in records)})
+                if records:
+                    reason = "; ".join(r.get("reason", "ambiguous skill id") for r in records)
+                else:
+                    reason = "no unique loaded skill or public member matches this target"
+                    if target and "." not in target:
+                        reason += f". {_SKILL_RECOVERY_HINT}"
+                items.append({"id": target, "status": "unavailable" if records else "unknown", "reason": reason})
                 continue
             record = records[0]
             item = self._item(record)
@@ -462,6 +478,8 @@ def _missing_skill(name: str, available: list[str], renames=None) -> str:
         close = difflib.get_close_matches(name, available, n=1, cutoff=0.6)
         guess = close[0] if close else None
     listed = ", ".join(available[:20]) + (" …" if len(available) > 20 else "")
-    if guess is not None:
-        return f"no skill named {name!r}; did you mean skills.{guess}? Available: {listed}"
-    return f"no skill named {name!r}. Available: {listed}"
+    message = f"no skill named {name!r}"
+    message += f"; did you mean skills.{guess}?" if guess is not None else "."
+    if listed:
+        message += f" Available: {listed}."
+    return f"{message} {_SKILL_RECOVERY_HINT}"

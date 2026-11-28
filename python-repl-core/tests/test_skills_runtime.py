@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import builtins
 import sys
 import tempfile
@@ -27,6 +28,7 @@ class SkillsImportGuardTests(unittest.TestCase):
         sub.mkdir(parents=True)
         (pkg / "__init__.py").write_text("ANSWER = 42\n", encoding="utf-8")
         (sub / "__init__.py").write_text("VALUE = 99\n", encoding="utf-8")
+        (self.root / "fixture-reader" / "PYSKILL.md").write_text("# fixture-reader\n", encoding="utf-8")
 
         self.skills_ns = _SkillsNamespace()
         report = self.skills_ns._register_all([
@@ -88,6 +90,38 @@ class SkillsImportGuardTests(unittest.TestCase):
 
         with self.assertRaises(ImportError):
             exec("from skills.fixture_reader import NOT_THERE", self.ns)
+
+
+    def test_unknown_skill_points_to_the_kernel_catalog_and_project_directory(self) -> None:
+        for lookup in (self.skills_ns.describe, self.skills_ns.retry):
+            with self.subTest(lookup=lookup.__name__):
+                with self.assertRaisesRegex(KeyError, "Unknown skill 'missing_skill'") as error:
+                    asyncio.run(lookup("missing_skill"))
+                self.assertIn("await skills.list()", str(error.exception))
+                self.assertIn("project directory", str(error.exception))
+
+        with self.assertRaisesRegex(AttributeError, "No Python skill named 'missing_skill'") as error:
+            self.skills_ns.missing_skill
+        self.assertIn("await skills.list()", str(error.exception))
+        self.assertIn("project directory", str(error.exception))
+
+    def test_known_name_returns_instructions_and_duplicate_keeps_its_own_error(self) -> None:
+        result = asyncio.run(self.skills_ns.describe("fixture-reader"))
+        self.assertEqual(result["documentation"], "# fixture-reader\n")
+
+        first = self.skills_ns._entries["fixture_reader"]
+        other = self.root / "another-location" / "fixture-reader"
+        second = {
+            **first,
+            "directory": str(other),
+            "source_root": str(other / "src"),
+            "doc_path": str(other / "PYSKILL.md"),
+        }
+        duplicate = _SkillsNamespace()
+        duplicate._register_all([first, second])
+        with self.assertRaisesRegex(KeyError, "duplicate definitions") as error:
+            asyncio.run(duplicate.describe("fixture-reader"))
+        self.assertNotIn("await skills.list()", str(error.exception))
 
 
 if __name__ == "__main__":
