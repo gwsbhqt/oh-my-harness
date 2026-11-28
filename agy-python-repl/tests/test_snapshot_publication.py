@@ -38,6 +38,8 @@ class SnapshotPublicationTests(unittest.IsolatedAsyncioTestCase):
         self.data = self.root / "data"
         self.snapshots = self.data / "snapshots"
         self.hooks = json.loads((ROOT / "hooks.json").read_text(encoding="utf-8"))["agy-python-repl-session"]
+        servers = json.loads((ROOT / "mcp_config.json").read_text(encoding="utf-8"))["mcpServers"]
+        self.server_name, = servers
 
     @asynccontextmanager
     async def server(self, *, watchdog_pid=None):
@@ -46,7 +48,7 @@ class SnapshotPublicationTests(unittest.IsolatedAsyncioTestCase):
                "PYTHONDONTWRITEBYTECODE": "1"}
         if watchdog_pid is not None:
             env["PRIME_AGENT_KERNEL_OWNER_PID"] = str(watchdog_pid)
-        params = StdioServerParameters(command=sys.executable, args=["-m", "agy_python_repl.server"],
+        params = StdioServerParameters(command=sys.executable, args=["-m", "agy_python_repl.server", "--conversation"],
                                        cwd=self.root, env=env)
         async with stdio_client(params) as streams, ClientSession(*streams) as client:
             await client.initialize()
@@ -65,11 +67,11 @@ class SnapshotPublicationTests(unittest.IsolatedAsyncioTestCase):
         if tool not in ("run_code", "kernel_state"):
             return await client.call_tool(tool, args)
         payload = {"conversationId": conversation, "workspacePaths": [str(self.root)], "toolCall": {
-            "id": uuid4().hex, "name": f"mcp_agy-python-repl_agy-python-repl_{tool}", "args": args,
+            "id": uuid4().hex, "name": f"mcp_agy-python-repl_{self.server_name}_{tool}", "args": args,
         }}
         registered = await asyncio.to_thread(self.run_hook, "PreToolUse", payload)
-        self.assertEqual(registered, {"decision": "allow"})
-        reply = await client.call_tool(tool, args)
+        self.assertEqual(registered.get("decision"), "allow", registered)
+        reply = await client.call_tool(tool, {**args, **registered.get("overwrite", {})})
         await asyncio.to_thread(self.run_hook, "PostToolUse", {**payload, "error": reply.isError})
         return reply
 

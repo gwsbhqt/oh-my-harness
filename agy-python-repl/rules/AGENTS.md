@@ -6,7 +6,7 @@ Continue each `run_code` cell in this conversation's live Python namespace. Use 
 
 - Bind a project root once when you need one. Once `repo` exists, pass `repo / "tests"` or `repo / "config.json"` directly to the file helpers. They accept `Path` objects. The default working directory follows the conversation. Supply `cwd` on `run_code` only to change directories.
 - Keep the complete tool result, parsed data and useful functions in variables. Use the same object for a follow-up unless the source changed. If unsure whether a specific name survived, use `"repo" in globals()` or `repl.vars("repo")`. Check a restore notice for any names that were lost.
-- Define a function when you anticipate repeating a test command, query or transformation. Return data so later cells can filter it. `await repl.helpers("test")` finds functions and classes with matching names and shows their call signatures.
+- Define repeated work once. A function keeps temporary variables local and can return data for later cells. `await repl.helpers("test")` displays matching signatures and returns an indexable list. For a helper named `_probe`, search with `await repl.helpers("_probe")`.
 - `read`, `write`, `edit`, `bash`, `glob`, `grep`, `asyncio` and `ToolCallError` are ready in the first cell. So are `Path`, `json`, `os`, `re`, `sys`, `time`, `Counter`, `defaultdict`, `timedelta` and `timezone`.
 
 ## Display what answers the question
@@ -21,7 +21,8 @@ Continue each `run_code` cell in this conversation's live Python namespace. Use 
   ```
 
 - For a count or comparison, read the inputs, compute the aggregate and display the requested fields in one cell when the input shape is known. Keep open files and iterators local to the helper and save the materialized records for follow-up. Inspect column names if the layout is unknown. Report a discrepancy only if it affects the answer.
-- For a source lookup, narrow the search to the relevant directory. Keep the matches and show the name, line and text that answer the question. Read the surrounding lines once when they affect the decision. For example, `section = await read(path, offset=line, limit=4)` saves a reusable result. End the cell with `section` to display it.
+- `repl.preview(value)` displays a bounded view of an in-memory value. Keep the returned dict to check `truncated` and `reasons` later. Previewing an iterator leaves its items available.
+- For a source lookup, start in the relevant directory. For example, `paths = await glob("src/**/*.py", repo)` searches the `src` tree inside `repo`. Use the saved matches to read the few lines that answer the question. Save `section = await read(path, offset=line, limit=4)` and display `section`. When more context is needed, read only the missing lines.
 - For tests, keep the `bash` result and check `exitCode`. Show `ok` on success. On failure, give the failing cases and actual errors from the captured output. If the runner stopped before it collected tests, show that startup error. Use complete data to count failures or conclude that a search found nothing. You can inspect the saved result again for details.
 - The six helpers return ordinary structured data with compact displays. Read results have `.lines` and `.text`, command results have `.exitCode`, `.stdout.text` and `.stderr.text`, searches have `.matches`, and file listings have `.paths`. For repeated project commands, reuse one function with `workdir=repo`. Pass only the environment overrides the command needs, for example `env={"VIRTUAL_ENV": None}` to omit one inherited setting. Parallelize independent reads or commands with `asyncio.gather`. Use the host's managed task facility when a command must keep running after its cell.
 

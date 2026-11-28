@@ -16,7 +16,6 @@ from mcp.shared.exceptions import McpError
 
 import agy_python_repl
 import python_repl_core
-from agy_python_repl import session_routing
 from agy_python_repl.manager import KernelManager
 from python_repl_core.kernel_client import KernelProtocolError
 
@@ -35,12 +34,8 @@ class McpCancellationTests(unittest.IsolatedAsyncioTestCase):
             async with stdio_client(params) as (reader, writer), ClientSession(reader, writer) as session:
                 await session.initialize()
 
-                data_dir = workspace / "data"
-
                 async def call(code, kernel="primary"):
-                    args = {"code": code, "cwd": str(workspace)}
-                    session_routing.enqueue_call(data_dir, "run_code", args, kernel)
-                    return await session.call_tool("run_code", args)
+                    return await session.call_tool("run_code", {"code": code, "cwd": str(workspace), "kernel": kernel})
 
                 first = await call("import os\nos.getpid()")
                 self.assertFalse(first.isError)

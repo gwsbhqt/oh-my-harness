@@ -17,7 +17,6 @@ from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from agy_python_repl import session_routing
 from agy_python_repl.manager import KernelManager
 
 
@@ -47,9 +46,7 @@ class ProcessOwnershipTests(unittest.IsolatedAsyncioTestCase):
             yield client
 
     async def call(self, client, tool, *, kernel=None, **arguments):
-        if tool in ("run_code", "kernel_state") and kernel and kernel != "default":
-            session_routing.enqueue_call(self.data, tool, arguments, kernel)
-        elif kernel is not None:
+        if kernel is not None:
             arguments = {**arguments, "kernel": kernel}
         reply = await client.call_tool(tool, arguments)
         self.assertFalse(reply.isError, reply.content)
@@ -63,9 +60,7 @@ class ProcessOwnershipTests(unittest.IsolatedAsyncioTestCase):
         return body
 
     async def busy(self, client, tool, *, kernel=None, **arguments):
-        if tool in ("run_code", "kernel_state") and kernel and kernel != "default":
-            session_routing.enqueue_call(self.data, tool, arguments, kernel)
-        elif kernel is not None:
+        if kernel is not None:
             arguments = {**arguments, "kernel": kernel}
         reply = await client.call_tool(tool, arguments)
         self.assertTrue(reply.isError, reply.content)
@@ -132,8 +127,7 @@ class ProcessOwnershipTests(unittest.IsolatedAsyncioTestCase):
             async with asyncio.timeout(10):
                 while True:
                     args = {"code": "(base, pending_sale)"}
-                    session_routing.enqueue_call(self.data, "run_code", args, REPORT)
-                    reply = await successor.call_tool("run_code", args)
+                    reply = await successor.call_tool("run_code", {**args, "kernel": REPORT})
                     if not reply.isError:
                         break
                     self.assertIn("in use", reply.content[0].text.lower())
@@ -152,8 +146,7 @@ class ProcessOwnershipTests(unittest.IsolatedAsyncioTestCase):
             async with asyncio.timeout(10):
                 while True:
                     args = {"code": "confirmed"}
-                    session_routing.enqueue_call(self.data, "run_code", args, REPORT)
-                    reply = await successor.call_tool("run_code", args)
+                    reply = await successor.call_tool("run_code", {**args, "kernel": REPORT})
                     if not reply.isError:
                         break
                     self.assertIn("in use", reply.content[0].text.lower())

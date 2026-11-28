@@ -58,7 +58,7 @@ def make_wheel(directory: Path, name: str, version: str, requires: str = "", *, 
 def launcher(root: Path, workspace: Path) -> tuple[StdioServerParameters, Path]:
     bundle, data = root / "bundle", root / "plugin data"
     subprocess.run(["sh", ROOT / "scripts/bundle.sh", bundle], check=True, capture_output=True)
-    server = json.loads((bundle / "mcp_config.json").read_text())["mcpServers"]["agy-python-repl"]
+    server, = json.loads((bundle / "mcp_config.json").read_text())["mcpServers"].values()
     uv = Path(shutil.which("uv")).resolve()
     local_uv = root / ".local/bin/uv"
     local_uv.parent.mkdir(parents=True)
@@ -101,12 +101,12 @@ class PackageInstallTests(unittest.IsolatedAsyncioTestCase):
                     "conversationId": kernel, "stepIdx": next(steps), "workspacePaths": [str(params.cwd)],
                     "toolCall": {"name": f"mcp_{SERVER_NAME}_{name}", "args": args},
                 }
-                self.assertEqual(hook(payload), {"decision": "allow"})
-                reply = await session.call_tool(name, args)
+                decision = hook(payload)
+                self.assertEqual(decision["decision"], "allow", decision)
+                reply = await session.call_tool(name, {**args, **decision.get("overwrite", {})})
                 if reply.isError:
                     payload["error"] = str(reply.content)
                 self.assertEqual(hook(payload, "--post-tool-use"), {})
-                self.assertEqual(hook({"conversationId": kernel}, "--post-invocation"), {})
                 return reply
 
             yield call_tool

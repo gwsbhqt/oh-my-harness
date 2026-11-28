@@ -167,11 +167,11 @@ await write(p, "first\r\n\r\nthird\nlast\n")''')
             path = docs / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("token\n", encoding="utf-8")
-        preview = await self.cell(manager, "d = Path('docs')\nawait glob('docs/*.txt', d)")
-        self.assertIn("docs/one.txt", preview)
+        preview = await self.cell(manager, "d = Path('docs')\nawait glob('./*.txt', d)")
+        self.assertIn("\none.txt", preview)
         self.assertNotIn("deep", preview)
         all_text = ["docs/.private/secret.txt", "docs/deep/two.txt", "docs/one.txt"]
-        await self.assert_cell_value(manager, "r = await glob('docs/**/*.txt', d)\nsorted(r.paths)", all_text)
+        await self.assert_cell_value(manager, "r = await glob('**/*.txt', d)\nsorted(r.paths)", all_text)
         await self.assert_cell_value(
             manager, "r = await glob('**/node_modules/*.txt', d)\n(r.paths, (await read(r.paths[0])).text)",
             (["docs/node_modules/pkg.txt"], "token"),
@@ -181,7 +181,7 @@ await write(p, "first\r\n\r\nthird\nlast\n")''')
         self.assertEqual(await self.cell(manager, "(_.total, _.truncated)"), "(3, True)")
         self.assertEqual(await self.cell(manager, "r = await glob('one.txt', d, limit=1)\nr.truncated"), "False")
         preview = await self.cell(manager, "await grep('token', d, include='*.txt')")
-        self.assertIn("docs/one.txt:1: token", preview)
+        self.assertIn("\none.txt:1: token", preview)
         await self.assert_cell_value(manager, "sorted(m.path for m in _.matches)", ["docs/deep/two.txt", "docs/one.txt"])
         await self.assert_cell_value(
             manager, "r = await grep('token', d, scope='all', include='*.txt')\nsorted(m.path for m in r.matches)",
@@ -199,6 +199,82 @@ await write(p, "first\r\n\r\nthird\nlast\n")''')
         self.assertNotIn("INCOMPLETE", preview)
         self.assertIn("0 matches", await self.cell(manager, "await grep('absent', d, scope='all')"))
         self.assertIn("0 paths", await self.cell(manager, "await glob('absent', d)"))
+
+    async def test_explicit_newlines_are_literal_and_plain_edits_keep_local_endings(self) -> None:
+        manager = self.new_manager()
+        target = self.workspace / "orders.txt"
+        target.write_bytes(b"draft\r\npaid\r\nsent\n")
+        await self.assert_cell_value(manager, r"(await edit('orders.txt', '\r\n', '\n', replace_all=True)).replacements", 2)
+        self.assertEqual(target.read_bytes(), b"draft\npaid\nsent\n")
+        target.write_bytes(b"draft\r\npaid\nsent\r\n")
+        await self.assert_cell_value(manager, r"(await edit('orders.txt', '\n', '\r\n', replace_all=True)).replacements", 1)
+        self.assertEqual(target.read_bytes(), b"draft\r\npaid\r\nsent\r\n")
+        await self.cell(manager, r"await edit('orders.txt', 'draft\npaid', 'ready\nbilled')")
+        self.assertEqual(target.read_bytes(), b"ready\r\nbilled\r\nsent\r\n")
+        await self.cell(manager, r"await edit('orders.txt', 'billed\r\nsent', 'billed\ndone')")
+        self.assertEqual(target.read_bytes(), b"ready\r\nbilled\ndone\r\n")
+
+    async def test_explicit_glob_root_is_the_only_root_and_paths_round_trip(self) -> None:
+        manager = self.new_manager()
+        repo = self.workspace / "catalog"
+        for path in (self.workspace / "src/cwd.py", repo / "src/top.py", repo / "src/new/item.py",
+                     repo / "catalog/src/nested.py", repo / "other/src/extra.py"):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(path.stem, encoding="utf-8")
+        preview = await self.cell(manager, "repo = Path('catalog').resolve()\nawait glob('src/**/*.py', repo)")
+        self.assertEqual(preview.count(str(repo)), 1)
+        self.assertIn("\nsrc/new/item.py", preview)
+        await self.assert_cell_value(manager, "rows = [(p, (await read(p)).text) for p in _.paths]\nsorted(rows)",
+                                     [(str(repo / "src/new/item.py"), "item"), (str(repo / "src/top.py"), "top")])
+        await self.assert_cell_value(manager, "(await glob('catalog/src/*.py', 'catalog')).paths",
+                                     ["catalog/catalog/src/nested.py"])
+        await self.assert_cell_value(manager, "(await glob('catalog/src/*.py')).paths", ["catalog/src/top.py"])
+        await self.assert_cell_value(manager, "(await glob('src/**/*.py')).paths", ["src/cwd.py"])
+
+    async def test_grep_include_uses_one_root_with_and_without_ripgrep(self) -> None:
+        t = create_builtin_tools()
+        names = ("src/order.txt", "src/detail/paid.txt", "src/order.py", "other/src/else.txt",
+                 ".hidden/private.txt", "src/.hidden/notes.txt", "src/node_modules/cache.txt")
+        for name in names:
+            path = self.workspace / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("ready\n", encoding="utf-8")
+        (self.workspace / "src/receipt.txt").write_bytes(b"ready\n\0binary preview\n")
+        (self.workspace / "src/latest.txt").symlink_to("order.txt")
+        for rg in dict.fromkeys([None, shutil.which("rg")]):
+            with self.subTest(rg=bool(rg)), patch("agy_python_repl.builtin_tools.shutil.which", return_value=rg):
+                for scope, expected in [("normal", names[:2]), ("all", (*names[:2], names[5]))]:
+                    hits = await t["grep"]("ready", self.workspace, include="src/**/*.txt", scope=scope, limit=len(expected))
+                    self.assertFalse(hits.outputCapped)
+                    self.assertEqual({m.path for m in hits.matches}, {str(self.workspace / n) for n in expected})
+                    self.assertEqual({(await t["read"](m.path)).text for m in hits.matches}, {"ready"})
+                    self.assertEqual(repr(hits).count(str(self.workspace)), 1)
+                    self.assertIn("matching files", repr(hits))
+                capped = await t["grep"]("ready", self.workspace, include="src/**/*.txt", limit=1)
+                self.assertTrue(capped.outputCapped)
+                empty = await t["grep"]("pending", self.workspace, include="src/**/*.txt")
+                self.assertIn("0 matches", repr(empty))
+                self.assertNotIn("files", repr(empty).splitlines()[0].split(" under ")[0])
+                self.assertIn("readable part", repr(empty))
+                with self.assertRaises(ToolCallError):
+                    await t["grep"]("[", self.workspace, include="*.missing")
+
+    async def test_grep_byte_limit_applies_to_the_selected_files(self) -> None:
+        search = create_builtin_tools()["grep"]
+        for department, content in (("orders", "ready"), ("archive", "ready " + "a" * 8192)):
+            directory = self.workspace / department
+            directory.mkdir()
+            (directory / "report.txt").write_text(content, encoding="utf-8")
+        for rg in dict.fromkeys([None, shutil.which("rg")]):
+            with (self.subTest(rg=bool(rg)),
+                  patch("agy_python_repl.builtin_tools.shutil.which", return_value=rg),
+                  patch("agy_python_repl.builtin_tools._GREP_MAX_BYTES", 4096)):
+                small = await search("ready", self.workspace, include="orders/*.txt")
+                self.assertFalse(small.outputCapped)
+                self.assertEqual([m.line for m in small.matches], ["ready"])
+                large = await search("ready", self.workspace, include="archive/*.txt")
+                self.assertTrue(large.outputCapped)
+                self.assertIn("INCOMPLETE", repr(large))
 
     async def test_bash_named_arguments_timeout_and_failures_at_call_site(self) -> None:
         manager = self.new_manager()
@@ -236,11 +312,14 @@ await bash("[[ -n $BASH_VERSION ]] || exit 3; pwd; cat; printf err >&2; exit 7",
             (self.workspace / name).write_text("needle\n", encoding="utf-8")
         (self.workspace / ".ignore").write_text("ignored.txt\n", encoding="utf-8")
         (self.workspace / "rg-options").write_text("--hidden\n--no-ignore\n", encoding="utf-8")
-        preview = await self.cell(manager, "os.environ['RIPGREP_CONFIG_PATH'] = str(Path('rg-options').resolve())\n"
-                                           "await grep('needle')")
-        self.assertIn("visible.txt:1: needle", preview)
-        self.assertNotIn(".hidden.txt", preview)
-        self.assertNotIn("ignored.txt", preview)
+        setup = await manager.run_code("os.environ['RIPGREP_CONFIG_PATH'] = str(Path('rg-options').resolve())",
+                                       cwd=self.workspace)
+        self.assertEqual(setup["status"], "ok", setup)
+        for code in ("await grep('needle')", "await grep('needle', include='*.txt')"):
+            preview = await self.cell(manager, code)
+            self.assertIn("visible.txt:1: needle", preview)
+            self.assertNotIn(".hidden.txt", preview)
+            self.assertNotIn("ignored.txt", preview)
 
     async def test_search_errors_show_partial_coverage_and_keep_the_matches(self) -> None:
         manager = self.new_manager()
@@ -253,7 +332,8 @@ await bash("[[ -n $BASH_VERSION ]] || exit 3; pwd; cat; printf err >&2; exit 7",
             self.addCleanup(directory.chmod, 0o700)
         if os.access(self.workspace / "denied", os.R_OK):
             self.skipTest("This account can read mode-000 directories")
-        for code in ("await glob('*.txt')", "await grep('visible', scope='all')"):
+        for code in ("await glob('*.txt')", "await grep('visible', scope='all')",
+                     "await grep('visible', scope='all', include='*.txt')"):
             preview = await self.cell(manager, code)
             self.assertIn("INCOMPLETE", preview)
             self.assertIn("ok.txt", preview)
@@ -261,6 +341,7 @@ await bash("[[ -n $BASH_VERSION ]] || exit 3; pwd; cat; printf err >&2; exit 7",
             self.assertEqual(await self.cell(manager, "[Path(e.path).name for e in _.unreadable]"), repr(["denied"]))
         preview = await self.cell(manager, "await grep('absent', scope='all')")
         self.assertIn("0 matches", preview)
+        self.assertNotIn("0 files", preview)
         self.assertIn("INCOMPLETE", preview)
         response = await manager.run_code("await grep('[')", cwd=self.workspace)
         self.assertEqual(response["error"]["ename"], "ToolCallError")
@@ -270,8 +351,9 @@ await bash("[[ -n $BASH_VERSION ]] || exit 3; pwd; cat; printf err >&2; exit 7",
         (self.workspace / "source.txt").write_text("a.b\na?b\n", encoding="utf-8")
         (self.workspace / ".ignore").write_text("source.txt\n", encoding="utf-8")
         with patch("agy_python_repl.builtin_tools.shutil.which", return_value=None):
-            with self.assertRaisesRegex(ToolCallError, "ignore files require"):
-                await grep("a.b", self.workspace)
+            for include in (None, "*.txt"):
+                with self.assertRaisesRegex(ToolCallError, "ignore files require"):
+                    await grep("a.b", self.workspace, include=include)
             result = await grep("A.B", self.workspace, include="*.txt", scope="all", fixed_strings=True,
                                 case_sensitive=False, limit=1)
             self.assertFalse(result.outputCapped)

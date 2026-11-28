@@ -73,8 +73,9 @@ def _snapshot_hint(data: Path, conversation: str) -> str:
         msg += f" Saved variables include {preview_names}{more}."
         shadowed = sorted(name for name in saved_names if isinstance(name, str) and name in BUILTIN_TOOL_NAMES)
         if shadowed:
-            msg += (f" Saved user bindings take precedence over these built-in helpers: {', '.join(shadowed)}."
-                    f" Keep an alias if needed, then use await repl.restore_binding({shadowed[0]!r}) to get that helper.")
+            msg += (f" Saved names match built-in helpers ({', '.join(shadowed)}). The first restore receipt will"
+                    " report which user values took precedence. Keep an alias for any value you need before using"
+                    f" await repl.restore_binding({shadowed[0]!r}).")
     return msg
 
 

@@ -46,6 +46,12 @@ def _names(label: str, names: Any, count: int | None = None) -> str:
 def _state_details(report: dict[str, Any], *, show_path: bool) -> list[str]:
     parts = []
     omitted = False
+    if shadowed := report.get("shadowed_bindings"):
+        parts.append(f"User values shadowed these built-ins when restored ({', '.join(shadowed)}). "
+                     "To use a built-in again, save any value you need under another name, then restore the "
+                     f"chosen binding with a call such as await repl.restore_binding({shadowed[0]!r}).")
+    if warning := report.get("binding_warning"):
+        parts.append(warning)
     if show_path and (path := report.get("snapshot_path")):
         parts.append(f"Snapshot: {path}")
     for key in ("error", "reason", "legacy_name_warning"):
@@ -144,8 +150,11 @@ def render_run_code(receipt: dict[str, Any]) -> str:
             directory = Path(index["directory"])
             paths = [str(directory / name) for name in index["files"]]
             if len("\n".join(paths).encode("utf-8", errors="replace")) > SUMMARY_BYTES:
-                paths = [f"Capture directory: {directory}", *index["files"]]
-        parts.extend(paths)
+                parts.append(f"Capture directory: {directory}")
+                paths = index["files"]
+        for path in paths:
+            channel = Path(path).stem.rsplit("_", 1)[-1]
+            parts.append(f"{channel}: {path}" if channel in {"stdout", "stderr", "result", "details"} else path)
         errors = receipt.get("overflow_errors", {})
         for channel, message in errors.items():
             parts.append(f"Could not save {channel}: {message}")

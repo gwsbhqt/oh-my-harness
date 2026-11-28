@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import copyreg
+import fcntl
 import fnmatch
 import json
 import math
@@ -15,7 +16,8 @@ import signal
 import stat
 import tempfile
 import threading
-from contextlib import ExitStack
+from collections import defaultdict
+from contextlib import ExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -27,7 +29,6 @@ _GREP_SHOW = 250
 _GREP_MAX_BYTES = 10 * 1024 * 1024
 _GLOB_SHOW = 100
 _LINE_SHOW = 300
-_FILE_WRITE_LOCK = threading.Lock()
 _MAX_READ_LIMIT = 2000
 _EDIT_MAX_BYTES = 4 * 1024 * 1024
 _BASH_MAX_BYTES = 4 * 1024 * 1024
@@ -193,9 +194,20 @@ class _BashResult(_ToolResult):
         return "\n".join([f"── bash · {' · '.join(status)} (view of a dict) ──", *notices, *body])
 
 
+def _search_preview_path(result: dict, path: str) -> str:
+    root = result.get("searchPath", result.get("root"))
+    if root is not None and Path(path).is_relative_to(root):
+        return str(Path(path).relative_to(root))
+    return path
+
+
 def _search_errors(result: dict) -> list[str]:
     errors = result.get("unreadable", [])
-    lines = [f"  unreadable {item['path']}: {item['error']}" for item in errors[:10]]
+    lines = []
+    for item in errors[:10]:
+        path = _search_preview_path(result, item["path"])
+        message = item["error"].replace(item["path"], path)
+        lines.append(f"  unreadable {path}: {message}")
     if len(errors) > 10:
         lines.append(f"  … {len(errors) - 10} more in r.unreadable")
     return lines
@@ -207,14 +219,17 @@ class _GrepResult(_ToolResult):
     def _render(self) -> str:
         matches = self["matches"]
         files = len({m["path"] for m in matches})
-        count = f"{len(matches)} retained matches" if self["outputCapped"] else f"{len(matches)} matches"
+        count = f"{len(matches)} retained matches" if matches and self["outputCapped"] else f"{len(matches)} matches"
         label = f" · scope={self['scope']}" if self.get("scope") else ""
-        out = [f"── grep{label} · {count} in {files} files (view of a dict) ──"]
+        root = f" under {self['root']}" if self.get("root") else ""
+        coverage = f" in {files} matching file{'s' if files != 1 else ''}" if files else ""
+        out = [f"── grep{label} · {count}{coverage}{root} (view of a dict) ──"]
         if self["outputCapped"]:
             out.append("INCOMPLETE: search output was capped")
         if self.get("unreadable"):
             out.extend(["INCOMPLETE: some paths could not be read", *_search_errors(self)])
-        out.extend(f"{m['path']}:{m['lineNumber']}: {_clip_line(m['line'])}" for m in matches[:_GREP_SHOW])
+        out.extend(f"{_search_preview_path(self, m['path'])}:{m['lineNumber']}: {_clip_line(m['line'])}"
+                   for m in matches[:_GREP_SHOW])
         if len(matches) > _GREP_SHOW:
             out.append(f"… {len(matches) - _GREP_SHOW} more in r.matches[{_GREP_SHOW}:]")
         if not matches:
@@ -232,12 +247,12 @@ class _GlobResult(_ToolResult):
             out.append(f"INCOMPLETE: returning {len(paths)} of {self['total']} matching paths found")
         if self.get("unreadable"):
             out.extend(["INCOMPLETE: some paths could not be read", *_search_errors(self)])
-        out.extend(paths[:_GLOB_SHOW])
+        out.extend(_search_preview_path(self, path) for path in paths[:_GLOB_SHOW])
         if len(paths) > _GLOB_SHOW:
             out.append(f"… {len(paths) - _GLOB_SHOW} more in r.paths[{_GLOB_SHOW}:]")
         pattern = self.get("pattern", "")
         if not paths and "/" in pattern and not pattern.startswith("**/"):
-            out.append("(patterns with / match from the working directory; use **/ to search below any directory)")
+            out.append("(patterns with / match from the search root; use **/ to search below any directory)")
         return "\n".join(out)
 
 
@@ -321,9 +336,64 @@ async def _read_impl(payload: dict[str, Any]) -> _ReadResult:
     return await asyncio.to_thread(_load)
 
 
-def _locked_mutation(action):
-    with _FILE_WRITE_LOCK:
-        return action()
+def _try_lock(fd: int) -> bool:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except BlockingIOError:
+        return False
+
+
+async def _mutate_file(target: Path, tool: str, action, *, create: bool = False):
+    cancelled = threading.Event()
+
+    def attempt():
+        if cancelled.is_set():
+            return None
+        if create:
+            target.parent.mkdir(parents=True, exist_ok=True)
+        # A newly created file must already be locked when another writer opens it.
+        # Release the directory lock before doing any file content I/O.
+        with ExitStack() as opening:
+            directory = os.open(target.parent, getattr(os, "O_SEARCH", os.O_RDONLY) | os.O_DIRECTORY)
+            opening.callback(os.close, directory)
+            if not _try_lock(directory):
+                return None
+            created = False
+            try:
+                stream = target.open("r+b")
+            except FileNotFoundError:
+                if not create:
+                    raise
+                if cancelled.is_set():
+                    return None
+                try:
+                    stream = target.open("x+b")
+                except FileExistsError:
+                    return None
+                created = True
+            with stream:
+                if not _try_lock(stream.fileno()):
+                    return None
+                opening.close()
+                if not created and cancelled.is_set():
+                    return None
+                return action(stream, created)
+
+    try:
+        while (result := await asyncio.to_thread(attempt)) is None:
+            await asyncio.sleep(0.02)
+        return result
+    except (OSError, UnicodeError) as exc:
+        raise ToolCallError(tool, f"Failed to {tool} {target}: {exc}") from None
+    finally:
+        cancelled.set()
+
+
+def _replace_contents(stream: BinaryIO, data: bytes) -> None:
+    stream.seek(0)
+    stream.write(data)
+    stream.truncate()
 
 
 async def _write_impl(payload: dict[str, Any]) -> _ToolResult:
@@ -334,22 +404,19 @@ async def _write_impl(payload: dict[str, Any]) -> _ToolResult:
     if target.is_dir():
         raise ToolCallError("write", f"Path is a directory: {target}")
 
-    def _save() -> _ToolResult:
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                before = target.read_bytes().decode("utf-8")
-            except FileNotFoundError:
-                before = None
-            encoded = content.encode("utf-8")
-            target.write_bytes(encoded)
-        except (OSError, UnicodeError) as exc:
-            raise ToolCallError("write", f"Failed to write {target} as UTF-8: {exc}") from None
+    try:
+        encoded = content.encode("utf-8")
+    except UnicodeError as exc:
+        raise ToolCallError("write", f"Failed to encode content as UTF-8: {exc}") from None
+
+    def _save(stream: BinaryIO, created: bool) -> _ToolResult:
+        before = None if created else stream.read().decode("utf-8")
+        _replace_contents(stream, encoded)
         lines = content.count("\n") + int(bool(content) and not content.endswith("\n"))
         return _WriteResult(path=str(target), operation="create" if before is None else "update",
                             before=before, after=content, bytes=len(encoded), lines=lines)
 
-    return await asyncio.to_thread(_locked_mutation, _save)
+    return await _mutate_file(target, "write", _save, create=True)
 
 
 async def _edit_impl(payload: dict[str, Any]) -> _ToolResult:
@@ -386,12 +453,8 @@ async def _edit_impl(payload: dict[str, Any]) -> _ToolResult:
         if "\x00" in change["new_string"]:
             raise ToolCallError("edit", f"change {i + 1} new_string contains a NUL byte")
 
-    def _apply() -> _ToolResult:
-        try:
-            with target.open("rb") as source:
-                raw_bytes = source.read(_EDIT_MAX_BYTES + 1)
-        except OSError as exc:
-            raise ToolCallError("edit", f"Failed to read {target}: {exc}") from None
+    def _apply(stream: BinaryIO, _created: bool) -> _ToolResult:
+        raw_bytes = stream.read(_EDIT_MAX_BYTES + 1)
         if len(raw_bytes) > _EDIT_MAX_BYTES:
             raise ToolCallError("edit", f"File exceeds edit limit ({_EDIT_MAX_BYTES} bytes): {target}")
         if b"\x00" in raw_bytes:
@@ -406,12 +469,17 @@ async def _edit_impl(payload: dict[str, Any]) -> _ToolResult:
         default_ending = first_break[0] if first_break else "\n"
         results = []
         for i, change in enumerate(edits, 1):
-            old = change["old_string"].replace("\r\n", "\n")
-            new = change["new_string"].replace("\r\n", "\n")
-            # Match either file line ending without rewriting unedited lines.
-            pattern = re.compile(r"\r?\n".join(re.escape(part) for part in old.split("\n")))
+            old, new = change["old_string"], change["new_string"]
+            explicit = "\r\n" in old or "\r\n" in new
+            if explicit:
+                # A literal LF must not match the second byte of a CRLF.
+                pattern = re.compile(r"(?<!\r)\n".join(re.escape(part) for part in re.split(r"(?<!\r)\n", old)))
+            else:
+                pattern = re.compile(r"\r?\n".join(re.escape(part) for part in old.split("\n")))
 
             def replacement(match: re.Match[str]) -> str:
+                if explicit:
+                    return new
                 ending = re.search(r"\r?\n", match[0]) if "\n" in new else None
                 return new.replace("\n", ending[0] if ending else default_ending)
 
@@ -422,16 +490,13 @@ async def _edit_impl(payload: dict[str, Any]) -> _ToolResult:
                                             f"change {i} of {len(edits)} old_string {reason}")
             results.append({"path": str(target), "before": text, "after": updated, "replacements": count})
             text = updated
-        try:
-            target.write_bytes(text.encode("utf-8"))
-        except (OSError, UnicodeError) as exc:
-            raise ToolCallError("edit", f"Failed to write {target}: {exc}") from None
+        _replace_contents(stream, text.encode("utf-8"))
         result = _EditResult(applied=len(results), results=_wrap_nested(results))
         if raw_edits is None:
             result.update(results[0])
         return result
 
-    return await asyncio.to_thread(_locked_mutation, _apply)
+    return await _mutate_file(target, "edit", _apply)
 
 
 async def _bash_stream(source: BinaryIO, label: str, capture_dir: Path | None) -> _NestedResult:
@@ -593,8 +658,7 @@ async def _glob_impl(payload: dict[str, Any]) -> _GlobResult:
         matches = []
         errors = []
         for path in _walk_files(root, _skipped_dirs(root, pattern), errors):
-            relative = Path(os.path.relpath(path)) if path.is_absolute() else path
-            if not _path_matches(relative, pattern):
+            if not _path_matches(path.relative_to(root), pattern):
                 continue
             try:
                 info = path.stat()
@@ -604,8 +668,9 @@ async def _glob_impl(payload: dict[str, Any]) -> _GlobResult:
             if stat.S_ISREG(info.st_mode):
                 matches.append((-info.st_mtime_ns, str(path)))
         matches.sort()
-        return _GlobResult(root=str(root.absolute()), pattern=pattern, paths=[p for _, p in matches[:limit]],
-                           total=len(matches), truncated=len(matches) > limit, unreadable=_wrap_nested(errors))
+        return _GlobResult(root=str(root.absolute()), searchPath=str(root), pattern=pattern,
+                           paths=[p for _, p in matches[:limit]], total=len(matches),
+                           truncated=len(matches) > limit, unreadable=_wrap_nested(errors))
 
     return await asyncio.to_thread(_scan)
 
@@ -615,6 +680,59 @@ def _rg_text(field: dict, *, path: bool = False) -> str:
         return field["text"]
     raw = base64.b64decode(field["bytes"])
     return os.fsdecode(raw) if path else raw.decode("utf-8", errors="replace")
+
+
+@asynccontextmanager
+async def _rg_output(command: list[str], errors: list[dict]):
+    # Stderr must drain even when stdout is capped or the caller stops reading file names.
+    with tempfile.TemporaryFile() as diagnostics:
+        try:
+            proc = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE,
+                                                        stderr=diagnostics, limit=_GREP_MAX_BYTES)
+        except (OSError, ValueError) as exc:
+            raise ToolCallError("grep", f"Cannot start ripgrep: {exc}") from None
+        try:
+            yield proc.stdout
+        finally:
+            stopped_early = not proc.stdout.at_eof()
+            if stopped_early and proc.returncode is None:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+            await proc.communicate()
+        diagnostics.seek(0)
+        message = diagnostics.read().decode("utf-8", errors="replace").strip()
+    for line in message.splitlines():
+        error = re.fullmatch(r"rg: (.+?): (.+\(os error \d+\).*)", line)
+        if not error:
+            raise ToolCallError("grep", message)
+        errors.append({"path": error[1], "error": error[2]})
+    if not stopped_early and proc.returncode not in (0, 1) and not message:
+        raise ToolCallError("grep", f"ripgrep exited with status {proc.returncode}")
+
+
+async def _matching_file_batches(names: asyncio.StreamReader, root: Path, include: str):
+    batch = []
+    size = 0
+    while True:
+        try:
+            entry = await names.readuntil(b"\0")
+        except asyncio.IncompleteReadError as exc:
+            if exc.partial:
+                raise ToolCallError("grep", "ripgrep returned an incomplete file name") from exc
+            # rg still validates the regex when there are no eligible files.
+            yield batch or [os.devnull]
+            return
+        path = os.fsdecode(entry[:-1])
+        if not _path_matches(Path(path).relative_to(root), include):
+            continue
+        if batch and size + len(entry) > 32 * 1024:
+            yield batch
+            batch = []
+            size = 0
+        batch.append("./-" if path == "-" else path)
+        size += len(entry)
 
 
 async def _grep_impl(payload: dict[str, Any]) -> _GrepResult:
@@ -635,6 +753,7 @@ async def _grep_impl(payload: dict[str, Any]) -> _GrepResult:
     limit = payload.get("limit", _GREP_SHOW)
     if type(limit) is not int or limit < 1:
         raise ToolCallError("grep", "limit must be a positive integer")
+    is_directory = target.is_dir()
     skipped = _skipped_dirs(target, include or "")
     errors: list[dict] = []
     matches: list[dict] = []
@@ -650,14 +769,16 @@ async def _grep_impl(payload: dict[str, Any]) -> _GrepResult:
             rx = re.compile(re.escape(pattern) if fixed else pattern, 0 if case_sensitive else re.IGNORECASE)
         except re.error as exc:
             raise ToolCallError("grep", f"Invalid regex: {exc}") from None
-        normal = scope == "normal" and target.is_dir()
+        normal = scope == "normal" and is_directory
         if normal and any((parent / marker).exists() for parent in target.resolve().parents
                           for marker in _GREP_IGNORE_MARKERS):
             raise ToolCallError("grep", _GREP_NEEDS_RG)
-        files = _walk_files(target, skipped, errors, normal_fallback=normal) if target.is_dir() else [target]
+        files = _walk_files(target, skipped, errors, normal_fallback=normal) if is_directory else [target]
+        retained_bytes = 0
         for path in files:
-            if include and target.is_dir() and not _path_matches(path.relative_to(target), include):
-                continue
+            if is_directory:
+                if path.is_symlink() or (include and not _path_matches(path.relative_to(target), include)):
+                    continue
             try:
                 if not stat.S_ISREG(path.stat().st_mode):
                     continue
@@ -667,8 +788,10 @@ async def _grep_impl(payload: dict[str, Any]) -> _GrepResult:
                     source.seek(0)
                     for number, raw in enumerate(source, 1):
                         line = raw.removesuffix(b"\n").removesuffix(b"\r").decode("utf-8", errors="replace")
-                        if rx.search(line) and not add(str(path), number, line):
-                            return True
+                        if rx.search(line):
+                            retained_bytes += len(raw) + len(os.fsencode(path))
+                            if retained_bytes > _GREP_MAX_BYTES or not add(str(path), number, line):
+                                return True
             except OSError as exc:
                 errors.append({"path": str(path), "error": str(exc)})
         return False
@@ -677,68 +800,65 @@ async def _grep_impl(payload: dict[str, Any]) -> _GrepResult:
     if not rg:
         capped = await asyncio.to_thread(python_search)
     else:
-        cmd = [rg, "--no-config", "--json", "--max-count", str(limit + 1)]
+        traversal = [rg, "--no-config"]
         if scope == "all":
-            cmd.extend(["--hidden", "--no-ignore"])
-        if not case_sensitive:
-            cmd.append("--ignore-case")
-        if fixed:
-            cmd.append("--fixed-strings")
-        if include:
-            cmd.extend(["--glob", include])
-            if scope == "normal":
-                cmd.extend(["--glob", "!**/.*"])
+            traversal.extend(["--hidden", "--no-ignore"])
         for directory in sorted(skipped):
-            cmd.extend(["--glob", f"!**/{directory}"])
-        cmd.extend(["--", pattern, str(target)])
-        capped = False
-        # Stop the producer at the first unretained match; stderr must drain independently.
-        with tempfile.TemporaryFile() as diagnostics:
-            try:
-                proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=diagnostics,
-                                                            limit=_GREP_MAX_BYTES)
-            except (OSError, ValueError) as exc:
-                raise ToolCallError("grep", f"Cannot start ripgrep: {exc}") from None
-            try:
-                size = 0
+            traversal.extend(["--glob", f"!**/{directory}"])
+        search = ["--json", "--max-count", str(limit + 1)]
+        if not case_sensitive:
+            search.append("--ignore-case")
+        if fixed:
+            search.append("--fixed-strings")
+        search.extend(["--", pattern])
+        size = 0
+
+        async def search_paths(command: list[str], *, check_binary: bool = False) -> bool:
+            nonlocal size
+            pending = defaultdict(list)
+            async with _rg_output(command, errors) as output:
                 while True:
                     try:
-                        raw = await proc.stdout.readline()
-                    except ValueError:  # StreamReader rejected a single event larger than its limit.
-                        capped = True
-                        break
+                        raw = await output.readline()
+                    except ValueError:  # A single event exceeded the stream limit.
+                        return True
                     if not raw:
-                        break
+                        return False
                     size += len(raw)
                     if size > _GREP_MAX_BYTES:
-                        capped = True
-                        break
+                        return True
                     event = json.loads(raw)
+                    data = event["data"]
                     if event["type"] == "match":
-                        data = event["data"]
                         path = str(Path(_rg_text(data["path"], path=True)))
                         line = _rg_text(data["lines"]).removesuffix("\n").removesuffix("\r")
-                        if not add(path, data["line_number"], line):
-                            capped = True
-                            break
-            finally:
-                if proc.stdout is not None and not proc.stdout.at_eof() and proc.returncode is None:
-                    try:
-                        proc.kill()
-                    except ProcessLookupError:
-                        pass
-                await proc.communicate()
-            diagnostics.seek(0)
-            message = diagnostics.read().decode("utf-8", errors="replace").strip()
-        for line in message.splitlines():
-            error = re.fullmatch(r"rg: (.+?): (.+\(os error \d+\).*)", line)
-            if not error:
-                raise ToolCallError("grep", message)
-            errors.append({"path": error[1], "error": error[2]})
-        if not capped and proc.returncode not in (0, 1) and not errors:
-            raise ToolCallError("grep", f"ripgrep exited with status {proc.returncode}")
-    return _GrepResult(matches=_wrap_nested(matches), total=len(matches), outputCapped=capped, scope=scope,
-                       unreadable=_wrap_nested(errors), skippedDirectories=sorted(skipped))
+                        if check_binary:
+                            pending[path].append((data["line_number"], line))
+                        elif not add(path, data["line_number"], line):
+                            return True
+                    elif check_binary and event["type"] == "end":
+                        # Explicit paths can emit matches before rg flags the file as binary.
+                        path = str(Path(_rg_text(data["path"], path=True)))
+                        rows = pending.pop(path, ())
+                        if data.get("binary_offset") is None:
+                            for number, line in rows:
+                                if not add(path, number, line):
+                                    return True
+
+        operand = "./-" if str(target) == "-" else str(target)
+        if include and is_directory:
+            # A positive rg --glob overrides ignore files. Filter the eligible names instead.
+            capped = False
+            async with _rg_output([*traversal, "--files", "--null", "--", operand], errors) as names:
+                async for batch in _matching_file_batches(names, target, include):
+                    if await search_paths([rg, "--no-config", *search, *batch], check_binary=True):
+                        capped = True
+                        break
+        else:
+            capped = await search_paths([*traversal, *search, operand])
+    root = target if is_directory else target.parent
+    return _GrepResult(root=str(root.absolute()), searchPath=str(root), matches=_wrap_nested(matches), total=len(matches),
+                       outputCapped=capped, scope=scope, unreadable=_wrap_nested(errors), skippedDirectories=sorted(skipped))
 
 
 _IMPLS = {
@@ -789,8 +909,10 @@ def create_builtin_tools(*, capture_dir: Path | None = None) -> dict[str, Any]:
         "bash": BuiltinTool("bash", "await bash(command, description=None, *, workdir=None, stdin=None, "
                                     "timeoutMs=None, env=None) -> foreground result; a timeout stops the local "
                                     "process group (cwd and timeout_ms are aliases)", capture_dir=capture_dir),
-        "glob": BuiltinTool("glob", "await glob(pattern, path=None, *, limit=1000) -> matching file paths, newest first"),
+        "glob": BuiltinTool("glob", "await glob(pattern, path=None, *, limit=1000) -> files, newest first; patterns with / "
+                                    "start at path (default: cwd), other patterns match basenames"),
         "grep": BuiltinTool("grep", "await grep(pattern, path=None, *, include=None, scope='normal', case_sensitive=True, "
-                                    "fixed_strings=False, limit=250) -> matches and search completeness"),
+                                    "fixed_strings=False, limit=250) -> matches and search completeness; include filters eligible "
+                                    "files by basename or, with /, relative to the search directory"),
         "ToolCallError": ToolCallError,
     }

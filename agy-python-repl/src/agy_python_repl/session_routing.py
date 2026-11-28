@@ -1,27 +1,28 @@
-"""Side-channel session and workspace routing between Antigravity hooks and the MCP server."""
+"""Bind a desktop REPL call to its conversation before opening a kernel."""
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import math
 import os
+import re
+import secrets
+import sqlite3
 import tempfile
 import time
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SERVER_NAME = "agy-python-repl_agy-python-repl"
+SERVER_NAME = "agy-python-repl_conversation"
+LEGACY_SERVER_NAME = "agy-python-repl_agy-python-repl"
 SCOPED_TOOLS = ("run_code", "kernel_state")
-DIRECT_NAMES = {f"mcp_{SERVER_NAME}_{name}" for name in SCOPED_TOOLS}
-
-LOCK_BUCKETS = 64
-PENDING_TTL_SECONDS = 300.0
-STALE_COLLISION_AGE_SECONDS = 8.0
-COLLISION_WAIT_SECONDS = 8.0
-COLLISION_POLL_SECONDS = 0.015
+ROUTE_PREFIX = "agy-repl-call:"
+RELOAD_MESSAGE = (
+    "Reload the Python REPL MCP server under Customizations → Installed → MCP Servers, "
+    "then retry with the listed conversation server."
+)
 
 
 class SessionRoutingError(RuntimeError):
@@ -66,62 +67,44 @@ def resolve_workspace(payload: dict[str, Any]) -> str | None:
 
 
 def extract_repl_call(payload: dict[str, Any]) -> tuple[str, dict[str, Any], bool, str] | None:
-    """Return (tool_name, args, is_deferred, tool_call_id) if payload targets a scoped REPL tool."""
     call = payload.get("toolCall")
     if not isinstance(call, dict):
         return None
-    tool_name = call.get("name")
+    name = call.get("name")
     args = call.get("args", {})
-    deferred = tool_name == "call_mcp_tool"
-    if deferred:
-        if not isinstance(args, dict) or args.get("ServerName") != SERVER_NAME:
-            return None
-        target_tool = args.get("ToolName")
-        if target_tool not in SCOPED_TOOLS:
-            return None
+    deferred = name == "call_mcp_tool"
+    if deferred and isinstance(args, dict):
+        server, tool = args.get("ServerName"), args.get("ToolName")
         args = args.get("Arguments", {})
-    elif isinstance(tool_name, str) and tool_name in DIRECT_NAMES:
-        target_tool = tool_name.removeprefix(f"mcp_{SERVER_NAME}_")
     else:
+        targets = {f"mcp_{server}_{tool}": (server, tool)
+                   for server in (SERVER_NAME, LEGACY_SERVER_NAME) for tool in SCOPED_TOOLS}
+        server, tool = targets.get(name, (None, None)) if isinstance(name, str) else (None, None)
+    if server not in (SERVER_NAME, LEGACY_SERVER_NAME) or tool not in SCOPED_TOOLS:
         return None
+    if server == LEGACY_SERVER_NAME:
+        raise SessionRoutingError(f"This Python REPL tool uses the previous server registration. {RELOAD_MESSAGE}")
     if not isinstance(args, dict):
-        raise SessionRoutingError("The Python REPL could not read this tool's arguments to route it.")
-
-    raw_id = call.get("id")
-    call_id = raw_id if isinstance(raw_id, str) else ""
+        raise SessionRoutingError("The Python REPL needs an object containing the tool arguments.")
     step = payload.get("stepIdx")
-    if not call_id and type(step) is int and step >= 0:
-        # The documented hook payload carries a conversation-local step index.
-        call_id = f"{payload.get('conversationId')}:step:{step}"
-    return target_tool, args, deferred, call_id
+    call_id = call.get("id")
+    if not isinstance(call_id, str) or not call_id:
+        call_id = f"step:{step}" if type(step) is int and step >= 0 else ""
+    return tool, args, deferred, call_id
 
 
-def call_key(tool_name: str, args: dict[str, Any]) -> str:
-    """Compute a canonical SHA-256 key from MCP-visible arguments only."""
-    raw_cwd = args.get("cwd")
-    cwd = str(raw_cwd) if isinstance(raw_cwd, str) and raw_cwd else None
-    if tool_name == "run_code":
-        raw_timeout = args.get("timeout_seconds")
-        try:
-            timeout = 60.0 if raw_timeout is None else float(raw_timeout)
-        except (TypeError, ValueError):
-            timeout = 60.0
-        canonical: dict[str, Any] = {
-            "tool": "run_code",
-            "code": args.get("code") if isinstance(args.get("code"), str) else "",
-            "timeout_seconds": timeout,
-            "cwd": cwd,
-        }
-    elif tool_name == "kernel_state":
-        canonical = {
-            "tool": "kernel_state",
-            "action": args.get("action") if isinstance(args.get("action"), str) else "",
-            "cwd": cwd,
-        }
+def call_key(tool: str, args: dict[str, Any]) -> str:
+    cwd = args.get("cwd") or None
+    if tool == "run_code":
+        timeout = float(args.get("timeout_seconds", 60.0))
+        if not math.isfinite(timeout):
+            raise ValueError("The timeout must be finite.")
+        fields = (tool, args["code"], timeout, cwd)
+    elif tool == "kernel_state":
+        fields = (tool, args["action"], cwd)
     else:
-        raise ValueError(f"Unsupported scoped tool: {tool_name!r}")
-    encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        raise ValueError("Unknown Python REPL tool.")
+    return _sha256_hex(json.dumps(fields, separators=(",", ":"), ensure_ascii=False))
 
 
 def _routing_root(data_dir: Path) -> Path:
@@ -142,51 +125,6 @@ def _atomic_write_json(path: Path, payload: Any) -> None:
         os.replace(tmp_name, path)
     finally:
         Path(tmp_name).unlink(missing_ok=True)
-
-
-@contextmanager
-def _queue_lock(data_dir: Path, key: str) -> Iterator[None]:
-    locks_dir = _routing_root(data_dir) / "locks"
-    locks_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    bucket = int(key[:2], 16) % LOCK_BUCKETS
-    lock_path = locks_dir / f"bucket_{bucket:02d}.lock"
-    with lock_path.open("a+b") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-
-
-def _read_queue(queue_path: Path) -> list[dict[str, Any]]:
-    try:
-        raw = json.loads(queue_path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return []
-    except ValueError as exc:
-        raise SessionRoutingError("The Python REPL could not read the pending conversation route.") from exc
-    if not isinstance(raw, list):
-        raise SessionRoutingError("The Python REPL found an invalid conversation route.")
-    for item in raw:
-        if not isinstance(item, dict):
-            raise SessionRoutingError("The Python REPL found an invalid conversation route.")
-        require_conversation_id(item.get("conversation_id"))
-        created_at = item.get("created_at")
-        if (
-            not isinstance(item.get("tool_call_id"), str)
-            or not isinstance(created_at, (int, float))
-            or not math.isfinite(created_at)
-            or (item.get("workspace") is not None and not isinstance(item["workspace"], str))
-        ):
-            raise SessionRoutingError("The Python REPL found an invalid conversation route.")
-    return raw
-
-
-def _write_or_remove_queue(queue_path: Path, entries: list[dict[str, Any]]) -> None:
-    if entries:
-        _atomic_write_json(queue_path, entries)
-    else:
-        queue_path.unlink(missing_ok=True)
 
 
 def record_workspace(data_dir: Path, conv_id: str, work_dir: str | None) -> None:
@@ -223,378 +161,157 @@ def lookup_workspace(data_dir: Path, conv_id: str) -> str | None:
     return data["cwd"] or None
 
 
-def enqueue_call(
-    data_dir: Path,
-    tool_name: str,
-    args: dict[str, Any],
-    conv_id: str,
-    tool_call_id: str = "",
-    *,
-    workspace: str | None = None,
-    wait_seconds: float = COLLISION_WAIT_SECONDS,
-    stale_age_seconds: float = STALE_COLLISION_AGE_SECONDS,
-    ttl_seconds: float = PENDING_TTL_SECONDS,
-    poll_seconds: float = COLLISION_POLL_SECONDS,
-) -> bool:
-    """Reserve these arguments for one conversation; return False on unresolved contention."""
-    require_conversation_id(conv_id)
-    if workspace is None and not args.get("cwd"):
-        workspace = lookup_workspace(data_dir, conv_id)
-    key = call_key(tool_name, args)
-    queue_path = _routing_root(data_dir) / "queues" / f"{key}.json"
-    deadline = time.monotonic() + max(0.0, wait_seconds)
-    while True:
-        with _queue_lock(data_dir, key):
-            entries = _read_queue(queue_path)
-            now = time.time()
-            # An approval prompt can outlive either deadline. Only consumption or
-            # the owning conversation's cleanup can release its reservation.
-            if any(now - e["created_at"] > ttl_seconds for e in entries):
-                return False
-            conflicts = [
-                e for e in entries
-                if e["conversation_id"] != conv_id or (not args.get("cwd") and e.get("workspace") != workspace)
-            ]
-            if not conflicts:
-                entries.append({
-                    "tool_call_id": tool_call_id, "conversation_id": conv_id,
-                    "created_at": now, "workspace": workspace,
-                })
-                _atomic_write_json(queue_path, entries)
-                return True
-            remaining = deadline - time.monotonic()
-            if remaining <= 0 or any(now - e["created_at"] >= stale_age_seconds for e in conflicts):
-                return False
-        time.sleep(min(poll_seconds, remaining))
+@contextmanager
+def _routes(data_dir: Path) -> Iterator[sqlite3.Connection]:
+    root = _routing_root(data_dir)
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        with closing(sqlite3.connect(root / "conversation.sqlite3", timeout=4)) as db, db:
+            db.row_factory = sqlite3.Row
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("""CREATE TABLE IF NOT EXISTS calls (
+                token TEXT PRIMARY KEY, signature TEXT NOT NULL, conversation TEXT NOT NULL,
+                call_id TEXT NOT NULL, kernel TEXT NOT NULL, requested_cwd TEXT, work_dir TEXT,
+                plain INTEGER NOT NULL, ambiguous_id INTEGER NOT NULL, claimed INTEGER NOT NULL DEFAULT 0)""")
+            db.execute("CREATE INDEX IF NOT EXISTS call_signature ON calls(signature)")
+            db.execute("CREATE UNIQUE INDEX IF NOT EXISTS plain_call ON calls(signature) WHERE plain = 1")
+            db.execute("CREATE INDEX IF NOT EXISTS conversation_calls ON calls(conversation, call_id)")
+            db.execute("CREATE TABLE IF NOT EXISTS retired (signature TEXT PRIMARY KEY)")
+            yield db
+    except sqlite3.Error as exc:
+        raise SessionRoutingError("The Python REPL could not access its conversation routes. Retry this call.") from exc
 
 
-def _claim_call(
-    data_dir: Path, tool_name: str, args: dict[str, Any], *, ttl_seconds: float
-) -> dict[str, Any] | None:
-    key = call_key(tool_name, args)
-    queue_path = _routing_root(data_dir) / "queues" / f"{key}.json"
-    with _queue_lock(data_dir, key):
-        entries = _read_queue(queue_path)
-        if not entries:
-            return None
-        claimed = entries[0]
-        if any(e["conversation_id"] != claimed["conversation_id"] for e in entries):
-            raise SessionRoutingError("These Python REPL arguments have conflicting conversation routes.")
-        if time.time() - claimed["created_at"] > ttl_seconds:
-            return None
-        _write_or_remove_queue(queue_path, entries[1:])
-        return claimed
+def _retire(db: sqlite3.Connection, signature: str) -> None:
+    # A late untagged delivery cannot be distinguished from a future untagged call.
+    db.execute("INSERT OR IGNORE INTO retired VALUES (?)", (signature,))
 
 
-def claim_call_with_id(
-    data_dir: Path,
-    tool_name: str,
-    args: dict[str, Any],
-    *,
-    ttl_seconds: float = PENDING_TTL_SECONDS,
-) -> tuple[str, str] | None:
-    """Pop the oldest unexpired (conversation_id, tool_call_id) claim matching this MCP call."""
-    claimed = _claim_call(data_dir, tool_name, args, ttl_seconds=ttl_seconds)
-    return (claimed["conversation_id"], claimed["tool_call_id"]) if claimed else None
+def register_call(data_dir: Path, tool: str, args: dict[str, Any], conversation: str, call_id: str,
+                  *, workspace: str | None = None) -> dict[str, str]:
+    """Return the PreToolUse overwrite; an unambiguous ordinary call needs none."""
+    require_conversation_id(conversation)
+    cwd, requested_kernel = args.get("cwd"), args.get("kernel")
+    if cwd is not None and not isinstance(cwd, str):
+        raise SessionRoutingError("The Python REPL working directory must be a path.")
+    if cwd and cwd.startswith(ROUTE_PREFIX):
+        raise SessionRoutingError("For a relative directory starting with agy-repl-call:, use its absolute path or prefix it with ./.")
+    if "kernel" in args and (not isinstance(requested_kernel, str) or not requested_kernel.strip()):
+        raise SessionRoutingError("Use the exact name of the Python kernel to recover.")
+    kernel = scope_kernel(requested_kernel, conversation)
+    record_workspace(data_dir, conversation, workspace)
+    work_dir = cwd or workspace or lookup_workspace(data_dir, conversation)
+    signature = call_key(tool, args)
+    token = secrets.token_hex(16)
+    with _routes(data_dir) as db:
+        identity = (signature, conversation, call_id)
+        repeated = db.execute("UPDATE calls SET ambiguous_id = 1 WHERE signature = ? AND conversation = ? AND call_id = ?",
+                              identity).rowcount > 0
+        if repeated and db.execute("DELETE FROM calls WHERE signature = ? AND conversation = ? AND call_id = ? AND plain = 1",
+                                   identity).rowcount:
+            # The old untagged delivery may still arrive after this retry or its completion.
+            _retire(db, signature)
+        busy = db.execute("SELECT 1 FROM calls WHERE signature = ? UNION ALL SELECT 1 FROM retired WHERE signature = ? LIMIT 1",
+                          (signature, signature)).fetchone()
+        plain = bool(call_id and requested_kernel is None and not busy)
+        db.execute("""INSERT INTO calls
+                   (token, signature, conversation, call_id, kernel, requested_cwd, work_dir, plain, ambiguous_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (token, signature, conversation, call_id, kernel, cwd, work_dir, plain, repeated or not call_id))
+    return {} if plain else {"cwd": ROUTE_PREFIX + token}
 
 
-def claim_call(
-    data_dir: Path,
-    tool_name: str,
-    args: dict[str, Any],
-    *,
-    ttl_seconds: float = PENDING_TTL_SECONDS,
-) -> str | None:
-    """Pop the oldest unexpired conversation claim matching this exact MCP call."""
-    claimed = claim_call_with_id(data_dir, tool_name, args, ttl_seconds=ttl_seconds)
-    return claimed[0] if claimed is not None else None
+def _route_token(cwd: object) -> str | None:
+    if not isinstance(cwd, str) or not cwd.startswith(ROUTE_PREFIX):
+        return None
+    token = cwd[len(ROUTE_PREFIX):]
+    if not re.fullmatch("[0-9a-f]{32}", token):
+        raise SessionRoutingError("Invalid Python REPL call reference. Retry the original tool call.")
+    return token
 
 
-def _is_standalone(data_dir: Path) -> bool:
+def _matches_call(row: sqlite3.Row | None, tool: str, args: dict[str, Any]) -> bool:
+    if row is None or call_key(tool, {**args, "cwd": row["requested_cwd"]}) != row["signature"]:
+        return False
+    named = args.get("kernel")
+    return named is None or scope_kernel(named, row["conversation"]) == row["kernel"]
+
+
+def finish_call(data_dir: Path, tool: str, args: dict[str, Any], conversation: str, call_id: str) -> None:
+    """Release exactly the registration the completed hook can identify."""
+    token = _route_token(args.get("cwd"))
+    with _routes(data_dir) as db:
+        if token is not None:
+            row = db.execute("SELECT * FROM calls WHERE token = ? AND conversation = ? AND call_id = ? AND plain = 0",
+                             (token, conversation, call_id)).fetchone()
+            if _matches_call(row, tool, args):
+                db.execute("DELETE FROM calls WHERE token = ?", (token,))
+            return
+        signature = call_key(tool, args)
+        matching = (signature, conversation, call_id)
+        rows = db.execute("SELECT * FROM calls WHERE signature = ? AND conversation = ? AND call_id = ?",
+                          matching).fetchall()
+        for row in rows:
+            # Some hosts return the original arguments. An ambiguous completion can only retire a spent ticket.
+            if row["ambiguous_id"] and not row["claimed"]:
+                continue
+            if row["plain"] and not row["claimed"]:
+                _retire(db, signature)
+            db.execute("DELETE FROM calls WHERE token = ?", (row["token"],))
+
+
+def discard_conversation_calls(data_dir: Path, conversation: str) -> None:
+    if not (_routing_root(data_dir) / "conversation.sqlite3").is_file():
+        return
+    with _routes(data_dir) as db:
+        db.execute("""INSERT OR IGNORE INTO retired SELECT signature FROM calls
+                   WHERE conversation = ? AND plain = 1""", (conversation,))
+        db.execute("DELETE FROM calls WHERE conversation = ?", (conversation,))
+
+
+def require_standalone_directory(data_dir: Path) -> None:
     configured = os.environ.get("PLUGIN_DATA") or os.environ.get("AGY_PYTHON_REPL_DATA")
-    directory = Path(configured).expanduser() if configured else None
+    if not configured or not Path(configured).expanduser().is_absolute():
+        raise SessionRoutingError("Standalone Python REPL requires its own absolute data directory.")
     resolved = data_dir.resolve()
-    if directory is not None and directory.resolve() != resolved:
-        raise SessionRoutingError("The Python REPL manager and hook must use the same data directory.")
-    if os.environ.get("PLUGIN_ROOT") or os.environ.get("ANTIGRAVITY_CONVERSATION_ID"):
-        return False
-    for app in ("antigravity", "antigravity-cli", "antigravity-ide"):
-        managed = Path.home() / ".gemini" / app / "plugin_data" / "agy-python-repl"
-        if resolved.is_relative_to(managed.resolve()):
-            return False
-    try:
-        (data_dir / "routing-guidance").stat()
-        return False
-    except FileNotFoundError:
-        pass
-    try:
-        # Older standalone lookups created lock buckets even when there was no hook.
-        if any(p.name != "locks" for p in _routing_root(data_dir).iterdir()):
-            return False
-    except FileNotFoundError:
-        pass
-    if directory is None or not directory.is_absolute():
-        raise SessionRoutingError("Standalone Python REPL requires its own absolute PLUGIN_DATA or AGY_PYTHON_REPL_DATA directory.")
-    return True
+    if Path(configured).expanduser().resolve() != resolved:
+        raise SessionRoutingError("The Python REPL manager and launcher must use the same data directory.")
+    managed = any(resolved.is_relative_to((Path.home() / ".gemini" / app / "plugin_data" / "agy-python-repl").resolve())
+                  for app in ("antigravity", "antigravity-cli", "antigravity-ide"))
+    root = _routing_root(data_dir)
+    if (managed or os.environ.get("PLUGIN_ROOT") or os.environ.get("ANTIGRAVITY_CONVERSATION_ID")
+            or (data_dir / "routing-guidance").exists() or (root.exists() and any(p.name != "locks" for p in root.iterdir()))):
+        raise SessionRoutingError(f"Standalone clients need a separate Python REPL data directory. {RELOAD_MESSAGE}")
 
 
-def resolve_execution_context(
-    data_dir: Path, tool_name: str, args: dict[str, Any], *, cwd: str | None
-) -> tuple[str, Path | None]:
-    """Resolve a scoped tool before the manager can open or change any kernel."""
+def mark_conversation_service(data_dir: Path) -> None:
+    root = _routing_root(data_dir)
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
-        if _is_standalone(data_dir):
-            return "default", Path(cwd).expanduser() if cwd else None
-        claim = _claim_call(data_dir, tool_name, args, ttl_seconds=PENDING_TTL_SECONDS)
-        if claim is None:
-            raise SessionRoutingError(
-                "No matching Python REPL conversation route. Check that the session hook and the MCP "
-                "server use the same plugin data and restart the Python REPL MCP server after an upgrade."
-            )
-        conv_id = claim["conversation_id"]
-        work_dir = cwd
-        if not work_dir:
-            work_dir = claim["workspace"] if "workspace" in claim else lookup_workspace(data_dir, conv_id)
-        kernel = scope_kernel("default", conv_id)
-        record_execution_receipt(data_dir, claim["tool_call_id"], conv_id, kernel)
-        return kernel, Path(work_dir).expanduser() if work_dir else None
+        # Reserve this store for the desktop even before its first call. The read-only panel needs no routes.
+        (root / "conversation.sqlite3").touch(mode=0o600, exist_ok=False)
+    except FileExistsError:
+        pass
+
+
+def resolve_execution_context(data_dir: Path, tool: str, args: dict[str, Any], *, managed: bool) -> tuple[str, Path | None]:
+    cwd, named = args.get("cwd"), args.get("kernel")
+    try:
+        if not managed:
+            require_standalone_directory(data_dir)
+            if named is not None and (not isinstance(named, str) or not named.strip()):
+                raise SessionRoutingError("Use the exact name of the Python kernel to recover.")
+            return named or "default", Path(cwd).expanduser() if cwd else None
+        token = _route_token(cwd)
+        with _routes(data_dir) as db:
+            if token is None:
+                row = db.execute("SELECT * FROM calls WHERE signature = ? AND plain = 1 AND claimed = 0",
+                                 (call_key(tool, args),)).fetchone()
+            else:
+                row = db.execute("SELECT * FROM calls WHERE token = ? AND plain = 0 AND claimed = 0", (token,)).fetchone()
+            if not _matches_call(row, tool, args):
+                raise SessionRoutingError(f"No matching Python REPL conversation route. Retry from this conversation. {RELOAD_MESSAGE}")
+            db.execute("UPDATE calls SET claimed = 1 WHERE token = ?", (row["token"],))
+            return row["kernel"], Path(row["work_dir"]).expanduser() if row["work_dir"] else None
     except OSError as exc:
         raise SessionRoutingError("The Python REPL could not access the conversation route before execution.") from exc
-
-
-def _receipt_path(data_dir: Path, conv_id: str, tool_call_id: str) -> Path:
-    key = _sha256_hex(json.dumps([conv_id, tool_call_id], separators=(",", ":")))
-    return _routing_root(data_dir) / "receipts" / f"{key}.json"
-
-
-def record_execution_receipt(
-    data_dir: Path,
-    tool_call_id: str,
-    conv_id: str,
-    kernel: str,
-) -> None:
-    """Record the kernel selected for a claimed tool call before invoking the manager."""
-    if not tool_call_id:
-        return
-    receipt_path = _receipt_path(data_dir, conv_id, tool_call_id)
-    _atomic_write_json(
-        receipt_path,
-        {
-            "tool_call_id": tool_call_id,
-            "conversation_id": conv_id,
-            "kernel": kernel,
-            "created_at": time.time(),
-        },
-    )
-
-
-def record_unmatched_execution(
-    data_dir: Path,
-    tool_name: str,
-    args: dict[str, Any],
-    kernel: str,
-) -> None:
-    """Record that the server executed this call_key without a matching PreToolUse claim."""
-    key = call_key(tool_name, args)
-    path = _routing_root(data_dir) / "unmatched" / f"{key}.json"
-    now = time.time()
-    with _queue_lock(data_dir, key):
-        entries: list[dict[str, Any]] = []
-        if path.is_file():
-            try:
-                raw = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(raw, list):
-                    entries = [
-                        e for e in raw
-                        if isinstance(e, dict)
-                        and isinstance(e.get("created_at"), (int, float))
-                        and now - float(e["created_at"]) <= 60.0
-                    ]
-            except (OSError, ValueError):
-                entries = []
-        entries.append({"kernel": kernel, "created_at": now})
-        _atomic_write_json(path, entries)
-
-
-def _pop_unmatched_execution(data_dir: Path, tool_name: str, args: dict[str, Any]) -> str | None:
-    key = call_key(tool_name, args)
-    path = _routing_root(data_dir) / "unmatched" / f"{key}.json"
-    if not path.is_file():
-        return None
-    now = time.time()
-    with _queue_lock(data_dir, key):
-        if not path.is_file():
-            return None
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            path.unlink(missing_ok=True)
-            return None
-        if not isinstance(raw, list):
-            path.unlink(missing_ok=True)
-            return None
-        valid = [
-            e for e in raw
-            if isinstance(e, dict)
-            and isinstance(e.get("created_at"), (int, float))
-            and now - float(e["created_at"]) <= 60.0
-        ]
-        if not valid:
-            path.unlink(missing_ok=True)
-            return None
-        popped = valid.pop(0)
-        _write_or_remove_queue(path, valid)
-        kernel = popped.get("kernel")
-        return kernel if isinstance(kernel, str) else "default"
-
-
-def _read_alerts(path: Path, conv_id: str) -> list[str]:
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, ValueError):
-        return []
-    if not isinstance(raw, dict) or raw.get("conversation_id") != conv_id:
-        return []
-    messages = raw.get("messages")
-    return [str(m) for m in messages] if isinstance(messages, list) else []
-
-
-def _record_routing_alert(data_dir: Path, conv_id: str, message: str) -> None:
-    key = _sha256_hex(conv_id)
-    path = _routing_root(data_dir) / "alerts" / f"{key}.json"
-    with _queue_lock(data_dir, key):
-        messages = _read_alerts(path, conv_id)
-        messages.append(message)
-        _atomic_write_json(path, {"conversation_id": conv_id, "messages": messages})
-
-
-def consume_routing_alerts(data_dir: Path, conv_id: str) -> list[str]:
-    """Read and clear any routing mismatch alerts queued for this conversation."""
-    if not conv_id:
-        return []
-    key = _sha256_hex(conv_id)
-    path = _routing_root(data_dir) / "alerts" / f"{key}.json"
-    if not path.is_file():
-        return []
-    with _queue_lock(data_dir, key):
-        messages = _read_alerts(path, conv_id)
-        path.unlink(missing_ok=True)
-        return messages
-
-
-def verify_post_tool_execution(
-    data_dir: Path,
-    tool_name: str,
-    args: dict[str, Any],
-    *,
-    conv_id: str | None,
-    tool_call_id: str,
-    had_error: bool = False,
-) -> bool:
-    """Check the server's route receipt and alert the conversation if it cannot be confirmed."""
-    if not conv_id or not tool_call_id:
-        return True
-    discard_call(data_dir, tool_name, args, tool_call_id, conv_id=conv_id)
-    receipt_path = _receipt_path(data_dir, conv_id, tool_call_id)
-    legacy = not receipt_path.is_file()
-    if legacy:
-        receipt_path = _routing_root(data_dir) / "receipts" / f"{_sha256_hex(tool_call_id)}.json"
-    if receipt_path.is_file():
-        try:
-            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            receipt = None
-        actual_conv = receipt.get("conversation_id") if isinstance(receipt, dict) else None
-        actual_kernel = receipt.get("kernel") if isinstance(receipt, dict) else None
-        # Older servers used a global call ID. Leave a different conversation's receipt for its own hook.
-        if not legacy or actual_conv == conv_id:
-            receipt_path.unlink(missing_ok=True)
-        if (
-            isinstance(receipt, dict) and receipt.get("tool_call_id") == tool_call_id
-            and actual_conv == conv_id and actual_kernel == scope_kernel("default", conv_id)
-        ):
-            return True
-        message = (f"Expected conversation/kernel {conv_id!r}. The server recorded conversation {actual_conv!r} "
-                   f"and kernel {actual_kernel!r}.")
-    elif had_error:
-        return True
-    else:
-        unmatched_kernel = _pop_unmatched_execution(data_dir, tool_name, args)
-        if unmatched_kernel is None:
-            message = "The tool returned without a receipt for its conversation. An older MCP server may still be running."
-        else:
-            message = f"The server recorded an unmatched execution in kernel {unmatched_kernel!r}."
-    _record_routing_alert(data_dir, conv_id, (
-        f"Python REPL routing could not be confirmed for {tool_name} (call {tool_call_id}). {message} "
-        "Check the previous call's effects and the MCP server version before continuing."
-    ))
-    return False
-
-
-def discard_call(
-    data_dir: Path,
-    tool_name: str,
-    args: dict[str, Any],
-    tool_call_id: str,
-    *,
-    conv_id: str | None = None,
-    ttl_seconds: float = PENDING_TTL_SECONDS,
-) -> bool:
-    """Remove an unconsumed claim by tool_call_id (or oldest matching conv_id if id is absent)."""
-    if not tool_call_id and not conv_id:
-        return False
-    key = call_key(tool_name, args)
-    queue_path = _routing_root(data_dir) / "queues" / f"{key}.json"
-    with _queue_lock(data_dir, key):
-        entries = _read_queue(queue_path)
-        if tool_call_id:
-            kept = [
-                e for e in entries
-                if e["tool_call_id"] != tool_call_id or (conv_id is not None and e["conversation_id"] != conv_id)
-            ]
-        else:
-            removed_one = False
-            kept = []
-            for e in entries:
-                if not removed_one and e["conversation_id"] == conv_id:
-                    removed_one = True
-                    continue
-                kept.append(e)
-        removed = len(kept) != len(entries)
-        if removed:
-            _write_or_remove_queue(queue_path, kept)
-        return removed
-
-
-def discard_conversation_calls(
-    data_dir: Path,
-    conv_id: str,
-    *,
-    ttl_seconds: float = PENDING_TTL_SECONDS,
-) -> int:
-    """Release remaining reservations after the conversation is fully idle."""
-    if not conv_id:
-        return 0
-    queues_dir = _routing_root(data_dir) / "queues"
-    if not queues_dir.is_dir():
-        return 0
-    removed_count = 0
-    for queue_path in sorted(queues_dir.glob("*.json")):
-        key = queue_path.stem
-        if len(key) < 2:
-            continue
-        try:
-            int(key[:2], 16)
-        except ValueError:
-            continue
-        with _queue_lock(data_dir, key):
-            try:
-                entries = _read_queue(queue_path)
-            except SessionRoutingError:
-                continue  # This route cannot be attributed to the conversation being swept.
-            kept = [e for e in entries if e["conversation_id"] != conv_id]
-            delta = len(entries) - len(kept)
-            if delta > 0:
-                removed_count += delta
-                _write_or_remove_queue(queue_path, kept)
-    return removed_count

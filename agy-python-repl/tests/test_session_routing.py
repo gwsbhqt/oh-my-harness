@@ -1,408 +1,268 @@
-"""Exercise side-channel session/workspace routing, collision serialization, and post-execution verification."""
+"""Exercise the desktop hook, official tool arguments and real stdio kernel routing."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shlex
 import subprocess
 import sys
 import tempfile
-import threading
-import time
 import unittest
 from contextlib import asynccontextmanager
 from pathlib import Path
-from unittest.mock import patch
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from agy_python_repl import session_routing
+from agy_python_repl.session_routing import LEGACY_SERVER_NAME, SERVER_NAME
 
 ROOT = Path(__file__).resolve().parents[1]
-SERVER_NAME = session_routing.SERVER_NAME
 CONV_A = "00000000-0000-4000-8000-0000000000aa"
 CONV_B = "00000000-0000-4000-8000-0000000000bb"
 
 
 class SessionRoutingTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name).resolve()
-        self.data = self.root / "plugin_data"
-        self.ws_a = self.root / "ws_a"
-        self.ws_b = self.root / "ws_b"
-        self.ws_a.mkdir()
-        self.ws_b.mkdir()
-        (self.ws_a / "origin.txt").write_text("from-a", encoding="utf-8")
-        (self.ws_b / "origin.txt").write_text("from-b", encoding="utf-8")
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
+        self.data = self.root / "plugin data"
+        self.ws_a, self.ws_b = self.root / "north", self.root / "south"
+        for ws in (self.ws_a, self.ws_b):
+            ws.mkdir()
+            (ws / "region.txt").write_text(ws.name, encoding="utf-8")
+        self.hooks = json.loads((ROOT / "hooks.json").read_text())["agy-python-repl-session"]
+        config = json.loads((ROOT / "mcp_config.json").read_text())["mcpServers"]
+        self.assertEqual(list(config), [SERVER_NAME.removeprefix("agy-python-repl_")])
 
     @asynccontextmanager
-    async def server(self, *, standalone_data: str | None = None):
-        env = {
-            "HOME": str(self.root),
-            standalone_data or "PLUGIN_DATA": str(self.data),
-            "PYTHONPATH": str(ROOT / "src"),
-            "PYTHONDONTWRITEBYTECODE": "1",
-        }
-        if standalone_data is None:
+    async def server(self, *, managed=True, data=None, variable="PLUGIN_DATA"):
+        env = {"HOME": str(self.root), variable: str(data or self.data),
+               "PYTHONPATH": str(ROOT / "src"), "PYTHONDONTWRITEBYTECODE": "1"}
+        args = ["-m", "agy_python_repl.server"]
+        if managed:
             env["PLUGIN_ROOT"] = str(ROOT)
-        params = StdioServerParameters(command=sys.executable, args=["-m", "agy_python_repl.server"], cwd=self.root, env=env)
+            args.append("--conversation")
+        params = StdioServerParameters(command=sys.executable, args=args, cwd=self.root, env=env)
         async with stdio_client(params) as streams, ClientSession(*streams) as client:
             await client.initialize()
             yield client
 
-    def run_hook(self, event: str, payload: dict, *, data_dir: Path | None = None) -> dict:
-        group = json.loads((ROOT / "hooks.json").read_text(encoding="utf-8"))["agy-python-repl-session"][event][0]
-        handler = group["hooks"][0] if event in ("PreToolUse", "PostToolUse") else group
-        env = {
-            "HOME": str(self.root),
-            "PLUGIN_DATA": str(data_dir or self.data),
-            "PATH": os.pathsep.join((str(Path(sys.executable).parent), os.defpath)),
-        }
-        proc = subprocess.run(
-            shlex.split(handler["command"]),
-            cwd=ROOT,
-            input=json.dumps(payload),
-            env=env,
-            text=True,
-            capture_output=True,
-            check=True,
-            timeout=handler["timeout"],
-        )
-        return json.loads(proc.stdout)
+    def hook(self, event, payload, *, data=None, hours_ago=0):
+        group = self.hooks[event][0]
+        handler = group["hooks"][0] if "hooks" in group else group
+        command = shlex.split(handler["command"])
+        if hours_ago:
+            # Run the same hook with its wall clock at the time approval was requested.
+            script = ("import runpy,sys,time; original=time.time; "
+                      f"time.time=lambda: original()-{3600 * hours_ago}; "
+                      "sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0],run_name='__main__')")
+            command = [sys.executable, "-c", script, *command[1:]]
+        result = subprocess.run(command, cwd=ROOT, input=json.dumps(payload), text=True,
+                                capture_output=True, check=True, timeout=handler["timeout"],
+                                env={"HOME": str(self.root), "PLUGIN_DATA": str(data or self.data),
+                                     "PATH": os.pathsep.join((str(Path(sys.executable).parent), os.defpath))})
+        return json.loads(result.stdout)
 
-    async def test_schema_hides_kernel_and_keeps_cwd_optional(self) -> None:
+    def payload(self, conv, step, name, args, *, workspace=None, deferred=False, server=SERVER_NAME):
+        call = {"name": f"mcp_{server}_{name}", "args": args}
+        if deferred:
+            call = {"name": "call_mcp_tool", "args": {"ServerName": server, "ToolName": name, "Arguments": args}}
+        return {"conversationId": conv, "stepIdx": step, "workspacePaths": [str(workspace or self.ws_a)], "toolCall": call}
+
+    def prepare(self, payload, **kwargs):
+        decision = self.hook("PreToolUse", payload, **kwargs)
+        self.assertEqual(decision["decision"], "allow", decision)
+        # The host shallow-merges at the outer tool, including for call_mcp_tool.
+        call = payload["toolCall"]
+        merged = {**call["args"], **decision.get("overwrite", {})}
+        arguments = merged["Arguments"] if call["name"] == "call_mcp_tool" else merged
+        return decision, arguments
+
+    async def execute(self, client, payload, wire):
+        call = payload["toolCall"]
+        tool = call["args"]["ToolName"] if call["name"] == "call_mcp_tool" else call["name"].split(SERVER_NAME + "_")[1]
+        reply = await client.call_tool(tool, wire)
+        self.assertEqual(self.hook("PostToolUse", {**payload, "error": str(reply.content) if reply.isError else ""}), {})
+        return reply
+
+    async def checked(self, client, payload):
+        decision, arguments = self.prepare(payload)
+        reply = await self.execute(client, payload, arguments)
+        self.assertFalse(reply.isError, reply.content)
+        return decision, reply.structuredContent
+
+    async def test_ordinary_calls_and_read_only_panel(self):
         async with self.server() as client:
             tools = {t.name: t for t in (await client.list_tools()).tools}
-            for name in ("run_code", "kernel_state"):
-                schema = tools[name].inputSchema
-                self.assertNotIn("kernel", schema["properties"])
-                self.assertIn("cwd", schema["properties"])
-                self.assertNotIn("cwd", schema.get("required", []))
+            self.assertEqual(set(tools["run_code"].inputSchema["properties"]), {"code", "timeout_seconds", "cwd"})
+            self.assertEqual(set(tools["kernel_state"].inputSchema["properties"]), {"action", "cwd"})
+            for n, (conv, ws) in enumerate(((CONV_A, self.ws_a), (CONV_B, self.ws_b))):
+                payload = self.payload(conv, n, "run_code", {"code": "region = Path('region.txt').read_text()"},
+                                       workspace=ws, deferred=bool(n))
+                decision, result = await self.checked(client, payload)
+                self.assertEqual(decision, {"decision": "allow"})
+                self.assertEqual(result["status"], "ok")
+                decision, result = await self.checked(client, self.payload(conv, n + 2, "run_code", {"code": "region"}))
+                self.assertEqual(decision, {"decision": "allow"})
+                self.assertEqual(result["result"], repr(ws.name))
+            for name in ("open_kernel_panel", "app_kernel_overview"):
+                overview = await client.call_tool(name, {})
+                self.assertEqual({k["name"] for k in overview.structuredContent["kernels"]}, {CONV_A, CONV_B})
+            self.assertNotIn("PostInvocation", self.hooks)
 
-    async def test_managed_calls_stop_before_code_or_state_when_unassigned(self) -> None:
-        marker = self.ws_a / "unassigned-marker"
-        args = {"code": f"from pathlib import Path\nPath({str(marker)!r}).touch()"}
+    async def test_old_explicit_kernel_reads_and_restores_its_own_values(self):
+        for cycle in range(2):
+            async with self.server() as client:
+                if cycle == 0:
+                    await self.checked(client, self.payload(CONV_A, 0, "run_code", {"code": "total = 5"}))
+                    await self.checked(client, self.payload(CONV_A, 1, "run_code", {"code": "total = 23", "kernel": "counts"}))
+                for deferred in (False, True):
+                    payload = self.payload(CONV_A, 2, "run_code", {"code": "total", "kernel": "counts"}, deferred=deferred)
+                    decision, wire = self.prepare(payload)
+                    self.assertIn("overwrite", decision)
+                    # A stale caller may have its legacy selector removed by the advertised schema.
+                    wire.pop("kernel")
+                    reply = await self.execute(client, payload, wire)
+                    self.assertFalse(reply.isError, reply.content)
+                    self.assertEqual(reply.structuredContent["result"], "23")
+                    _, state = await self.checked(client, self.payload(CONV_A, 3, "kernel_state", {"action": "vars", "kernel": "counts"}, deferred=deferred))
+                    self.assertEqual(state["kernel"], f"{CONV_A}:counts")
+                _, default = await self.checked(client, self.payload(CONV_A, 4, "run_code", {"code": "total"}))
+                self.assertEqual(default["result"], "5")
+
+    async def test_identical_requests_can_finish_backwards_in_one_conversation(self):
+        args = {"code": "Path('region.txt').read_text()"}
+        first = self.payload(CONV_A, 1, "run_code", args, workspace=self.ws_a)
+        second = self.payload(CONV_A, 2, "run_code", args, workspace=self.ws_b, deferred=True)
+        plain, left = self.prepare(first)
+        extra, right = self.prepare(second)
+        self.assertEqual(plain, {"decision": "allow"})
+        self.assertEqual(set(extra["overwrite"]), {"Arguments"})
         async with self.server() as client:
-            for stage in ("fresh", "registered", "other tool arguments"):
-                with self.subTest(stage=stage):
-                    if stage == "registered":
-                        session_routing.record_workspace(self.data, CONV_A, str(self.ws_a))
-                    if stage == "other tool arguments":
-                        session_routing.enqueue_call(self.data, "run_code", {"code": "fixture_value = 7"}, CONV_A)
-                    result = await client.call_tool("run_code", args)
-                    self.assertTrue(result.isError, result.content)
-                    self.assertIn("conversation route", result.content[0].text)
-                    self.assertFalse(marker.exists())
-            result = await client.call_tool("kernel_state", {"action": "reset"})
-            self.assertTrue(result.isError, result.content)
-            overview = await client.call_tool("app_kernel_overview", {})
-            self.assertEqual(overview.structuredContent["kernels"], [])
+            for payload, wire, expected in ((second, right, "south"), (first, left, "north")):
+                reply = await self.execute(client, payload, wire)
+                self.assertFalse(reply.isError, reply.content)
+                self.assertEqual(reply.structuredContent["result"], repr(expected))
+            for wire in (right, left):
+                self.assertTrue((await client.call_tool("run_code", wire)).isError)
+            decision, result = await self.checked(client, self.payload(CONV_A, 3, "run_code", args))
+            self.assertEqual(decision, {"decision": "allow"})
+            self.assertEqual(result["result"], repr("north"))
 
-    async def test_assignment_receipt_failure_stops_before_code(self) -> None:
-        marker = self.ws_a / "receipt-marker"
-        args = {"code": f"from pathlib import Path\nPath({str(marker)!r}).touch()"}
-        session_routing.enqueue_call(self.data, "run_code", args, CONV_A, "receipt-fixture")
-        (self.data / "session-routing" / "receipts").write_text("fixture", encoding="utf-8")
+    async def test_concurrent_hooks_on_two_managed_connections_share_only_one_plain_claim(self):
+        args = {"code": "Path('region.txt').read_text()"}
+        calls = [self.payload(CONV_A, 1, "run_code", args),
+                 self.payload(CONV_B, 1, "run_code", args, workspace=self.ws_b, deferred=True)]
+        async with self.server() as north, self.server() as south:
+            prepared = await asyncio.gather(*(asyncio.to_thread(self.prepare, call) for call in calls))
+            tagged = [i for i, (decision, _) in enumerate(prepared) if "overwrite" in decision]
+            self.assertEqual(len(tagged), 1)
+            for i in (tagged[0], 1 - tagged[0]):
+                reply = await self.execute((north, south)[i], calls[i], prepared[i][1])
+                self.assertFalse(reply.isError, reply.content)
+                self.assertEqual(reply.structuredContent["result"], repr(("north", "south")[i]))
+
+    async def test_late_approval_after_restart_and_missing_stop_never_blocks_a_new_request(self):
+        args = {"code": "[Path('region.txt').read_text(), 7 * 3]"}
+        first = self.payload(CONV_A, 1, "run_code", args)
+        second = self.payload(CONV_B, 1, "run_code", args, workspace=self.ws_b, deferred=True)
+        async with self.server():
+            plain, late = self.prepare(first, hours_ago=1)
+            self.assertEqual(plain, {"decision": "allow"})
+        async with self.server() as restarted:
+            tagged, wire = self.prepare(second)
+            self.assertIn("overwrite", tagged)
+            changed = {**wire, "code": "Path('incorrect').touch()"}
+            wrong = await restarted.call_tool("run_code", changed)
+            self.assertTrue(wrong.isError)
+            rejected = self.payload(CONV_B, 1, "run_code", changed, deferred=True)
+            self.assertEqual(self.hook("PostToolUse", {**rejected, "error": "arguments changed"}), {})
+            self.assertFalse((self.ws_b / "incorrect").exists())
+            now = await self.execute(restarted, second, wire)
+            self.assertEqual(now.structuredContent["result"], "['south', 21]")
+            original = await self.execute(restarted, first, late)
+            self.assertEqual(original.structuredContent["result"], "['north', 21]")
+
+    async def test_cancelled_and_idle_requests_cannot_spend_the_next_registration(self):
+        for step, event in enumerate(("PostToolUse", "Stop")):
+            args = {"code": f"Path('invoice-{step}').write_text('paid')"}
+            first = self.payload(CONV_A, step, "run_code", args)
+            clean, old = self.prepare(first)
+            self.assertNotIn("overwrite", clean)
+            self.hook(event, {**first, "fullyIdle": True, "error": "cancelled"})
+            next_call = self.payload(CONV_B, step, "run_code", args, workspace=self.ws_b)
+            decision, new = self.prepare(next_call)
+            self.assertIn("overwrite", decision)
+            async with self.server() as client:
+                self.assertTrue((await client.call_tool("run_code", old)).isError)
+                self.assertFalse((self.ws_a / f"invoice-{step}").exists())
+                self.assertFalse((self.ws_b / f"invoice-{step}").exists())
+                reply = await self.execute(client, next_call, new)
+                self.assertFalse(reply.isError, reply.content)
+                self.assertEqual((self.ws_b / f"invoice-{step}").read_text(), "paid")
+
+    async def test_duplicate_or_absent_step_id_cannot_claim_another_attempt(self):
+        ordinary = self.payload(CONV_A, 4, "kernel_state", {"action": "vars"})
+        _, first = self.prepare(ordinary)
+        tagged, second = self.prepare(ordinary)
+        self.assertIn("overwrite", tagged)
+        unknown = self.payload(CONV_B, None, "kernel_state", {"action": "vars"})
+        _, third = self.prepare(unknown)
+        self.assertNotEqual(third, second)
         async with self.server() as client:
-            result = await client.call_tool("run_code", args)
-            self.assertTrue(result.isError, result.content)
-            self.assertIn("route before execution", result.content[0].text)
-            self.assertFalse(marker.exists())
+            self.assertTrue((await self.execute(client, ordinary, first)).isError)
+            for payload, wire, conv in ((unknown, third, CONV_B), (ordinary, second, CONV_A)):
+                reply = await self.execute(client, payload, wire)
+                self.assertEqual(reply.structuredContent["kernel"], conv)
 
-    async def test_standalone_uses_a_separate_directory_and_keeps_its_default(self) -> None:
-        async with self.server(standalone_data="PLUGIN_DATA") as client:
-            code = "from pathlib import Path\nfixture = 9\nPath('standalone-marker').touch()"
-            result = await client.call_tool("run_code", {"code": code, "cwd": str(self.ws_a)})
-            self.assertFalse(result.isError, result.content)
-            self.assertTrue((self.ws_a / "standalone-marker").exists())
-            result = await client.call_tool("run_code", {"code": "fixture + 1"})
-            self.assertEqual(result.structuredContent["result"], "10")
-            state = await client.call_tool("kernel_state", {"action": "vars"})
-            self.assertEqual(state.structuredContent["kernel"], "default")
-
-        async with self.server() as plugin:
-            refused = await plugin.call_tool("kernel_state", {"action": "reset"})
-            self.assertTrue(refused.isError, refused.content)
-        async with self.server(standalone_data="AGY_PYTHON_REPL_DATA") as client:
-            restored = await client.call_tool("run_code", {"code": "fixture"})
-            self.assertEqual(restored.structuredContent["result"], "9")
-
-        # Both direct client conventions require a matching route once the directory has hosted a conversation.
-        args = {"code": "from pathlib import Path\nPath('managed-marker').touch()", "cwd": str(self.ws_b)}
-        session_routing.enqueue_call(self.data, "run_code", args, CONV_B, "managed-call")
-        for variable in ("PLUGIN_DATA", "AGY_PYTHON_REPL_DATA"):
-            async with self.server(standalone_data=variable) as client:
-                unassigned = {**args, "code": "from pathlib import Path\nPath('unassigned').touch()"}
-                result = await client.call_tool("run_code", unassigned)
-                self.assertTrue(result.isError, result.content)
-                self.assertFalse((self.ws_b / "unassigned").exists())
-        self.assertEqual(session_routing.claim_call_with_id(self.data, "run_code", args), (CONV_B, "managed-call"))
-
-    async def test_documented_steps_and_workspaces_bind_direct_and_deferred_calls(self) -> None:
-        calls = []
-        for step, workspace in enumerate((self.ws_a, self.ws_b)):
-            args = {"code": f"from pathlib import Path\nPath('step-{step}').touch()"}
-            call = {"name": f"mcp_{SERVER_NAME}_run_code", "args": args} if step == 0 else {
-                "name": "call_mcp_tool", "args": {"ServerName": SERVER_NAME, "ToolName": "run_code", "Arguments": args},
-            }
-            payload = {"stepIdx": step, "conversationId": CONV_A, "workspacePaths": [str(workspace)], "toolCall": call}
-            self.assertEqual(self.run_hook("PreToolUse", payload), {"decision": "allow"})
-            calls.append((args, payload, workspace))
-        async with self.server() as client:
-            for step, (args, payload, workspace) in enumerate(calls):
-                result = await client.call_tool("run_code", args)
+    async def test_unmatched_and_independent_clients_cannot_claim_a_managed_call(self):
+        args = {"code": "Path('report').write_text('ok')"}
+        payload = self.payload(CONV_A, 0, "run_code", args)
+        async with self.server() as desktop:
+            self.assertTrue((await desktop.call_tool("run_code", args)).isError)
+            self.assertTrue((await desktop.call_tool("kernel_state", {"action": "reset"})).isError)
+            _, intended = self.prepare(payload)
+            for variable in ("PLUGIN_DATA", "AGY_PYTHON_REPL_DATA"):
+                async with self.server(managed=False, variable=variable) as independent:
+                    for tool, request in (("run_code", args), ("app_kernel_overview", {}),
+                                          ("app_kernel_action", {"kernel": CONV_A, "action": "reset"})):
+                        refused = await independent.call_tool(tool, request)
+                        self.assertTrue(refused.isError, refused.content)
+                        self.assertIn("separate", refused.content[0].text)
+            self.assertFalse((self.ws_a / "report").exists())
+            self.assertFalse((await self.execute(desktop, payload, intended)).isError)
+            self.assertTrue((self.ws_a / "report").is_file())
+        async with self.server(managed=False, data=self.root / "standalone") as independent:
+            for name, count in (("default", 3), ("counts", 19)):
+                result = await independent.call_tool("run_code", {"kernel": name, "code": f"value = {count}"})
                 self.assertFalse(result.isError, result.content)
-                self.assertTrue((workspace / f"step-{step}").is_file())
-                self.assertEqual(self.run_hook("PostToolUse", payload), {})
-        self.assertEqual(list((self.data / "session-routing" / "receipts").glob("*.json")), [])
-        self.assertEqual(self.run_hook("PostInvocation", {"conversationId": CONV_A}), {})
+            for name, count in (("default", 3), ("counts", 19)):
+                result = await independent.call_tool("run_code", {"kernel": name, "code": "value"})
+                self.assertEqual(result.structuredContent["result"], str(count))
 
-    def test_missing_settings_or_managed_locations_cannot_fall_back(self) -> None:
-        args = {"action": "vars"}
-        with patch.dict(os.environ, {"HOME": str(self.root)}, clear=True):
-            with self.assertRaisesRegex(session_routing.SessionRoutingError, "own absolute"):
-                session_routing.resolve_execution_context(self.data, "kernel_state", args, cwd=None)
-            configured = {"PLUGIN_DATA": str(self.data)}
-            with patch.dict(os.environ, {**configured, "ANTIGRAVITY_CONVERSATION_ID": CONV_A}):
-                with self.assertRaisesRegex(session_routing.SessionRoutingError, "No matching"):
-                    session_routing.resolve_execution_context(self.data, "kernel_state", args, cwd=None)
-            (self.data / "routing-guidance").mkdir(parents=True)
-            with patch.dict(os.environ, configured):
-                with self.assertRaisesRegex(session_routing.SessionRoutingError, "No matching"):
-                    session_routing.resolve_execution_context(self.data, "kernel_state", args, cwd=None)
-            for app in ("antigravity", "antigravity-cli", "antigravity-ide"):
-                managed = self.root / ".gemini" / app / "plugin_data" / "agy-python-repl"
-                managed.mkdir(parents=True)
-                alias = self.root / app
-                alias.symlink_to(managed, target_is_directory=True)
-                with patch.dict(os.environ, {"AGY_PYTHON_REPL_DATA": str(alias)}):
-                    with self.assertRaisesRegex(session_routing.SessionRoutingError, "No matching"):
-                        session_routing.resolve_execution_context(alias, "kernel_state", args, cwd=None)
-
-    def test_existing_queue_format_keeps_its_workspace_and_damaged_queue_stops(self) -> None:
-        args = {"action": "vars"}
-        key = session_routing.call_key("kernel_state", args)
-        queue = self.data / "session-routing" / "queues" / f"{key}.json"
-        queue.parent.mkdir(parents=True)
-        original = {"tool_call_id": "before-update", "conversation_id": CONV_A, "created_at": time.time()}
-        queue.write_text(json.dumps([original]), encoding="utf-8")
-        session_routing.record_workspace(self.data, CONV_A, str(self.ws_a))
-        with patch.dict(os.environ, {"PLUGIN_DATA": str(self.data)}, clear=True):
-            self.assertEqual(session_routing.resolve_execution_context(self.data, "kernel_state", args, cwd=None),
-                             (CONV_A, self.ws_a))
-            queue.write_text("incomplete fixture", encoding="utf-8")
-            with self.assertRaisesRegex(session_routing.SessionRoutingError, "could not read"):
-                session_routing.resolve_execution_context(self.data, "kernel_state", args, cwd=None)
-            rejected = self.run_hook("PreToolUse", {"conversationId": CONV_B, "stepIdx": 7, "toolCall": {
-                "name": f"mcp_{SERVER_NAME}_kernel_state", "args": args,
-            }})
-            self.assertEqual(rejected["decision"], "deny")
-            self.assertEqual(queue.read_text(encoding="utf-8"), "incomplete fixture")
-
-    def test_ambiguous_identity_denies_only_this_plugins_scoped_tools(self) -> None:
-        call = {"name": f"mcp_{SERVER_NAME}_run_code", "args": {"code": "pass"}}
-        wrapped = {"name": "call_mcp_tool", "args": {"ServerName": SERVER_NAME, "ToolName": "run_code",
-                                                    "Arguments": call["args"]}}
-        for conversation in (None, "", " ", "default"):
-            for target in (call, wrapped):
-                result = self.run_hook("PreToolUse", {"conversationId": conversation, "toolCall": target})
-                self.assertEqual(result["decision"], "deny")
-                self.assertIn("conversation ID", result["reason"])
-        other = {"toolCall": {"name": "call_mcp_tool", "args": {"ServerName": "other", "ToolName": "run_code"}}}
-        self.assertEqual(self.run_hook("PreToolUse", other), {"decision": "allow"})
+    def test_legacy_server_and_invalid_identity_are_denied_before_dispatch(self):
+        for deferred in (False, True):
+            for tool, args in (("run_code", {"code": "total = 17"}), ("kernel_state", {"action": "reset"})):
+                payload = self.payload(CONV_A, 1, tool, args, deferred=deferred, server=LEGACY_SERVER_NAME)
+                decision = self.hook("PreToolUse", payload)
+                self.assertEqual(decision["decision"], "deny")
+                self.assertIn("Reload", decision["reason"])
+                decision = self.hook("PreToolUse", self.payload("default", 1, tool, args, deferred=deferred))
+                self.assertEqual(decision["decision"], "deny")
+            other = self.payload(None, 2, "run_code", {}, deferred=deferred, server="another-service")
+            self.assertEqual(self.hook("PreToolUse", other), {"decision": "allow"})
         self.assertFalse(self.data.exists())
 
-    async def test_hook_routes_sessions_and_verifies_silently(self) -> None:
+    async def test_damaged_route_storage_stops_before_execution(self):
+        path = self.data / "session-routing"
+        path.mkdir(parents=True)
+        (path / "conversation.sqlite3").write_text("partial", encoding="utf-8")
+        decision = self.hook("PreToolUse", self.payload(CONV_A, 1, "run_code", {"code": "total = 4"}))
+        self.assertEqual(decision["decision"], "deny")
         async with self.server() as client:
-            for conv, ws, val in ((CONV_A, self.ws_a, 10), (CONV_B, self.ws_b, 20)):
-                call = {
-                    "id": f"init-{conv}",
-                    "name": f"mcp_{SERVER_NAME}_run_code",
-                    "args": {
-                        "code": f"from pathlib import Path\nval = {val}\nPath('origin.txt').read_text()",
-                        "toolSummary": "Init",
-                    },
-                }
-                hook = self.run_hook("PreToolUse", {"conversationId": conv, "workspacePaths": [str(ws)], "toolCall": call})
-                self.assertEqual(hook, {"decision": "allow"})
-                reply = await client.call_tool("run_code", {"code": call["args"]["code"]})
-                self.assertFalse(reply.isError, reply.content)
-                expected_origin = "from-a" if conv == CONV_A else "from-b"
-                self.assertEqual(reply.structuredContent["result"], repr(expected_origin))
-                self.assertEqual(self.run_hook("PostToolUse", {"conversationId": conv, "toolCall": call}), {})
-                self.assertEqual(self.run_hook("PostInvocation", {"conversationId": conv}), {})
-
-            for conv, ws, expected in ((CONV_A, self.ws_a, 10), (CONV_B, self.ws_b, 20)):
-                check_call = {
-                    "id": f"check-{conv}",
-                    "name": f"mcp_{SERVER_NAME}_run_code",
-                    "args": {"code": "val", "toolSummary": f"Check {conv[-2:]}"},
-                }
-                self.assertEqual(
-                    self.run_hook("PreToolUse", {"conversationId": conv, "workspacePaths": [str(ws)], "toolCall": check_call}),
-                    {"decision": "allow"},
-                )
-                reply = await client.call_tool("run_code", {"code": "val"})
-                self.assertEqual(reply.structuredContent["result"], repr(expected))
-                self.assertEqual(self.run_hook("PostToolUse", {"conversationId": conv, "toolCall": check_call}), {})
-                self.assertEqual(self.run_hook("PostInvocation", {"conversationId": conv}), {})
-
-            vars_call = {
-                "id": "vars-b",
-                "name": f"mcp_{SERVER_NAME}_kernel_state",
-                "args": {"action": "vars"},
-            }
-            self.assertEqual(
-                self.run_hook("PreToolUse", {"conversationId": CONV_B, "workspacePaths": [str(self.ws_b)], "toolCall": vars_call}),
-                {"decision": "allow"},
-            )
-            listed_b = await client.call_tool("kernel_state", {"action": "vars"})
-            self.assertEqual(listed_b.structuredContent["kernel"], CONV_B)
-            self.assertIn("val", listed_b.structuredContent["names"])
-            self.assertEqual(self.run_hook("PostToolUse", {"conversationId": CONV_B, "toolCall": vars_call}), {})
-            self.assertEqual(self.run_hook("PostInvocation", {"conversationId": CONV_B}), {})
-
-    async def test_concurrent_identical_call_waits_and_routes_without_overwrite(self) -> None:
-        shared_code = "identical_probe = 123"
-        call_a = {"id": "same-a", "name": f"mcp_{SERVER_NAME}_run_code", "args": {"code": shared_code}}
-        call_b = {"id": "same-b", "name": f"mcp_{SERVER_NAME}_run_code", "args": {"code": shared_code}}
-
-        self.assertEqual(
-            self.run_hook("PreToolUse", {"conversationId": CONV_A, "workspacePaths": [str(self.ws_a)], "toolCall": call_a}),
-            {"decision": "allow"},
-        )
-
-        hook_b_result: dict = {}
-
-        def run_b_hook() -> None:
-            hook_b_result["res"] = self.run_hook(
-                "PreToolUse",
-                {"conversationId": CONV_B, "workspacePaths": [str(self.ws_b)], "toolCall": call_b},
-            )
-
-        thread = threading.Thread(target=run_b_hook)
-        thread.start()
-        time.sleep(0.08)
-        self.assertTrue(thread.is_alive())
-
-        async with self.server() as client:
-            res_a = await client.call_tool("run_code", {"code": shared_code})
-            self.assertEqual(res_a.structuredContent["status"], "ok")
-            thread.join(timeout=3.0)
-            self.assertFalse(thread.is_alive())
-            self.assertEqual(hook_b_result["res"], {"decision": "allow"})
-
-            res_b = await client.call_tool("run_code", {"code": shared_code})
-            self.assertEqual(res_b.structuredContent["status"], "ok")
-
-            self.assertEqual(self.run_hook("PostToolUse", {"conversationId": CONV_A, "toolCall": call_a}), {})
-            self.assertEqual(self.run_hook("PostToolUse", {"conversationId": CONV_B, "toolCall": call_b}), {})
-            self.assertEqual(self.run_hook("PostInvocation", {"conversationId": CONV_A}), {})
-            self.assertEqual(self.run_hook("PostInvocation", {"conversationId": CONV_B}), {})
-
-            for conv, ws in ((CONV_A, self.ws_a), (CONV_B, self.ws_b)):
-                verify_call = {
-                    "id": f"verify-{conv}",
-                    "name": f"mcp_{SERVER_NAME}_run_code",
-                    "args": {"code": "from pathlib import Path\n(identical_probe, Path('origin.txt').read_text())"},
-                }
-                self.run_hook("PreToolUse", {"conversationId": conv, "workspacePaths": [str(ws)], "toolCall": verify_call})
-                r = await client.call_tool("run_code", {"code": verify_call["args"]["code"]})
-                expected_origin = "from-a" if conv == CONV_A else "from-b"
-                self.assertEqual(r.structuredContent["result"], repr((123, expected_origin)))
-                self.assertEqual(self.run_hook("PostToolUse", {"conversationId": conv, "toolCall": verify_call}), {})
-                self.assertEqual(self.run_hook("PostInvocation", {"conversationId": conv}), {})
-
-    def test_collision_timeout_and_expiry_preserve_the_owner_until_cleanup(self) -> None:
-        args = {"code": "pending_marker = 1"}
-        self.assertTrue(session_routing.enqueue_call(self.data, "run_code", args, CONV_A, "first"))
-        self.assertFalse(session_routing.enqueue_call(self.data, "run_code", args, CONV_B, "second", wait_seconds=0))
-        self.assertEqual(session_routing.claim_call_with_id(self.data, "run_code", args), (CONV_A, "first"))
-
-        with patch.object(time, "time", return_value=time.time() - session_routing.PENDING_TTL_SECONDS - 1):
-            session_routing.enqueue_call(self.data, "run_code", args, CONV_A, "delayed")
-        call = {"name": f"mcp_{SERVER_NAME}_run_code", "id": "delayed", "args": args}
-        self.assertIsNone(session_routing.claim_call(self.data, "run_code", args))
-        refused = self.run_hook("PreToolUse", {"conversationId": CONV_B, "toolCall": call})
-        self.assertEqual(refused["decision"], "deny")
-        # A denial/cancellation for the other conversation cannot retire the delayed claim.
-        self.run_hook("PostToolUse", {"conversationId": CONV_B, "toolCall": call, "error": "denied"})
-        self.assertFalse(session_routing.enqueue_call(self.data, "run_code", args, CONV_B, "third", wait_seconds=0))
-        for event, extra in (("PostInvocation", {}), ("Stop", {"fullyIdle": False}), ("Stop", {})):
-            self.assertEqual(self.run_hook(event, {"conversationId": CONV_A, **extra}), {})
-            self.assertFalse(session_routing.enqueue_call(self.data, "run_code", args, CONV_B, "third", wait_seconds=0))
-        self.assertEqual(self.run_hook("Stop", {"conversationId": CONV_A, "fullyIdle": True}), {})
-        self.assertTrue(session_routing.enqueue_call(self.data, "run_code", args, CONV_B, "third", wait_seconds=0))
-        self.assertEqual(session_routing.claim_call_with_id(self.data, "run_code", args), (CONV_B, "third"))
-
-    def test_success_without_an_assignment_receipt_reports_the_old_server_boundary(self) -> None:
-        call = {"name": f"mcp_{SERVER_NAME}_run_code", "args": {"code": "fixture_value = 7"}}
-        payload = {"conversationId": CONV_A, "stepIdx": 4, "toolCall": call}
-        self.assertEqual(self.run_hook("PreToolUse", payload), {"decision": "allow"})
-        # A server that never consumed the reservation cannot confirm this returned result.
-        self.assertEqual(self.run_hook("PostToolUse", payload), {})
-        post = self.run_hook("PostInvocation", {"conversationId": CONV_A})
-        self.assertIn("without a receipt", post["injectSteps"][0]["systemMessage"]["systemMessage"])
-
-    def test_equal_hook_ids_in_different_conversations_have_separate_receipts(self) -> None:
-        args = {"action": "vars"}
-        for conv in (CONV_A, CONV_B):
-            session_routing.record_execution_receipt(self.data, "same-step", conv, conv)
-        for conv in (CONV_B, CONV_A):
-            self.assertTrue(session_routing.verify_post_tool_execution(
-                self.data, "kernel_state", args, conv_id=conv, tool_call_id="same-step"))
-            self.assertEqual(session_routing.consume_routing_alerts(self.data, conv), [])
-
-    def test_post_tool_use_and_post_invocation_intercept_mismatched_execution(self) -> None:
-        # The receipt selected the wrong kernel for this conversation.
-        call_1 = {"id": "mismatch-1", "name": f"mcp_{SERVER_NAME}_run_code", "args": {"code": "x = 1"}}
-        session_routing.record_execution_receipt(self.data, "mismatch-1", CONV_A, CONV_B)
-        self.assertEqual(self.run_hook("PostToolUse", {"conversationId": CONV_A, "toolCall": call_1}), {})
-        post_inv = self.run_hook("PostInvocation", {"conversationId": CONV_A})
-        self.assertEqual(post_inv["terminationBehavior"], "force_continue")
-        msg = post_inv["injectSteps"][0]["systemMessage"]["systemMessage"]
-        self.assertIn("mismatch-1", msg)
-        self.assertIn(CONV_B, msg)
-        # Alert is consumed once so subsequent invocations proceed cleanly.
-        self.assertEqual(self.run_hook("PostInvocation", {"conversationId": CONV_A}), {})
-
-        # Case 2: claim was evicted/missing and server executed unmatched on 'default'.
-        call_2 = {"id": "unmatched-2", "name": f"mcp_{SERVER_NAME}_run_code", "args": {"code": "y = 2"}}
-        session_routing.record_unmatched_execution(self.data, "run_code", {"code": "y = 2"}, "default")
-        self.assertEqual(self.run_hook("PostToolUse", {"conversationId": CONV_A, "toolCall": call_2}), {})
-        post_inv_2 = self.run_hook("PostInvocation", {"conversationId": CONV_A})
-        self.assertEqual(post_inv_2["terminationBehavior"], "force_continue")
-        msg_2 = post_inv_2["injectSteps"][0]["systemMessage"]["systemMessage"]
-        self.assertIn("unmatched-2", msg_2)
-        self.assertIn("default", msg_2)
-
-    def test_post_tool_use_cleans_unconsumed_claim_and_unwritable_data_denies(self) -> None:
-        call = {"id": "cancelled-call", "name": f"mcp_{SERVER_NAME}_kernel_state", "args": {"action": "vars"}}
-        self.assertEqual(
-            self.run_hook("PreToolUse", {"conversationId": CONV_A, "workspacePaths": [str(self.ws_a)], "toolCall": call}),
-            {"decision": "allow"},
-        )
-        self.assertEqual(
-            self.run_hook("PostToolUse", {"conversationId": CONV_A, "toolCall": call, "error": "cancelled"}),
-            {},
-        )
-        self.assertIsNone(session_routing.claim_call(self.data, "kernel_state", {"action": "vars"}))
-        self.assertEqual(self.run_hook("PostInvocation", {"conversationId": CONV_A}), {})
-
-        blocked_data = self.root / "not_a_dir"
-        blocked_data.write_text("file", encoding="utf-8")
-        res = self.run_hook(
-            "PreToolUse",
-            {
-                "conversationId": CONV_A,
-                "workspacePaths": [str(self.ws_a)],
-                "toolCall": {"id": "ro-call", "name": f"mcp_{SERVER_NAME}_run_code", "args": {"code": "1 + 1"}},
-            },
-            data_dir=blocked_data,
-        )
-        self.assertEqual(res["decision"], "deny")
-        self.assertIn("plugin data", res["reason"])
+            refused = await client.call_tool("kernel_state", {"action": "reset"})
+            self.assertTrue(refused.isError, refused.content)
+            overview = await client.call_tool("app_kernel_overview", {})
+            self.assertEqual(overview.structuredContent["kernels"], [])
+        self.assertFalse((self.data / "snapshots").exists())

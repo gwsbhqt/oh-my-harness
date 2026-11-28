@@ -9,13 +9,13 @@ import sys
 import tempfile
 import unittest
 from contextlib import asynccontextmanager
+from itertools import count
 from pathlib import Path
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-
-from agy_python_repl import session_routing
+from agy_python_repl.session_routing import SERVER_NAME, scope_kernel
 
 ROOT = Path(__file__).resolve().parents[1]
 SESSION = "00000000-0000-4000-8000-000000000001"
@@ -29,11 +29,12 @@ class KernelNameTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(temp.name).resolve()
         self.data = self.root / "data"
         self.snapshots = self.data / "snapshots"
+        self.steps = count()
 
     @asynccontextmanager
-    async def server(self):
+    async def server(self, *, managed=True):
         params = StdioServerParameters(
-            command=sys.executable, args=["-m", "agy_python_repl.server"], cwd=self.root,
+            command=sys.executable, args=["-m", "agy_python_repl.server", *(["--conversation"] if managed else [])], cwd=self.root,
             env={"HOME": str(self.root), "PLUGIN_DATA": str(self.data), "PYTHONPATH": str(ROOT / "src"),
                  "PYTHONDONTWRITEBYTECODE": "1"},
         )
@@ -42,39 +43,29 @@ class KernelNameTests(unittest.IsolatedAsyncioTestCase):
             yield client
 
     def qualified(self, name: str, session: str = SESSION) -> str:
-        from agy_python_repl.session_routing import scope_kernel
-
-        call = {
-            "id": f"qual-{session}-{hash(name)}",
-            "name": "mcp_agy-python-repl_agy-python-repl_run_code",
-            "args": {"code": "42"},
-        }
-        hook = subprocess.run(
-            [sys.executable, str(ROOT / "hooks" / "inject_session.py")],
-            check=True,
-            input=json.dumps({"conversationId": session, "toolCall": call}),
-            capture_output=True,
-            text=True,
-            env={"PLUGIN_DATA": str(self.data)},
-        )
-        self.assertEqual(json.loads(hook.stdout), {"decision": "allow"})
-        post = subprocess.run(
-            [sys.executable, str(ROOT / "hooks" / "inject_session.py"), "--post-tool-use"],
-            check=True,
-            input=json.dumps({"conversationId": session, "toolCall": call}),
-            capture_output=True,
-            text=True,
-            env={"PLUGIN_DATA": str(self.data)},
-        )
-        self.assertEqual(json.loads(post.stdout), {})
         return scope_kernel(name, session)
+
+    def hook(self, payload, *flags):
+        proc = subprocess.run([sys.executable, str(ROOT / "hooks" / "inject_session.py"), *flags],
+                              input=json.dumps(payload), capture_output=True, text=True, check=True,
+                              env={"HOME": str(self.root), "PLUGIN_DATA": str(self.data)})
+        return json.loads(proc.stdout)
 
     async def tool(self, client: ClientSession, name: str, *, kernel: str | None = None, **arguments) -> dict:
         if name in ("run_code", "kernel_state") and kernel and kernel != "default":
-            session_routing.enqueue_call(self.data, name, arguments, kernel)
-        elif kernel is not None:
-            arguments = {**arguments, "kernel": kernel}
-        reply = await client.call_tool(name, arguments)
+            conversation = OTHER if kernel.startswith(OTHER) else SESSION
+            if kernel != conversation:
+                arguments["kernel"] = kernel.removeprefix(conversation + ":")
+            payload = {"stepIdx": next(self.steps), "conversationId": conversation,
+                       "toolCall": {"name": f"mcp_{SERVER_NAME}_{name}", "args": arguments}}
+            decision = self.hook(payload)
+            self.assertEqual(decision["decision"], "allow", decision)
+            reply = await client.call_tool(name, {**arguments, **decision.get("overwrite", {})})
+            self.assertEqual(self.hook({**payload, "error": reply.isError}, "--post-tool-use"), {})
+        else:
+            if kernel is not None:
+                arguments["kernel"] = kernel
+            reply = await client.call_tool(name, arguments)
         self.assertFalse(reply.isError, reply.content)
         return reply.structuredContent
 
@@ -125,7 +116,7 @@ class KernelNameTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_old_named_snapshot_only_opens_at_its_exact_spelling(self):
         legacy = f"{SESSION}__quarter_1"
-        async with self.server() as seed:
+        async with self.server(managed=False) as seed:
             await self.cell(seed, "default", "previous_report = 73")
             # Old installations had two independent regular files at their original flat names.
             for suffix in (".dill", ".manifest.json"):

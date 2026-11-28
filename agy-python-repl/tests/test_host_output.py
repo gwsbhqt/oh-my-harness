@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -15,6 +16,7 @@ from mcp.client.stdio import stdio_client
 
 import agy_python_repl
 from agy_python_repl.display import render_kernel_state, render_run_code
+from agy_python_repl.session_routing import SERVER_NAME
 from python_repl_core.kernel_client import KernelClient
 
 
@@ -27,23 +29,23 @@ _PRELOADED_HEADER = (
 
 class HostOutputTests(unittest.IsolatedAsyncioTestCase):
     @asynccontextmanager
-    async def server(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            params = StdioServerParameters(
-                command=sys.executable,
-                args=["-m", "agy_python_repl.server"],
-                cwd=root,
-                env={
-                    "HOME": str(root),
-                    "PLUGIN_DATA": str(root / "data"),
-                    "PYTHONPATH": str(Path(agy_python_repl.__file__).resolve().parents[1]),
-                    "PYTHONDONTWRITEBYTECODE": "1",
-                },
-            )
-            async with stdio_client(params) as streams, ClientSession(*streams) as client:
-                await client.initialize()
-                yield root, client
+    async def server(self, root: Path | None = None, *flags: str):
+        if root is None:
+            root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        params = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "agy_python_repl.server", *flags],
+            cwd=root,
+            env={
+                "HOME": str(root),
+                "PLUGIN_DATA": str(root / "data"),
+                "PYTHONPATH": str(Path(agy_python_repl.__file__).resolve().parents[1]),
+                "PYTHONDONTWRITEBYTECODE": "1",
+            },
+        )
+        async with stdio_client(params) as streams, ClientSession(*streams) as client:
+            await client.initialize()
+            yield root, client
 
     async def cell(self, client: ClientSession, code: str, **arguments) -> tuple[dict, str]:
         return await self.tool(client, "run_code", code=code, **arguments)
@@ -114,6 +116,20 @@ class HostOutputTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((mixed["stderr"], mixed["result"]), ("提示\n", "42"))
             self.assertTrue(text.endswith("\n\n[stderr]\n提示\n\n42"))
             self.assertLess(len(_PRELOADED_HEADER + text.encode("utf-8")), 6 * 1024)
+
+    async def test_only_clipped_channels_have_labeled_capture_paths(self) -> None:
+        async with self.server() as (root, client):
+            source = root / "sample.log"
+            source.write_text(("sample " * 12 + "\n") * 300, encoding="utf-8")
+            note = "s" * 74
+            code = f"page = await read('sample.log', limit=300)\nprint({note!r})\npage"
+            receipt, text = await self.cell(client, code)
+            self.assertEqual(receipt["stdout"], note + "\n")
+            capture, = map(Path, receipt["overflow_files"])
+            self.assertEqual(set(capture.parent.iterdir()), {capture})
+            self.assertIn(f"result: {capture}", text)
+            self.assertIn("300: sample", capture.read_text(encoding="utf-8"))
+            self.assertEqual((await self.cell(client, "len(page.lines)"))[1], "300")
 
     async def test_failed_writes_are_visible_before_the_preview_and_cell_runs_once(self) -> None:
         async with self.server() as (root, client):
@@ -204,6 +220,52 @@ class HostOutputTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(len(report["restored_names"]), count)
                     self.assertNotIn(report["snapshot_path"], text)
 
+    async def test_service_reload_shows_shadowed_bindings_after_guidance_was_delivered(self) -> None:
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        (root / "orders.csv").write_text("subtotal\n12\n", encoding="utf-8")
+        plugin = Path(agy_python_repl.__file__).resolve().parents[2]
+        conversation = {"conversationId": "orders-review", "workspacePaths": [str(root)]}
+
+        def hook(script, *flags, **payload):
+            result = subprocess.run(
+                [sys.executable, str(plugin / "hooks" / script), *flags], input=json.dumps(conversation | payload),
+                env={"HOME": str(root), "PLUGIN_DATA": str(root / "data")}, text=True, capture_output=True,
+                check=True, timeout=5,
+            )
+            return json.loads(result.stdout)
+
+        async def routed_cell(client, code):
+            call = {"name": f"mcp_{SERVER_NAME}_run_code", "args": {"code": code}}
+            routed = hook("inject_session.py", toolCall=call)
+            self.assertEqual(routed["decision"], "allow", routed)
+            return await self.tool(client, "run_code", **(call["args"] | routed.get("overwrite", {})))
+
+        self.assertIn("injectSteps", hook("session_start.py", "--pre-invocation"))
+        async with self.server(root, "--conversation") as (_, client):
+            saved, _ = await routed_cell(client, 'import glob\ndef read(row): return row["subtotal"]\n'
+                                         'order = {"subtotal": 12}\n'
+                                         'globals().update({f"amount_{i:03}": i for i in range(450)})')
+            self.assertEqual(saved["status"], "ok", saved)
+
+        self.assertEqual(hook("session_start.py", "--pre-invocation"), {})
+        async with self.server(root, "--conversation") as (_, client):
+            result, text = await routed_cell(client, 'glob.glob("*.csv"), read(order)')
+            self.assertEqual(result["result"], "(['orders.csv'], 12)")
+            self.assertTrue(result["details_truncated"])
+            report = result["restored"]
+            self.assertNotIn("glob", report["restored_sample"])
+            self.assertEqual(report["shadowed_bindings"], ["glob", "read"])
+            self.assertIn("glob, read", text)
+            self.assertIn("await repl.restore_binding('glob')", text)
+            self.assertLess(len(_PRELOADED_HEADER + text.encode()), 6 * 1024)
+            next_cell, text = await routed_cell(
+                client, 'glob_module = glob\nawait repl.restore_binding("glob")\n'
+                'glob_module.glob("*.csv"), (await glob("*.csv")).paths, read(order)',
+            )
+            self.assertEqual(next_cell["result"], "(['orders.csv'], ['orders.csv'], 12)")
+            self.assertNotIn("restored", next_cell)
+            self.assertNotIn("restore_binding", text)
+
     async def test_skipped_state_displays_a_manifest_only_when_names_are_omitted(self) -> None:
         async with self.server() as (_, client):
             cell, text = await self.cell(client, "samples = (n for n in range(3))")
@@ -283,12 +345,14 @@ class HostOutputTests(unittest.IsolatedAsyncioTestCase):
         async with self.server() as (root, client):
             module = root / "fixture_record.py"
             module.write_text("class Record: pass\n", encoding="utf-8")
-            await self.cell(client, "from fixture_record import Record\nsample = Record()\nkept = 9")
+            await self.cell(client, "from fixture_record import Record as read\nsample = read()\nimport glob\nkept = 9")
             module.unlink()
             lost = await client.call_tool("run_code", {"code": "__import__('os')._exit(0)"})
             self.assertTrue(lost.isError)
             partial, text = await self.tool(client, "kernel_state", action="restore")
             self.assertEqual(partial["status"], "partial")
+            self.assertEqual(partial["shadowed_bindings"], ["glob"])
+            self.assertIn("await repl.restore_binding('glob')", text)
             self.assertIn("partially completed", text)
             self.assertIn(partial["snapshot_path"], text)
             for issue in partial["failed"]:

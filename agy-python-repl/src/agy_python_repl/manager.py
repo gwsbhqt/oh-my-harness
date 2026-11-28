@@ -21,7 +21,7 @@ from python_repl_core.output_budget import bound_text
 from python_repl_core.skill_discovery import SkillEntry, discover_python_skills
 from python_repl_core.snapshot_store import SnapshotPair, read_manifest, reset_snapshot, try_publish_prepared_snapshot
 
-from .bootstrap import REUSE_HINT_MIME, SKILL_RETRY_MIME
+from .bootstrap import REUSE_HINT_MIME, SKILL_RETRY_MIME, SNAPSHOT_BUILTINS
 from .display import SUMMARY_BYTES, render_run_code, summarize_restored_names
 from .snapshot_paths import NAMED_DIR, flat_names, has_snapshot, kernel_identity, named_storage, snapshot_paths
 
@@ -78,7 +78,7 @@ def _output_receipt(
     if not over_budget and not any(0 < limits[name] < len(text) for name, text in channels.items()):
         return raw
 
-    captures = [(name, "txt", text) for name, text in channels.items()]
+    captures: list[tuple[str, str, str]] = []
     if _json_bytes(metadata) > SUMMARY_BYTES // 2:
         captures.append(("details", "json", _json_text(metadata)))
         metadata = metadata.copy()
@@ -88,7 +88,7 @@ def _output_receipt(
                 metadata[key] = {
                     field: bound_text(item, max_chars=320).text if isinstance(item, str) else item
                     for field, item in value.items()
-                    if field in {"ename", "evalue", "status", "restored", "reason"}
+                    if field in {"ename", "evalue", "status", "restored", "reason", "shadowed_bindings", "binding_warning"}
                 }
                 if key == "restored" and isinstance(names := value.get("restored_names"), list):
                     metadata[key].update(summarize_restored_names(names))
@@ -96,37 +96,42 @@ def _output_receipt(
                 metadata[key] = bound_text(value, max_chars=320).text
         metadata["details_truncated"] = True
 
-    files: list[str] = []
+    saved: dict[str, str] = {}
     errors: dict[str, str] = {}
-    for name, extension, text in captures:
-        path = directory / f"{res.cell_id}_{name}.{extension}"
-        try:
-            directory.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8")
-        except (OSError, UnicodeError) as exc:
-            errors[name] = bound_text(str(exc), max_chars=320).text
-        else:
-            files.append(str(path))
-
-    header: dict[str, Any] = {}
-    if files:
-        if _json_bytes(files) <= SUMMARY_BYTES - 1024:
-            header["overflow_files"] = files
-        else:
-            header["overflow_index"] = {"directory": str(directory), "files": [Path(f).name for f in files]}
-    if errors:
-        header["overflow_errors"] = errors
-    header.update(metadata)
-    header["truncated"] = True
-    header["output_note"] = "Output is captured text. The kernel's display text for a result may already be truncated."
-
-    # Short channels stay intact while larger previews shrink to fit both MCP representations.
     cap = SUMMARY_BYTES
     while True:
         previews = {}
         for name, text in channels.items():
             limit = min(cap, limits[name]) if limits[name] > 0 else cap
-            previews[name] = bound_text(text, max_chars=limit).text
+            preview = bound_text(text, max_chars=limit)
+            previews[name] = preview.text
+            if preview.truncated and name not in saved and name not in errors:
+                captures.append((name, "txt", text))
+
+        for name, extension, text in captures:
+            path = directory / f"{res.cell_id}_{name}.{extension}"
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+                path.write_text(text, encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                errors[name] = bound_text(str(exc), max_chars=320).text
+            else:
+                saved[name] = str(path)
+        captures.clear()
+
+        header: dict[str, Any] = {}
+        if saved:
+            files = list(saved.values())
+            if _json_bytes(files) <= SUMMARY_BYTES - 1024:
+                header["overflow_files"] = files
+            else:
+                header["overflow_index"] = {"directory": str(directory), "files": [Path(f).name for f in files]}
+        if errors:
+            header["overflow_errors"] = errors
+        header.update(metadata)
+        header["truncated"] = True
+        if "result" in saved:
+            header["output_note"] = "The captured result contains the kernel's display text, which may itself be truncated."
         receipt = header | previews
         if _fits_output(receipt, SUMMARY_BYTES) or cap == 1:
             return receipt
@@ -141,6 +146,31 @@ async def _control_cell(client: KernelClient, code: str, operation: str) -> Cell
         error = result.error or {}
         raise KernelProtocolError(f"{operation} failed: {error.get('ename', 'Error')}: {error.get('evalue', result.status)}")
     return result
+
+
+async def _user_names(client: KernelClient) -> list[str]:
+    reply = await client.list_names()
+    names = reply.get("names")
+    if reply.get("status") != "ok" or not isinstance(names, list):
+        raise KernelProtocolError(reply.get("reason") or "The kernel did not confirm its variable list.")
+    return names
+
+
+async def _restored_binding_details(client: KernelClient, restored_names: list[str]) -> dict[str, Any]:
+    candidates = SNAPSHOT_BUILTINS.intersection(restored_names)
+    if not candidates:
+        return {}
+    # The kernel's variable list excludes bindings that still hold the installed object.
+    if not client.alive:
+        raise KernelProtocolError("Kernel exited while restoring bindings.")
+    try:
+        live = await _user_names(client)
+    except (KernelProtocolError, OSError):
+        if not client.alive:
+            raise
+        return {"binding_warning": f"Could not confirm which restored names shadow built-ins ({', '.join(sorted(candidates))})."}
+    shadowed = sorted(candidates.intersection(live))
+    return {"shadowed_bindings": shadowed} if shadowed else {}
 
 
 def _default_vendor_dir() -> Path:
@@ -392,6 +422,7 @@ class KernelManager:
                 restored = await client.restore_if_present(source.payload, source.manifest)
                 if restored is not None:
                     restored.update(_name_warning(key, storage))
+                    restored.update(await _restored_binding_details(client, restored["restored_names"]))
         except BaseException:
             if replacing is None:
                 await client.shutdown()
@@ -572,7 +603,8 @@ class KernelManager:
             except asyncio.CancelledError:
                 # The pointer and the live process already changed together; report the committed result.
                 pass
-            return {"kernel": key, "status": "ok", "restored": restored}
+            return {"kernel": key, "status": "ok", "restored": restored,
+                    **{field: report[field] for field in ("shadowed_bindings", "binding_warning") if field in report}}
 
     @staticmethod
     async def _close_for_restart(client: KernelClient) -> None:
@@ -646,11 +678,7 @@ class KernelManager:
 
             managed = await self._ensure_kernel(key, storage, cwd=cwd)
             if action == "vars":
-                info = await managed.client.list_names()
-                names = info.get("names")
-                if info.get("status") != "ok" or not isinstance(names, list):
-                    raise KernelProtocolError(info.get("reason") or "The kernel did not confirm its variable list.")
-                return {"kernel": key, "names": names}
+                return {"kernel": key, "names": await _user_names(managed.client)}
 
             snap_path, manifest_path = snapshot_paths(self.data_dir, storage)
             if action == "snapshot":
@@ -676,6 +704,7 @@ class KernelManager:
                 managed.pending_restore_notice = None
                 manifest = done.pop("snapshot_manifest", {})
                 done.pop("snapshot_skipped", None)
+                done.update(await _restored_binding_details(managed.client, done.get("restored", [])))
                 return {"kernel": key, "snapshot_path": str(snap_path), **done, "status": status,
                         "saved_names": manifest.get("savedNames", []), "skipped": manifest.get("skipped", []),
                         **_name_warning(key, storage)}

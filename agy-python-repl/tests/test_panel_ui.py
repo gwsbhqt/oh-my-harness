@@ -1,5 +1,6 @@
 """Exercise the MCP App resource, its real kernel tools, and the iframe transport."""
 
+import os
 import re
 import shutil
 import subprocess
@@ -10,7 +11,7 @@ from unittest.mock import patch
 
 from mcp.shared.memory import create_connected_server_and_client_session
 
-from agy_python_repl import server, session_routing
+from agy_python_repl import server
 from agy_python_repl.manager import KernelManager
 
 PANEL = Path(__file__).resolve().parents[1] / "ui" / "panel.html"
@@ -26,7 +27,7 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
             (skill / "SKILL.md").write_text("---\nname: fixture-reader\ndescription: Fixture\n---\n")
             (package / "__init__.py").write_text("import fixture_dependency")
             manager = KernelManager(data_dir=root / "data", skill_roots=[skill.parent], project_skill_roots=[])
-            with patch.object(server, "_manager", manager):
+            with patch.object(server, "_manager", manager), patch.dict(os.environ, {"PLUGIN_DATA": str(manager.data_dir)}):
                 async with create_connected_server_and_client_session(server.mcp) as client:
                     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
                     for name in ("kernel_state", "app_kernel_action"):
@@ -41,9 +42,6 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(resource.text, PANEL.read_text(encoding="utf-8"))
 
                     async def call(name, **args):
-                        if name in ("run_code", "kernel_state") and "kernel" in args:
-                            target_kernel = args.pop("kernel")
-                            session_routing.enqueue_call(manager.data_dir, name, args, target_kernel)
                         reply = await client.call_tool(name, args)
                         self.assertFalse(reply.isError, reply.content)
                         return reply.structuredContent

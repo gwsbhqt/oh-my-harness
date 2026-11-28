@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import argparse
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult, TextContent
+from pydantic.json_schema import SkipJsonSchema
 
 from agy_python_repl.display import render_kernel_state, render_run_code
 from agy_python_repl.manager import KernelManager
-from agy_python_repl.session_routing import resolve_execution_context
+from agy_python_repl.session_routing import mark_conversation_service, require_standalone_directory, resolve_execution_context
 
 ToolReply = Annotated[CallToolResult, dict[str, Any]]
 
@@ -31,10 +33,13 @@ APP_ONLY_META = {
 }
 
 _manager = KernelManager()
+_conversation_service = False
 
 
 @asynccontextmanager
 async def _lifespan(_app: FastMCP):
+    if _conversation_service:
+        mark_conversation_service(_manager.data_dir)
     try:
         yield
     finally:
@@ -60,12 +65,13 @@ async def run_code(
     code: str,
     timeout_seconds: float = 60.0,
     cwd: str | None = None,
+    kernel: SkipJsonSchema[str | None] = None,
 ) -> ToolReply:
     effective_kernel, work_dir = resolve_execution_context(
         _manager.data_dir,
         "run_code",
-        {"code": code, "timeout_seconds": timeout_seconds, "cwd": cwd},
-        cwd=cwd,
+        {"code": code, "timeout_seconds": timeout_seconds, "cwd": cwd, "kernel": kernel},
+        managed=_conversation_service,
     )
     receipt = await _manager.run_code(
         code,
@@ -86,15 +92,22 @@ async def run_code(
 async def kernel_state(
     action: Literal["list", "vars", "snapshot", "restore", "restart", "reset"],
     cwd: str | None = None,
+    kernel: SkipJsonSchema[str | None] = None,
 ) -> ToolReply:
     effective_kernel, work_dir = resolve_execution_context(
         _manager.data_dir,
         "kernel_state",
-        {"action": action, "cwd": cwd},
-        cwd=cwd,
+        {"action": action, "cwd": cwd, "kernel": kernel},
+        managed=_conversation_service,
     )
     receipt = await _manager.kernel_state(action, kernel=effective_kernel, cwd=work_dir)
     return _reply(receipt, render_kernel_state(action, receipt))
+
+
+def _panel_manager() -> KernelManager:
+    if not _conversation_service:
+        require_standalone_directory(_manager.data_dir)
+    return _manager
 
 
 @mcp.tool(
@@ -104,12 +117,12 @@ async def kernel_state(
     meta=PANE_META,
 )
 async def open_kernel_panel() -> ToolReply:
-    return _reply(_manager.get_overview(), "Python REPL")
+    return _reply(_panel_manager().get_overview(), "Python REPL")
 
 
 @mcp.tool(name="app_kernel_overview", meta=APP_ONLY_META)
 async def app_kernel_overview() -> dict[str, Any]:
-    return _manager.get_overview()
+    return _panel_manager().get_overview()
 
 
 @mcp.tool(name="app_kernel_action", meta=APP_ONLY_META)
@@ -117,7 +130,7 @@ async def app_kernel_action(
     action: Literal["vars", "snapshot", "restore", "restart", "reset"],
     kernel: str = "default",
 ) -> dict[str, Any]:
-    return await _manager.kernel_state(action, kernel=kernel)
+    return await _panel_manager().kernel_state(action, kernel=kernel)
 
 
 @mcp.resource(
@@ -132,6 +145,10 @@ def panel_html() -> str:
 
 
 def main() -> None:
+    global _conversation_service
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--conversation", action="store_true", help="Receive calls from the desktop conversation hook.")
+    _conversation_service = parser.parse_args().conversation
     mcp.run(transport="stdio")
 
 

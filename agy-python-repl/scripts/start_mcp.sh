@@ -24,4 +24,4 @@ fi
 UV_PROJECT_ENVIRONMENT="$VENV" "$UV" sync --quiet --frozen --inexact --no-install-project --project "$ROOT" --python 3.14 >&2
 AGY_PYTHON_REPL_CONSTRAINTS="$("$UV" export --quiet --frozen --offline --project "$ROOT" --no-emit-project --no-hashes --no-header --no-annotate)"
 export AGY_PYTHON_REPL_CONSTRAINTS
-PLUGIN_ROOT="$ROOT" PLUGIN_DATA="$DATA" PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$ROOT/src" exec "$VENV/bin/python" -m agy_python_repl.server
+PLUGIN_DATA="$DATA" PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$ROOT/src" exec "$VENV/bin/python" -m agy_python_repl.server "$@"

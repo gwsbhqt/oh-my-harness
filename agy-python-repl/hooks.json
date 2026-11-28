@@ -16,7 +16,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "^(mcp_agy-python-repl_agy-python-repl_(run_code|kernel_state)|call_mcp_tool)$",
+        "matcher": "^(mcp_agy-python-repl_(conversation|agy-python-repl)_(run_code|kernel_state)|call_mcp_tool)$",
         "hooks": [
           {
             "type": "command",
@@ -28,7 +28,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "^(mcp_agy-python-repl_agy-python-repl_(run_code|kernel_state)|call_mcp_tool)$",
+        "matcher": "^(mcp_agy-python-repl_(conversation|agy-python-repl)_(run_code|kernel_state)|call_mcp_tool)$",
         "hooks": [
           {
             "type": "command",
@@ -36,13 +36,6 @@
             "timeout": 5
           }
         ]
-      }
-    ],
-    "PostInvocation": [
-      {
-        "type": "command",
-        "command": "python3 ./hooks/inject_session.py --post-invocation",
-        "timeout": 5
       }
     ],
     "Stop": [

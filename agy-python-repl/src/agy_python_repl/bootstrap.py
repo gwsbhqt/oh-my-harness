@@ -15,10 +15,11 @@ from python_repl_core import prelude, recovery_copies
 from python_repl_core.preview import preview as _preview
 from python_repl_core.skills_runtime import _SkillsNamespace, install_skills_import_guard
 
-from agy_python_repl.builtin_tools import create_builtin_tools
+from agy_python_repl.builtin_tools import BUILTIN_TOOL_NAMES, _ToolResult, create_builtin_tools
 
 SKILL_RETRY_MIME = "application/vnd.agy-python-repl.skill-retry+json"
 REUSE_HINT_MIME = "application/vnd.agy-python-repl.reuse-hint+json"
+SNAPSHOT_BUILTINS = BUILTIN_TOOL_NAMES | {"asyncio", "ToolCallError"}
 _PATH_TYPE = type(Path())
 _ORIGINAL_BINDINGS: dict[str, Any] = {}
 _SAFE_SIZED_EXACT = frozenset({str, bytes, bytearray, list, tuple, dict, set, frozenset})
@@ -89,11 +90,19 @@ class _SnapshotSkipNames(set[str]):
         )
 
 
+class _PreviewResult(_ToolResult):
+    __slots__ = ()
+
+    def _render(self) -> str:
+        state = "whole in-memory value"
+        if self["truncated"]:
+            state = f"in-memory preview limited by {', '.join(self['reasons'])}"
+        return f"── preview of {self['type']} · {state} (view of a dict) ──\n{self['text']}"
+
+
 class _HelperList(list[dict[str, str]]):
     def __repr__(self) -> str:
-        if not self:
-            return "No matching user-defined helpers."
-        lines = []
+        lines = [f"User helper list ({len(self)})"]
         for item in self[:20]:
             line = item["signature"]
             if item["doc"]:
@@ -124,14 +133,19 @@ class _ReplHelper:
         return recovery_copies.read(self._copy_session, copy_id)
 
     def preview(self, value: Any, *, chars: int = 4000, items: int = 20, depth: int = 8) -> dict[str, Any]:
-        return _preview(value, chars=chars, items=items, depth=depth)
+        return _PreviewResult(_preview(value, chars=chars, items=items, depth=depth))
 
     async def helpers(self, query: str = "") -> list[dict[str, str]]:
-        """Find matching user functions and classes by name and show their call shapes."""
+        """List user functions and classes by name. Start the query with _ to include private helpers."""
+        signature_options = {}
+        if sys.version_info >= (3, 14):
+            from annotationlib import Format
+
+            signature_options["annotation_format"] = Format.STRING
         ns = sys.modules["__main__"].__dict__
         items = _HelperList()
         for name in sorted(ns):
-            if query not in name or name.startswith("_"):
+            if query not in name or name.startswith("__") or (name.startswith("_") and not query.startswith("_")):
                 continue
             value = ns[name]
             if value is _ORIGINAL_BINDINGS.get(name) or prelude.is_preloaded(name, value):
@@ -141,7 +155,7 @@ class _ReplHelper:
             if getattr(value, "__module__", "__main__") != "__main__":
                 continue
             try:
-                signature = inspect.signature(value)
+                signature = inspect.signature(value, **signature_options)
                 parameters = []
                 for p in signature.parameters.values():
                     default = p.default
@@ -152,7 +166,7 @@ class _ReplHelper:
                     parameters.append(p.replace(annotation=p.empty, default=default))
                 sig = str(signature.replace(parameters=parameters, return_annotation=signature.empty))
                 sig = sig.replace("=Ellipsis", "=...")
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, NameError):
                 sig = "(...)"
             doc = (inspect.getdoc(value) or "").partition("\n")[0]
             items.append({"name": name, "signature": f"{name}{sig}", "doc": doc})
@@ -232,7 +246,8 @@ def install_antigravity_surface(
     ns.update(bindings)
     prelude.install(ns)
     _install_reuse_hint(prime, ns)
-    prime._ALWAYS_SKIP = _SnapshotSkipNames(set(prime._ALWAYS_SKIP) | {"skills", "repl"}, ns)
+    fixed_names = prime._ALWAYS_SKIP.difference(SNAPSHOT_BUILTINS) | {"skills", "repl"}
+    prime._ALWAYS_SKIP = _SnapshotSkipNames(fixed_names, ns)
     # Old snapshots may contain user functions with names that later became built-ins.
     prime._RESTORE_SKIP.update({"skills", "repl"})
 

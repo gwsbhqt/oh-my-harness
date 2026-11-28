@@ -46,7 +46,8 @@ class StandaloneBundleTests(unittest.IsolatedAsyncioTestCase):
             manifest = json.loads((sidecar / "sidecar.json").read_text(encoding="utf-8"))
             self.assertTrue((sidecar / manifest["args"][0]).is_file())
             config = json.loads((bundle / "mcp_config.json").read_text(encoding="utf-8"))
-            server = config["mcpServers"]["agy-python-repl"]
+            server_name, = config["mcpServers"]
+            server = config["mcpServers"][server_name]
             local_uv = root / ".local" / "bin" / "uv"
             local_uv.parent.mkdir(parents=True)
             local_uv.symlink_to(Path(shutil.which("uv")).resolve())
@@ -83,7 +84,7 @@ class StandaloneBundleTests(unittest.IsolatedAsyncioTestCase):
                     return json.loads(proc.stdout)
 
                 code = "from pathlib import Path\nunits = int(Path('units.txt').read_text())\nunits"
-                call_1 = {"id": "bundle-1", "name": "mcp_agy-python-repl_agy-python-repl_run_code", "args": {"code": code}}
+                call_1 = {"id": "bundle-1", "name": f"mcp_agy-python-repl_{server_name}_run_code", "args": {"code": code}}
                 self.assertEqual(run_bundle_hook("PreToolUse", {"conversationId": "sample-session", "toolCall": call_1}), {"decision": "allow"})
                 result = await session.call_tool("run_code", {"code": code})
                 self.assertFalse(result.isError, result.content)
@@ -91,11 +92,25 @@ class StandaloneBundleTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(run_bundle_hook("PostToolUse", {"conversationId": "sample-session", "toolCall": call_1}), {})
 
                 followup = "[units + 1, any(s['import_name'] == 'agy_use' for s in await skills.list())]"
-                call_2 = {"id": "bundle-2", "name": "mcp_agy-python-repl_agy-python-repl_run_code", "args": {"code": followup}}
+                call_2 = {"id": "bundle-2", "name": f"mcp_agy-python-repl_{server_name}_run_code", "args": {"code": followup}}
                 self.assertEqual(run_bundle_hook("PreToolUse", {"conversationId": "sample-session", "toolCall": call_2}), {"decision": "allow"})
                 result = await session.call_tool("run_code", {"code": followup})
                 self.assertEqual(result.structuredContent["result"], "[43, True]")
                 self.assertEqual(run_bundle_hook("PostToolUse", {"conversationId": "sample-session", "toolCall": call_2}), {})
             self.assertTrue((root / "plugin data" / "snapshots" / "sample-session.dill").is_file())
+
+            separate = root / "independent data"
+            client_env = {k: v for k, v in env.items() if k not in variables}
+            client_env["AGY_PYTHON_REPL_DATA"] = str(separate)
+            independent = StdioServerParameters(command="sh", args=[str(bundle / "scripts" / "start_mcp.sh")],
+                                                cwd=workspace, env=client_env)
+            async with stdio_client(independent) as streams, ClientSession(*streams) as client:
+                await client.initialize()
+                reply = await client.call_tool("run_code", {"code": "sum([3, 5])", "kernel": "counts"})
+                self.assertFalse(reply.isError, reply.content)
+                self.assertEqual(reply.structuredContent["result"], "8")
+                state = await client.call_tool("kernel_state", {"action": "vars", "kernel": "counts"})
+                self.assertEqual(state.structuredContent["kernel"], "counts")
+            self.assertTrue((separate / "snapshots" / "counts.dill").is_file())
             self.assertFalse(any(bundle.rglob("__pycache__")))
             self.assertFalse(any(bundle.rglob("*.egg-info")))

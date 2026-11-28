@@ -1,9 +1,10 @@
 {
   "mcpServers": {
-    "agy-python-repl": {
+    "conversation": {
       "command": "sh",
       "args": [
-        "${PLUGIN_ROOT}/scripts/start_mcp.sh"
+        "${PLUGIN_ROOT}/scripts/start_mcp.sh",
+        "--conversation"
       ],
       "tools": {
         "run_code": { "eager": true }

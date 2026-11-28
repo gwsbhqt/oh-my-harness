@@ -12,10 +12,9 @@ import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from unittest.mock import patch
 
 from agy_python_repl.manager import KernelManager
-from agy_python_repl.session_routing import resolve_execution_context
+from agy_python_repl.session_routing import SERVER_NAME, resolve_execution_context
 
 
 class AgyPythonReplTests(unittest.IsolatedAsyncioTestCase):
@@ -153,8 +152,7 @@ class AgyPythonReplTests(unittest.IsolatedAsyncioTestCase):
 
     def resolve_hook_call(self, tool, args):
         data = self.tmp_dir / "hook_data"
-        with patch.dict(os.environ, {"PLUGIN_DATA": str(data)}):
-            return resolve_execution_context(data, tool, args, cwd=args.get("cwd"))
+        return resolve_execution_context(data, tool, args, managed=True)
 
     def test_hook_matcher_selects_the_repl_and_deferred_dispatch(self) -> None:
         config = Path(__file__).resolve().parents[1] / "hooks.json"
@@ -163,6 +161,8 @@ class AgyPythonReplTests(unittest.IsolatedAsyncioTestCase):
         for name in (
             "mcp_agy-python-repl_agy-python-repl_run_code",
             "mcp_agy-python-repl_agy-python-repl_kernel_state",
+            f"mcp_{SERVER_NAME}_run_code",
+            f"mcp_{SERVER_NAME}_kernel_state",
             "call_mcp_tool",
         ):
             self.assertIsNotNone(matcher.search(name), name)
@@ -170,7 +170,7 @@ class AgyPythonReplTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(matcher.search(name), name)
 
     def test_session_binding_for_direct_and_deferred_repl_tools(self) -> None:
-        server = "agy-python-repl_agy-python-repl"
+        server = SERVER_NAME
         workspace = str(self.tmp_dir / "workspace")
         for tool, original in (("run_code", {"code": "1 + 1"}), ("kernel_state", {"action": "vars"}),
                                ("kernel_state", {"action": "restart"})):
@@ -200,7 +200,7 @@ class AgyPythonReplTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(cwd=cwd):
                 call = {
                     "id": f"explicit-{idx}",
-                    "name": "mcp_agy-python-repl_agy-python-repl_run_code",
+                    "name": f"mcp_{SERVER_NAME}_run_code",
                     "args": {"code": "2 + 2", "cwd": cwd},
                 }
                 result = self.run_hook("PreToolUse", {
@@ -209,10 +209,9 @@ class AgyPythonReplTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result, {"decision": "allow"})
                 self.assertEqual(self.resolve_hook_call("run_code", call["args"])[1], Path(cwd))
                 self.assertEqual(self.run_hook("PostToolUse", {"conversationId": "conv-abc", "toolCall": call}), {})
-                self.assertEqual(self.run_hook("PostInvocation", {"conversationId": "conv-abc"}), {})
 
     def test_other_mcp_tools_keep_their_original_arguments(self) -> None:
-        server = "agy-python-repl_agy-python-repl"
+        server = SERVER_NAME
         for call in (
             {"name": "run_code", "args": {}},
             {"name": "mcp_other_plugin_run_code", "args": {}},
