@@ -79,18 +79,19 @@ export function finalNotice(record: DoneWatchRecord, outcome: CommandResult | 'g
   const reply = [...turns].reverse().find((t) => typeof t.reply === 'string' && t.reply.trim() !== '')?.reply ?? undefined
   const reason = last === undefined ? 'none' : `${String(last.ended)}${last.detail ? ` (${last.detail})` : ''}`
   const status = outcome.status ?? 'ok'
-  const headline = status === 'ok' ? 'has genuinely finished'
+  const headline = status === 'ok' ? 'has finished its own work'
     : status === 'aborted' ? 'stopped, but its last turn was interrupted and it did not finish'
       : status === 'failed' ? 'stopped, but its last turn did not end successfully'
         : status === 'idle' ? 'is idle, but no new turn has ended since the task was sent (the message may have been withdrawn or deleted)'
           : `stopped (${status})`
-  const summaryWord = status === 'ok' ? 'finished' : status === 'aborted' ? 'interrupted' : status === 'failed' ? 'failed' : 'no new result'
+  const summaryWord = status === 'ok' ? 'finished its own work' : status === 'aborted' ? 'interrupted' : status === 'failed' ? 'failed' : 'no new result'
   return {
     outcome: status,
     summary: `dsh-use: ${label} ${summaryWord}`,
     text: [
       `dsh-use task result: ${name} ${headline}.`,
       `End reason: ${reason}. Settled rule: the turn ended, nothing is running, no message is queued, no background job or subagent of its own is running, and an active goal will not resume automatically.`,
+      ...(status === 'ok' ? ['For a task dispatched to a separate session, check that session with its own completion notice or wait --settled.'] : []),
       ...(reply === undefined ? ['There was no text reply at the end.'] : ['Start of the final reply:', cut(reply, REPLY_CHARS)]),
       `Read the full text: dsh-use last ${record.target}; read turn by turn: dsh-use read ${record.target} --turn -1.`,
       `This is the one-time completion notice registered with --notify when you sent the task.`,

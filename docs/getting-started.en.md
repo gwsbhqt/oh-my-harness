@@ -58,7 +58,20 @@ DSH calls a configuration set a profile. **Merge** the link dependency and bundl
 }
 ```
 
-In that profile directory, install dependencies with the pnpm supplied by your DSH installation. Run DSH's startup check, restart the app, and open a new session. The bundle already registers its loader entry; do not add a second insert. See the [component installation guide](../dsh-python-repl/README.en.md#install-from-this-repository) for configuration and removal.
+If your macOS terminal cannot find `dsh`, first add the command bundled with the desktop app to this terminal. Adjust the path if you installed the app outside the standard Applications folder.
+
+```sh
+export PATH="/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin:$PATH"
+dsh --version
+```
+
+Replace `workbench` with the name of the profile you just edited, then install its dependencies.
+
+```sh
+dsh plugin --profile workbench install
+```
+
+Run DSH's startup check. Once it passes, restart the app and open a new session. The bundle already registers its loader entry; do not add a second insert. See the [component installation guide](../dsh-python-repl/README.en.md#install-from-this-repository) for configuration and removal.
 
 **Restart** in the DSH kernel tab restarts the Python process for the current DSH conversation.
 

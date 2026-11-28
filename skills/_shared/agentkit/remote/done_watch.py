@@ -144,12 +144,14 @@ def final_notice(state, result):
     reply = next((t.get("reply") for t in reversed(turns) if isinstance(t, dict)
                   and isinstance(t.get("reply"), str) and t["reply"].strip()), None)
     reason = "无" if last is None else str(last.get("ended")) + (f'（{last["detail"]}）' if last.get("detail") else "")
-    headline = {"ok": "已经真正做完", "aborted": "停下了，但最后一轮被中止，没有做完",
+    headline = {"ok": "已完成本会话的工作", "aborted": "停下了，但最后一轮被中止，没有做完",
                 "failed": "停下了，但最后一轮没有成功结束",
                 "idle": "停着，但派单之后没有新的一轮结束（消息可能被撤回或删掉了）"}[kind]
-    word = {"ok": "已做完", "aborted": "被中止", "failed": "失败", "idle": "没有新结果"}[kind]
+    word = {"ok": "本会话已完成", "aborted": "被中止", "failed": "失败", "idle": "没有新结果"}[kind]
     lines = [f"dsh-use 派单结果：{_name(state)}{headline}。",
              f"结束原因：{reason}。判定口径：这一轮已结束，没在跑、没有排队消息，名下没有在跑的后台任务和子代理，持续目标不会自动续跑。"]
+    if kind == "ok":
+        lines.append("另行派给独立会话的任务，请用那个会话的完成通知或 wait --settled 查结果。")
     lines += ["最后没有文字回复。"] if reply is None else ["最后回复的开头：", _cut(reply)]
     lines += [f"读全文：dsh-use -H {host} last {target}；看目标：dsh-use -H {host} goal {target}。", footer]
     return f"dsh-use：{label} {word}", "\n".join(lines)

@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { RemoteService, type Deps, type RestartRecoveryResult, type SessionSummaryWire, type MonitorStartRequest } from '../src/service.ts'
 import { runCommand } from '../src/commands.ts'
 import { createCli, parseCommand, spawnDetachedCli, type AppControl } from '../src/cli/core.ts'
-import { UsageError } from '../src/gateway.ts'
+import { CommandFailure, UsageError } from '../src/gateway.ts'
 import { startServer } from '../src/server.ts'
 import { COMMANDS } from '../src/commands.ts'
 import { fromShared, type UsageReportLike, type ModelTiersLike, type SharedVerdict, type SharedTier, type PickResult } from '../src/models.ts'
@@ -1160,15 +1160,44 @@ test('new：档位没有可用模型时直接失败，不留下空会话', async
   assert.equal(fake.calls.some((c) => c.endpoint === 'session/prompt'), false)
 })
 
-test('new：给出可直接用于 wait 的真实起点 seq（文本和 data 一致）', async () => {
+test('new：首问回执包含宿主请求编号和真实等待起点', async () => {
   const fake = makeFake()
   const r = await run(service(fake), 'new', ['repo-a', '做点小事'], { tier: 'fast' })
-  assert.equal((r.data as { since: number }).since, 0)
+  const receipt = r.data as { since: number; requestId: string }
+  const prompt = fake.calls.find((c) => c.endpoint === 'session/prompt')!.args.request as { requestId: string }
+  assert.match(receipt.requestId, /^[0-9a-f-]{36}$/)
+  assert.equal(receipt.requestId, prompt.requestId)
+  assert.equal(receipt.since, 0)
   assert.match(r.text, /起点 seq 0/)
   assert.match(r.text, /dsh-use wait eeee5555 --since 0/)
   const blank = await run(service(makeFake()), 'new', ['repo-a'], { tier: 'fast' })
   assert.equal((blank.data as { since: number }).since, 0)
   assert.match(blank.text, /最新 seq 0/)
+  assert.equal(Object.hasOwn(blank.data as object, 'requestId'), false)
+})
+
+test('new：首问收件未确认时返回已建会话和请求编号', async () => {
+  const fake = makeFake()
+  fake.replies = { 'session/prompt': { accepted: false } }
+  let watchRequests = 0
+  const s = service(fake, undefined, undefined, undefined, {
+    watchDone: async () => {
+      watchRequests++
+      return { id: 'watch-example', path: 'watch-example.json' }
+    },
+  })
+  await assert.rejects(run(s, 'new', ['repo-a', '核对文件清单'], { notify: 'bbbb2222' }), (error) => {
+    assert.ok(error instanceof CommandFailure)
+    assert.equal(error.code, 'send-unconfirmed')
+    const prompt = fake.calls.find((c) => c.endpoint === 'session/prompt')!.args.request as { requestId: string }
+    assert.match(prompt.requestId, /^[0-9a-f-]{36}$/)
+    assert.deepEqual(error.details, {
+      created: true, sessionId: 'session-eeee5555-0000', since: 0, requestId: prompt.requestId, sent: null,
+    })
+    return true
+  })
+  assert.equal(fake.calls.filter((c) => c.endpoint === 'session/create').length, 1)
+  assert.equal(watchRequests, 0)
 })
 
 test('model：会话正在跑时拒绝换也是失败（session-running）', async () => {

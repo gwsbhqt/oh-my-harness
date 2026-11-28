@@ -58,7 +58,20 @@ DSH 把一套配置称为 profile。在它的包清单中**合并**链接依赖�
 }
 ```
 
-在该 profile 目录，用 DSH 安装所配的 pnpm 安装依赖。运行 DSH 的启动检查后重启应用，再新建会话。组合包已经登记加载条目，不需要再手写一份 insert。参数和移除步骤见[部件安装说明](../dsh-python-repl/README.md#从本仓库安装)。
+在 macOS 上，如果终端找不到 `dsh`，先在当前终端启用桌面应用自带的命令。应用装在其他位置时，把下面的路径换成实际位置。
+
+```sh
+export PATH="/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin:$PATH"
+dsh --version
+```
+
+命令中的 `workbench` 是示例。请换成你刚才编辑的 profile 名称，然后安装依赖。
+
+```sh
+dsh plugin --profile workbench install
+```
+
+运行 DSH 的启动检查。检查通过后，重启应用并新建一个会话。组合包已经登记加载条目，不需要再手写一份 insert。参数和移除步骤见[部件安装说明](../dsh-python-repl/README.md#从本仓库安装)。
 
 内核页的「重启」只重启当前 DSH 会话的 Python 进程。
 

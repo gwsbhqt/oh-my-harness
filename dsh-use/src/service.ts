@@ -982,6 +982,7 @@ export class RemoteService {
     const lines = [`新会话 ${id}（${match?.title ?? expanded}）。`, switched.text]
     const since = (await this.transcript(id)).lastSeq
     const sent = message !== undefined && message.trim() !== ''
+    let requestId: string | undefined
     let notify: { line: string; data: Json } | undefined
     if (sent) {
       if (options.ifIdle) {
@@ -992,7 +993,11 @@ export class RemoteService {
           return { ok: false, status: 'failed', error: { ...payload, message }, text: message, data: { created: true, sessionId: id, workspace: match?.path ?? expanded, since, sent: false, model: switched.data } }
         }
       }
-      await this.call('session/prompt', { request: { requestId: randomUUID(), sessionId: id, mode: 'queue', content: [{ type: 'text', text: message }], clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone } })
+      requestId = randomUUID()
+      const admitted = obj(await this.call('session/prompt', { request: { requestId, sessionId: id, mode: 'queue', content: [{ type: 'text', text: message }], clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone } }))
+      if (admitted.accepted !== true) {
+        throw new CommandFailure('会话已创建，首条消息的收件状态未知。请用返回的会话编号查询状态，避免重复创建。', 'send-unconfirmed', { created: true, sessionId: id, since, requestId, sent: null })
+      }
       this.deps.log(`send ${id} mode=queue chars=${message.length}`)
       lines.push(`第一条消息已发出，起点 seq ${since}。`, `等它跑完：dsh-use wait ${short(id)} --since ${since}`)
       if (notifyTo !== undefined) {
@@ -1002,7 +1007,14 @@ export class RemoteService {
     } else {
       lines.push(`还没发消息，最新 seq ${since}。发消息：dsh-use send ${short(id)} "<消息>"（send 会给出等待用的起点）`)
     }
-    return { text: lines.join('\n'), data: { sessionId: id, workspace: match?.path ?? expanded, since, sent, model: switched.data, ...(notify === undefined ? {} : { notify: notify.data }) } }
+    return {
+      text: lines.join('\n'),
+      data: {
+        sessionId: id, workspace: match?.path ?? expanded, since, sent, model: switched.data,
+        ...(requestId === undefined ? {} : { requestId }),
+        ...(notify === undefined ? {} : { notify: notify.data }),
+      },
+    }
   }
 
   /** 发送前核对「做完通知谁」：找得到、没存档、不是目标自己，宿主也支持登记。 */

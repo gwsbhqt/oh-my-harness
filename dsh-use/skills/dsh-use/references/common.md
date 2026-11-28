@@ -6,7 +6,7 @@
 
 发送回执的 `sent`、`requestId`、`sessionId`、`since` 只证明接收，不能说任务已完成。派单默认带 `--notify`（DSH 会话或 Antigravity 桌面终端里写 `self`，Antigravity Python REPL 内核显式写 `agy:<会话编号>`），由插件在目标真做完后送一次通知；要当场拿结果就用 `wait --settled`。判断做没做完只认这两条路给的状态，不看目标回复里的字。先保存回执，再在后续调用继续等同一个 `since`；超时、取消或等待失败不能重新发送。发送回包丢失时可能已经送达，先查询状态和历史，不自动重发。远程发送后的 `wait` 也必须指定原机器，CLI 用相同 `-H`，Python 用相同 `host`。
 
-新任务用 `new <工作区或绝对路径> "任务与验收标准" --tier normal`，保留实际输出的会话和起点再等待。绝对路径只开会话，不登记工作区。`chat` 将发送与等待合并，正常返回的所有等待结果保留 `receipt`；即使失败也用该回执继续等待，不再发一次。
+新任务用 `new <工作区或绝对路径> "任务与验收标准" --tier normal`。成功发送首条消息时，保存 `data.sessionId`、`data.since` 和 `data.requestId`。只创建空会话时，`data.sent` 为 `false`。收到 `send-unconfirmed` 时，`error.details` 保留已建会话的编号、起点和请求编号，`sent` 为 `null`。用这个会话编号查 `status` 和 `read` 核对收件，重新执行 `new` 会再建一条会话。绝对路径只开会话，不登记工作区。`chat` 将发送与等待合并，正常返回的所有等待结果保留 `receipt`。等待失败后仍用原回执继续等。
 
 自动维护用 `dsh-use --local new /绝对仓库路径 "任务" --if-idle --json`。`--if-idle` 是不带值的开关，不等待空闲：已有运行会话、真实排队消息或不支持重启恢复的后台任务时退出 2，错误码 `idle-required`；已有活着的重启执行进程时退出 2，错误码 `restart-pending`。这两种拒绝都不创建会话、不发送。模型选好后、创建前会复查，发送前再复查。若已经创建才被挡，退出 1，返回 `{ok:false,status:"failed",error:{code,message},data:{created:true,sessionId,workspace,since,sent:false,model}}`，保存真实 `sessionId`，不要重放 `new`。读不到重启状态且不是文件不存在、状态损坏或空闲检查不可用时明确失败，不当作空闲。普通 `new` 不加此开关，沿用正常行为。
 
@@ -19,6 +19,7 @@ CLI 保留完整 stdout、stderr 和进程退出码，并检查 JSON 的 ok、st
 返回字典保留原始 `ok`、`status`、`data`、`error`、`receipt`、`meta`，额外有 `exit_code`、完整 `stdout` 和 `stderr`。非零退出仍返回字典，不自动抛业务异常。`help`、`version`、`start` 的文本结果在 `text`；`exit_code=None` 和 `launcher-unavailable` 表示启动入口不可用。`invalid-cli-output` 是协议错误，即使退出 0 也不能当成功。
 
 - 不带 `--settled` 的 `wait`、`chat` 只说明这一轮结束，目标可能还挂着后台任务或子代理、稍后被叫醒接着做；判断任务做完要带 `--settled` 或等 `--notify` 的通知。超时时 `data.waitingFor`、`data.blockers` 写着还没做完的原因。
+- 两级派单时，负责人与它用 `new` 或 `send` 另行委托的独立会话各有完成状态。在同一台 DSH 上，可让负责人把执行会话的 `--notify` 直接指向上一级会话编号。上一级收到执行结果后，再给负责人发一条验收任务并登记 `--notify self`。收到这条验收回执后，按对应的会话编号与 `since` 核对成品。
 - `wait`、`chat` 只有最后一轮 `completed` 且退出 0 才完成；任务出错或中止退出 1，`status` 是 `failed` 或 `aborted`，`data.turns` 保留原因与回复。
 - 退出 10 表示等用户回答：原样转问题与选项，得到回答后 `answer <会话> --select "选项"`，再从原起点等。
 - 退出 11 表示空闲且起点之后没有新内容。核对回执、状态与历史，不空等，不据此自动重发。

@@ -97,7 +97,9 @@ class DoneWatchCase(unittest.TestCase):
         self.assertTrue(all(c["session"] is None for c in self.calls()))
         [notice] = self.notices()
         self.assertEqual(notice[2], self.session)
-        self.assertIn("已经真正做完", notice[3])
+        self.assertIn("已完成本会话的工作", notice[3])
+        self.assertIn("独立会话", notice[3])
+        self.assertIn("本会话已完成", notice[5])
         self.assertIn("「测试长工」", notice[3])
         self.assertIn(f"dsh-use -H fixture last {self.target}", notice[3])
         self.assertIn("全部完成", notice[3])
@@ -111,7 +113,7 @@ class DoneWatchCase(unittest.TestCase):
         self.assertEqual(len(notices), 2)
         self.assertIn("在等回答", notices[0][5])
         self.assertIn("选哪个？", notices[0][3])
-        self.assertIn("已经真正做完", notices[1][3])
+        self.assertIn("已完成本会话的工作", notices[1][3])
 
     def test_failed_aborted_gone_and_idle_are_terminal(self):
         cases = {"failed": (1, turn_body(ended="error", status="failed")),
