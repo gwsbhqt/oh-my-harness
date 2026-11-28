@@ -150,7 +150,7 @@ class HostOutputTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_large_exception_retains_error_and_captured_diagnostics(self) -> None:
         async with self.server() as (_, client):
-            payload, text = await self.cell(client, "print('先'*9000)\nraise ValueError('错'*9000)")
+            payload, text = await self.cell(client, "rows = (n for n in range(3))\nprint('先'*9000)\nraise ValueError('错'*9000)")
             self.assertEqual(payload["status"], "error")
             self.assertEqual(payload["error"]["ename"], "ValueError")
             self.assertEqual(next(iter(payload)), "overflow_files")
@@ -160,6 +160,10 @@ class HostOutputTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Diagnostics truncated.", text)
             self.assertIn("ValueError: ", text)
             self.assertEqual(json.loads(details.read_text(encoding="utf-8"))["error"]["evalue"], "错" * 9000)
+            issue, = json.loads(Path(payload["snapshot_manifest"]).read_text())["skipped"]
+            self.assertEqual(payload["snapshot_skipped_example"], issue)
+            self.assertIn(issue["reason"], text)
+            self.assertIn(payload["snapshot_manifest"], text)
 
     async def test_silent_assignment_stdout_and_expression_keep_their_literal_text(self) -> None:
         async with self.server() as (_, client):
@@ -266,17 +270,58 @@ class HostOutputTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("restored", next_cell)
             self.assertNotIn("restore_binding", text)
 
-    async def test_skipped_state_displays_a_manifest_only_when_names_are_omitted(self) -> None:
+    @unittest.skipUnless(sys.version_info >= (3, 14), "deferred annotations require Python 3.14")
+    async def test_missing_type_in_snapshot_reports_a_recoverable_live_function(self) -> None:
+        async with self.server() as (_, client):
+            cell, text = await self.cell(
+                client, 'from typing import TYPE_CHECKING\n'
+                'if TYPE_CHECKING:\n    from collections.abc import Sequence\n'
+                'def count_orders(orders: Sequence[str]): return len(orders)\n'
+                'count_orders(["paper", "card"])',
+            )
+            self.assertEqual(cell["result"], "2")
+            reason = "NameError: name 'Sequence' is not defined"
+            self.assertEqual(cell["snapshot_skipped_example"], {"name": "count_orders", "reason": reason})
+            self.assertIn(reason, text)
+            self.assertIn("If its import is under TYPE_CHECKING", text)
+            self.assertIn("Before restarting the kernel or service", text)
+            self.assertIn("kernel_state(action='snapshot')", text)
+            self.assertIn(cell["snapshot_manifest"], text)
+            manifest = Path(cell["snapshot_manifest"])
+            self.assertNotIn("count_orders", json.loads(manifest.read_text())["savedNames"])
+
+            more, text = await self.cell(client, 'def count_returns(rows: Sequence[str]): return len(rows)')
+            self.assertEqual(more["snapshot_skipped_count"], 2)
+            self.assertIn("count_returns", text)
+            self.assertNotIn(reason, text)
+            self.assertNotIn("snapshot_skipped_example", more)
+            self.assertEqual((await self.cell(client, 'count_orders(["paper"])'))[1], "1")
+
+            saved, _ = await self.cell(client, "from collections.abc import Sequence")
+            self.assertEqual(saved["snapshot_skipped_count"], 0)
+            self.assertIn("count_orders", json.loads(manifest.read_text())["savedNames"])
+            restarted, _ = await self.tool(client, "kernel_state", action="restart")
+            self.assertEqual(restarted["status"], "ok", restarted)
+            restored, _ = await self.cell(client, 'count_orders(["card"]), count_orders.__annotations__["orders"] == Sequence[str]')
+            self.assertEqual(restored["result"], "(1, True)")
+
+    async def test_skipped_state_displays_first_reason_and_manifest_then_summarizes(self) -> None:
         async with self.server() as (_, client):
             cell, text = await self.cell(client, "samples = (n for n in range(3))")
             self.assertEqual(cell["snapshot_skipped_count"], 1)
             self.assertIn("Variables skipped in snapshot: 1 (samples)", text)
             path = Path(cell["snapshot_manifest"])
-            self.assertNotIn(str(path), text)
-            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["skipped"][0]["name"], "samples")
+            self.assertIn(str(path), text)
+            issue, = json.loads(path.read_text(encoding="utf-8"))["skipped"]
+            self.assertEqual(issue, cell["snapshot_skipped_example"])
+            self.assertIn(issue["reason"], text)
             cell, text = await self.cell(client, "a, b, c = ((n for n in range(2)) for _ in range(3))")
             self.assertEqual(cell["snapshot_skipped_count"], 4)
             self.assertIn(cell["snapshot_manifest"], text)
+            self.assertNotIn(issue["reason"], text)
+            updated, text = await self.cell(client, 'import csv\norders = csv.DictReader(["price", "12"])')
+            self.assertEqual(updated["snapshot_skipped_example"]["name"], "orders")
+            self.assertIn("_csv.reader", text)
 
     async def test_failed_restore_is_visible_even_when_the_cell_succeeds(self) -> None:
         async with self.server() as (root, client):

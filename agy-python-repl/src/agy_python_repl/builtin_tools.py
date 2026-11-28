@@ -19,6 +19,7 @@ import threading
 from collections import defaultdict
 from contextlib import ExitStack, asynccontextmanager
 from pathlib import Path
+from reprlib import recursive_repr
 from typing import Any, BinaryIO
 
 _IGNORED_DIRS = frozenset({".git", "node_modules", ".venv", "site-packages", "__pycache__",
@@ -194,8 +195,8 @@ class _BashResult(_ToolResult):
         return "\n".join([f"── bash · {' · '.join(status)} (view of a dict) ──", *notices, *body])
 
 
-def _search_preview_path(result: dict, path: str) -> str:
-    root = result.get("searchPath", result.get("root"))
+def _search_preview_path(result: dict, path: str, fallback_root: str | None = None) -> str:
+    root = result.get("searchPath", result.get("root", fallback_root))
     if root is not None and Path(path).is_relative_to(root):
         return str(Path(path).relative_to(root))
     return path
@@ -213,22 +214,114 @@ def _search_errors(result: dict) -> list[str]:
     return lines
 
 
-class _GrepResult(_ToolResult):
+class _SearchList(_NestedList):
+    """A list of unchanged paths or match rows, with the same display context on slices."""
+
+    __slots__ = ("_root", "_incomplete")
+
+    def __init__(self, values, root, incomplete):
+        super().__init__(values)
+        self._root = root
+        self._incomplete = incomplete
+
+    def __getitem__(self, index):
+        value = super().__getitem__(index)
+        if isinstance(index, slice):
+            return _SearchList(value, self._root, self._incomplete)
+        return value
+
+    @recursive_repr("[...]")
+    def __repr__(self) -> str:
+        limit = _GREP_SHOW if self and isinstance(self[0], dict) else _GLOB_SHOW
+        shown = list.__getitem__(self, slice(limit))
+        for index, item in enumerate(shown):
+            if isinstance(item, dict) and isinstance(item.get("line"), str):
+                shown[index] = {**item, "line": _clip_line(item["line"])}
+        notes = []
+        if self._incomplete:
+            notes.append("INCOMPLETE search")
+        if len(shown) < len(self):
+            notes.append(f"showing {len(shown)} of {len(self)} retained items")
+        if shown and self._root:
+            relative = []
+            for item in shown:
+                path = item.get("path") if isinstance(item, dict) else item
+                if not isinstance(path, str):
+                    break
+                try:
+                    short = str(Path(path).relative_to(self._root))
+                except ValueError:
+                    break
+                relative.append({**item, "path": short} if isinstance(item, dict) else short)
+            else:
+                shown = relative
+                notes.append(f"paths relative to {self._root!r}")
+        prefix = f"({', '.join(notes)}) " if notes else ""
+        return prefix + repr(shown)
+
+    __str__ = __repr__
+
+
+class _SearchResult(_ToolResult):
     __slots__ = ()
+    _list_field: str
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self._list_field in self:
+            self._search_list()
+
+    def _search_list(self) -> _SearchList:
+        values = dict.__getitem__(self, self._list_field)
+        if not isinstance(values, _SearchList):
+            root = self.get("root")
+            # Older grep snapshots have match paths but no recorded search directory.
+            if root is None and values:
+                paths = [v["path"] if isinstance(v, dict) else v for v in values]
+                if all(isinstance(path, str) and os.path.isabs(path) for path in paths):
+                    root = os.path.commonpath(os.path.dirname(path) for path in paths)
+            incomplete = bool(self.get("truncated") or self.get("outputCapped") or self.get("unreadable"))
+            values = _SearchList(values, root, incomplete)
+            self[self._list_field] = values
+        return values
+
+    def __getitem__(self, key):
+        # Restored dict subclasses can contain the original plain lists without calling __init__.
+        if key == self._list_field:
+            return self._search_list()
+        return super().__getitem__(key)
+
+
+class _GrepResult(_SearchResult):
+    __slots__ = ()
+    _list_field = "matches"
+
+    @property
+    def paths(self) -> _SearchList:
+        """Files among the retained matches, once each in first-match order."""
+        matches = self["matches"]
+        return _SearchList(dict.fromkeys(row["path"] for row in matches), matches._root, matches._incomplete)
+
+    def __missing__(self, key: Any) -> Any:
+        if key == "paths":
+            return self.paths
+        return super().__missing__(key)
 
     def _render(self) -> str:
         matches = self["matches"]
-        files = len({m["path"] for m in matches})
+        files = len(self.paths)
         count = f"{len(matches)} retained matches" if matches and self["outputCapped"] else f"{len(matches)} matches"
         label = f" · scope={self['scope']}" if self.get("scope") else ""
         root = f" under {self['root']}" if self.get("root") else ""
+        if not root and matches._root:
+            root = f" (paths relative to {matches._root!r})"
         coverage = f" in {files} matching file{'s' if files != 1 else ''}" if files else ""
         out = [f"── grep{label} · {count}{coverage}{root} (view of a dict) ──"]
         if self["outputCapped"]:
             out.append("INCOMPLETE: search output was capped")
         if self.get("unreadable"):
             out.extend(["INCOMPLETE: some paths could not be read", *_search_errors(self)])
-        out.extend(f"{_search_preview_path(self, m['path'])}:{m['lineNumber']}: {_clip_line(m['line'])}"
+        out.extend(f"{_search_preview_path(self, m['path'], matches._root)}:{m['lineNumber']}: {_clip_line(m['line'])}"
                    for m in matches[:_GREP_SHOW])
         if len(matches) > _GREP_SHOW:
             out.append(f"… {len(matches) - _GREP_SHOW} more in r.matches[{_GREP_SHOW}:]")
@@ -237,8 +330,9 @@ class _GrepResult(_ToolResult):
         return "\n".join(out)
 
 
-class _GlobResult(_ToolResult):
+class _GlobResult(_SearchResult):
     __slots__ = ()
+    _list_field = "paths"
 
     def _render(self) -> str:
         paths = self["paths"]
@@ -913,6 +1007,7 @@ def create_builtin_tools(*, capture_dir: Path | None = None) -> dict[str, Any]:
                                     "start at path (default: cwd), other patterns match basenames"),
         "grep": BuiltinTool("grep", "await grep(pattern, path=None, *, include=None, scope='normal', case_sensitive=True, "
                                     "fixed_strings=False, limit=250) -> matches and search completeness; include filters eligible "
-                                    "files by basename or, with /, relative to the search directory"),
+                                    "files by basename or, with /, relative to the search directory; .paths lists files "
+                                    "from the retained matches in first-match order"),
         "ToolCallError": ToolCallError,
     }

@@ -200,6 +200,149 @@ await write(p, "first\r\n\r\nthird\nlast\n")''')
         self.assertIn("0 matches", await self.cell(manager, "await grep('absent', d, scope='all')"))
         self.assertIn("0 paths", await self.cell(manager, "await glob('absent', d)"))
 
+    def make_search_catalog(self) -> Path:
+        catalog = self.workspace / "catalog"
+        for region in ("north", "south"):
+            folder = catalog / region
+            folder.mkdir(parents=True)
+            (folder / "order.txt").write_text("ready\nready again\n", encoding="utf-8")
+        return catalog
+
+    async def test_search_list_print_and_slices_retain_absolute_paths_and_full_rows(self) -> None:
+        catalog = self.make_search_catalog()
+        manager = self.new_manager()
+        reply = await manager.run_code(r"""
+repo = Path('catalog').resolve()
+src_py = await glob('*.txt', repo)
+ref_hits = await grep('ready', repo)
+ref_hits.matches[0]['source'] = 'sample item'
+print('glob_src_sample', src_py.paths[:3])
+print('match_sample', ref_hits.matches[:2])
+print('file_sample', ref_hits.paths[:2])
+print('full_paths', src_py.paths)
+print('full_rows', ref_hits.matches)
+print('unique_files', ref_hits.paths)
+north, south = (str(repo / place / 'order.txt') for place in ('north', 'south'))
+assert set(src_py.paths) == {north, south} == set(ref_hits.paths)
+assert sorted(src_py.paths) == [north, south]
+assert ref_hits.paths == list(dict.fromkeys(row.path for row in ref_hits.matches))
+assert ref_hits['paths'][::-1] == list(reversed(ref_hits.paths))
+assert json.loads(json.dumps(src_py.paths[::-1])) == list(reversed(src_py.paths))
+assert json.loads(json.dumps(ref_hits.matches)) == list(ref_hits.matches)
+assert json.loads(json.dumps(ref_hits.paths[:1])) == [ref_hits.matches[0].path]
+path = ref_hits.paths[0]
+assert type(path) is str and type(ref_hits.matches[0].path) is str and type(src_py.paths[0]) is str
+assert str(path) == path and repr(path) == repr(str(Path(path))) and Path(path).is_absolute()
+assert (await read(path)).text == 'ready\nready again'
+changed = await edit(path, 'again', 'shipped')
+assert changed.path == path
+""", cwd=self.workspace)
+        self.assertEqual(reply["status"], "ok", reply)
+        lines = reply["stdout"].splitlines()
+        self.assertEqual(len(lines), 6)
+        for line in lines:
+            self.assertEqual(line.count(str(catalog)), 1, line)
+            self.assertNotIn("INCOMPLETE", line)
+        for index in (0, 2, 3, 4, 5):
+            self.assertIn("north/order.txt", lines[index])
+            self.assertIn("south/order.txt", lines[index])
+        self.assertIn("'source': 'sample item'", lines[1])
+        self.assertIn("ready again", lines[4])
+        self.assertCountEqual([p.read_bytes() for p in catalog.glob("*/order.txt")],
+                              [b"ready\nready again\n", b"ready\nready shipped\n"])
+
+    async def test_long_grep_slice_clips_only_the_displayed_line(self) -> None:
+        line = "FIND " + "秋" * 9000
+        repo = self.workspace / "catalog"
+        repo.mkdir()
+        (repo / "invoice.txt").write_text(line + "\n", encoding="utf-8")
+        manager = self.new_manager()
+        view = await self.cell(manager, "repo = Path('catalog').resolve()\nfound = await grep('FIND', repo)\n"
+                                        "found.matches[0]['source'] = 'invoice'\nfound.matches[:1]")
+        marker = line[:300] + "… (9005 chars)"
+        self.assertIn(marker, view)
+        self.assertEqual(view.count(str(repo)), 1)
+        self.assertIn("'path': 'invoice.txt'", view)
+        self.assertIn("'source': 'invoice'", view)
+        self.assertNotIn("INCOMPLETE", view)
+        self.assertFalse(any(p.is_file() for p in (self.data / "overflow").rglob("*")))
+        await self.assert_cell_value(manager, "row = found.matches[0]\n"
+                                     "(len(row.line), row.line == 'FIND ' + '秋' * 9000, "
+                                     "json.loads(json.dumps(found.matches[:1]))[0] == row)", (9005, True, True))
+        # An entry outside the display root prevents path shortening, but the row still gets a line preview.
+        mixed = await self.cell(manager, "sample = found.matches[:1]\n"
+                                         "sample.append({'path': 'outside.txt', 'source': 'sample'})\nsample")
+        self.assertIn(marker, mixed)
+        self.assertNotIn("paths relative to", mixed)
+        self.assertIn(str(repo / "invoice.txt"), mixed)
+        self.assertIn("'source': 'sample'", mixed)
+
+    async def test_search_list_samples_distinguish_limited_display_from_partial_search(self) -> None:
+        catalog = self.make_search_catalog()
+        tools = create_builtin_tools()
+        files = await tools["glob"]("*.txt", catalog)
+        hits = await tools["grep"]("ready", catalog)
+        with (patch("agy_python_repl.builtin_tools._GLOB_SHOW", 1),
+              patch("agy_python_repl.builtin_tools._GREP_SHOW", 1)):
+            for values, count in ((files.paths, 2), (hits.paths, 2), (hits.matches, 4)):
+                self.assertIn(f"showing 1 of {count} retained items", repr(values))
+                self.assertNotIn("INCOMPLETE", repr(values))
+                self.assertEqual(len(values), count)
+                self.assertNotIn("showing", repr(values[-1:]))
+        partial = await tools["grep"]("ready", catalog, limit=1)
+        limited = await tools["glob"]("*.txt", catalog, limit=1)
+        for values in (partial.paths, partial.matches, limited.paths):
+            for selected in (values, values[:1], values[:0]):
+                self.assertIn("INCOMPLETE search", repr(selected))
+        no_hits = await tools["grep"]("missing", catalog)
+        self.assertEqual(repr(no_hits.paths), "[]")
+        self.assertEqual(repr(no_hits.matches[:2]), "[]")
+
+    async def test_search_list_snapshots_reload_full_results_slices_and_legacy_fields(self) -> None:
+        catalog = self.make_search_catalog()
+        manager = self.new_manager()
+        pid = await self.cell(manager, """
+repo = Path('catalog').resolve()
+files = await glob('*.txt', repo)
+hits = await grep('ready', repo)
+file_list = files.paths
+rows = hits.matches
+sliced = rows[:2]
+unique = hits.paths[:2]
+# Earlier snapshots used plain lists of paths and _NestedList match rows without a grep root.
+from agy_python_repl.builtin_tools import _NestedList
+legacy_files = dict.__new__(type(files))
+dict.update(legacy_files, dict(files, paths=list(file_list)))
+legacy_hits = dict.__new__(type(hits))
+dict.update(legacy_hits, {k: v for k, v in hits.items() if k not in ('root', 'searchPath')})
+dict.__setitem__(legacy_hits, 'matches', _NestedList(rows))
+assert type(dict.__getitem__(legacy_files, 'paths')) is list
+assert type(dict.__getitem__(legacy_hits, 'matches')) is _NestedList
+os.getpid()
+""")
+        saved = await manager.kernel_state("snapshot")
+        self.assertEqual(saved["status"], "ok", saved)
+        await manager.shutdown_all()
+        restored = await self.new_manager().run_code("""
+assert file_list is files.paths and rows is hits.matches
+assert legacy_files.paths == files.paths and legacy_hits.paths == hits.paths
+assert sliced == hits.matches[:2] and unique == hits.paths[:2]
+assert all(type(p) is str and Path(p).is_absolute() for p in unique)
+assert (await read(legacy_hits.paths[0])).text.startswith('ready')
+for values in (legacy_files.paths[:2], legacy_hits.matches[:2], legacy_hits.paths, legacy_hits,
+               file_list, rows, sliced, unique):
+    print(values if isinstance(values, list) else repr(values).splitlines()[0])
+os.getpid()
+""", cwd=self.workspace)
+        self.assertEqual(restored["status"], "ok", restored)
+        self.assertTrue(restored["restored"]["restored"], restored)
+        self.assertFalse(restored["restored"]["failed"])
+        self.assertNotEqual(pid, restored["result"])
+        lines = restored["stdout"].splitlines()
+        self.assertEqual(len(lines), 8)
+        for line in lines:
+            self.assertEqual(line.count(str(catalog)), 1, line)
+
     async def test_explicit_newlines_are_literal_and_plain_edits_keep_local_endings(self) -> None:
         manager = self.new_manager()
         target = self.workspace / "orders.txt"
@@ -338,11 +481,13 @@ await bash("[[ -n $BASH_VERSION ]] || exit 3; pwd; cat; printf err >&2; exit 7",
             self.assertIn("INCOMPLETE", preview)
             self.assertIn("ok.txt", preview)
             self.assertIn("denied", preview)
-            self.assertEqual(await self.cell(manager, "[Path(e.path).name for e in _.unreadable]"), repr(["denied"]))
+            self.assertEqual(await self.cell(manager, "r = _\n[Path(e.path).name for e in r.unreadable]"), repr(["denied"]))
+            self.assertIn("INCOMPLETE search", await self.cell(manager, "r.paths[:1]"))
         preview = await self.cell(manager, "await grep('absent', scope='all')")
         self.assertIn("0 matches", preview)
         self.assertNotIn("0 files", preview)
         self.assertIn("INCOMPLETE", preview)
+        self.assertIn("INCOMPLETE search", await self.cell(manager, "_.matches[:2]"))
         response = await manager.run_code("await grep('[')", cwd=self.workspace)
         self.assertEqual(response["error"]["ename"], "ToolCallError")
 

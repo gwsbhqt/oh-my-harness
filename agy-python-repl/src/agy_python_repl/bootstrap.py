@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import inspect
+from itertools import islice
 import os
 import sys
 import types
@@ -15,7 +16,9 @@ from python_repl_core import prelude, recovery_copies
 from python_repl_core.preview import preview as _preview
 from python_repl_core.skills_runtime import _SkillsNamespace, install_skills_import_guard
 
-from agy_python_repl.builtin_tools import BUILTIN_TOOL_NAMES, _ToolResult, create_builtin_tools
+from agy_python_repl.builtin_tools import (
+    BUILTIN_TOOL_NAMES, _NestedResult, _SearchList, _ToolResult, create_builtin_tools,
+)
 
 SKILL_RETRY_MIME = "application/vnd.agy-python-repl.skill-retry+json"
 REUSE_HINT_MIME = "application/vnd.agy-python-repl.reuse-hint+json"
@@ -97,7 +100,74 @@ class _PreviewResult(_ToolResult):
         state = "whole in-memory value"
         if self["truncated"]:
             state = f"in-memory preview limited by {', '.join(self['reasons'])}"
+        if self.get("upstream_completeness") == "incomplete":
+            state = f"{state} · incomplete search" if self["truncated"] else "all retained items · incomplete search"
         return f"── preview of {self['type']} · {state} (view of a dict) ──\n{self['text']}"
+
+
+class _ReadCopyResult(_ToolResult):
+    """Compact view for `repl.read_copy` without expanding stored values."""
+
+    __slots__ = ()
+    _MAX_NAMES = 12
+    _MAX_NAME_CHARS = 48
+    _MAX_ISSUES = 5
+    _MAX_REASON_CHARS = 200
+
+    @staticmethod
+    def _clip_text(value: Any, limit: int) -> str:
+        text = " ".join(str(value).splitlines()).strip()
+        return text if len(text) <= limit else f"{text[:limit - 1]}…"
+
+    @classmethod
+    def _format_entries(cls, label: str, items: list[Any]) -> list[str]:
+        lines = [f"{label} ({len(items)}):"]
+        for item in islice(items, cls._MAX_ISSUES):
+            if isinstance(item, dict):
+                name = cls._clip_text(item.get("name", "<unknown>"), cls._MAX_NAME_CHARS)
+                reason = cls._clip_text(item.get("reason", ""), cls._MAX_REASON_CHARS)
+                lines.append(f"  - {name}: {reason}" if reason else f"  - {name}")
+            else:
+                lines.append(f"  - {cls._clip_text(item, cls._MAX_REASON_CHARS)}")
+        if len(items) > cls._MAX_ISSUES:
+            lines.append(f"  … +{len(items) - cls._MAX_ISSUES} more in c[{label!r}]")
+        return lines
+
+    def _unavailable_view(self) -> str:
+        parts = []
+        for key, expected in (("values", dict), ("failed", list), ("skipped", list)):
+            if key not in self:
+                parts.append(f"{key}=missing")
+            elif not isinstance(self[key], expected):
+                parts.append(f"{key}={type(self[key]).__name__}(invalid)")
+            else:
+                parts.append(f"{key}={len(self[key])}")
+        return f"── read_copy · unavailable view ({', '.join(parts)}) ──"
+
+    def _render(self) -> str:
+        values = self.get("values")
+        failed = self.get("failed")
+        skipped = self.get("skipped")
+        if not isinstance(values, dict) or not isinstance(failed, list) or not isinstance(skipped, list):
+            return self._unavailable_view()
+        total_values = len(values)
+        sample_names = [self._clip_text(k, self._MAX_NAME_CHARS) for k in islice(values.keys(), self._MAX_NAMES)]
+        header = (
+            f"── read_copy · {total_values} values · {len(failed)} failed · "
+            f"{len(skipped)} skipped (view of a dict) ──"
+        )
+        if total_values == 0:
+            val_line = "values (0): (none)"
+        else:
+            sample = ", ".join(sample_names)
+            extra = f" (+{total_values - self._MAX_NAMES} more)" if total_values > self._MAX_NAMES else ""
+            val_line = f'values ({total_values}): {sample}{extra}  [access via c["values"][name]]'
+        out = [header, val_line]
+        if failed:
+            out.extend(self._format_entries("failed", failed))
+        if skipped:
+            out.extend(self._format_entries("skipped", skipped))
+        return "\n".join(out)
 
 
 class _HelperList(list[dict[str, str]]):
@@ -130,10 +200,11 @@ class _ReplHelper:
 
     async def read_copy(self, copy_id: str) -> dict:
         """Read selected values without replacing live names; also reports failed and skipped names."""
-        return recovery_copies.read(self._copy_session, copy_id)
+        return _ReadCopyResult(recovery_copies.read(self._copy_session, copy_id))
 
     def preview(self, value: Any, *, chars: int = 4000, items: int = 20, depth: int = 8) -> dict[str, Any]:
-        return _PreviewResult(_preview(value, chars=chars, items=items, depth=depth))
+        return _PreviewResult(_preview(value, chars=chars, items=items, depth=depth,
+                                       _list_view=(_SearchList, _SearchList._incomplete), _dict_type=_NestedResult))
 
     async def helpers(self, query: str = "") -> list[dict[str, str]]:
         """List user functions and classes by name. Start the query with _ to include private helpers."""
@@ -176,6 +247,11 @@ class _ReplHelper:
         """Describe a built-in value's type and container size without running user hooks."""
         cls = type(value)
         type_name = str.__getitem__(type.__dict__["__name__"].__get__(cls), slice(128))
+        if cls is _SearchList:
+            suffix = " (retained items, incomplete search)" if value._incomplete is True else ""
+            return f"{type_name}, len={list.__len__(value)}{suffix}"
+        if cls is _NestedResult:
+            return f"{type_name}, len={dict.__len__(value)}"
         if any(cls is candidate for candidate in _SAFE_SIZED_EXACT):
             return f"{type_name}, len={len(value)}"
         if any(cls is candidate for candidate in _SAFE_SCALAR_EXACT):

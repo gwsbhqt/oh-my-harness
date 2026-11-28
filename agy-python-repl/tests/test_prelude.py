@@ -50,6 +50,65 @@ class KernelPreludeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[False, 20, 'not_checked',", restored["result"])
         self.assertIn("秋", restored["result"])
 
+    async def test_search_lists_and_match_rows_use_retained_sizes_and_preview_budgets(self) -> None:
+        (self.workspace / "订单.csv").write_text(
+            "".join(f"已付款订单{i:05}\n" for i in range(12_001)), encoding="utf-8",
+        )
+        (self.workspace / "退货.csv").touch()
+        manager = self.new_manager()
+        manager.auto_snapshot = False
+        result = await manager.run_code(
+            'hits = (await grep("已付款", "订单.csv", scope="all", limit=12000)).matches\n'
+            'paths = (await glob("*.csv")).paths\n'
+            'limited = repl.preview(hits, items=3)\n'
+            'print(await repl.size(hits), await repl.size(hits[0]), await repl.size(paths))\n'
+            'print(limited["upstream_completeness"], repl.preview(paths)["upstream_completeness"])\n'
+            'limited', cwd=self.workspace,
+        )
+        self.assertEqual(result["status"], "ok", result)
+        self.assertIn("len=12000", result["stdout"])
+        self.assertIn("len=3", result["stdout"])
+        self.assertIn("len=2", result["stdout"])
+        self.assertIn("incomplete not_checked", result["stdout"])
+        self.assertIn("items_limit", result["result"])
+        self.assertIn("incomplete search", result["result"].lower())
+        self.assertIn("订单.csv", result["result"])
+        self.assertIn("已付款订单00002", result["result"])
+        self.assertNotIn("已付款订单00003", result["result"])
+        self.assertNotIn("unsupported", result["result"])
+
+        sample = await manager.run_code(
+            'names = repl.preview(paths, items=1)\nrow = repl.preview(hits[0])\n'
+            'first = repl.preview({"保留行": hits[:1]})\n'
+            'print(names["truncated"], names["unsupported"], row["truncated"], first["truncated"])\n'
+            'print(names["text"], row["text"])\nfirst'
+        )
+        self.assertEqual(sample["status"], "ok", sample)
+        self.assertIn("True False False False", sample["stdout"])
+        self.assertIn("已付款订单00000", sample["stdout"])
+        self.assertIn("incomplete search", sample["result"].lower())
+        self.assertNotIn("whole in-memory value", sample["result"])
+        self.assertIn("保留行", sample["result"])
+
+    async def test_search_previews_never_invoke_user_subclass_hooks(self) -> None:
+        manager = self.new_manager()
+        manager.auto_snapshot = False
+        (self.workspace / "订单.csv").write_text("纸箱\n", encoding="utf-8")
+        result = await manager.run_code(
+            'hits = (await grep("纸箱", "订单.csv", scope="all")).matches\n'
+            'def trap(*args): raise AssertionError("user hook ran")\n'
+            'class UserList(type(hits)):\n    __repr__ = __len__ = __iter__ = __getitem__ = trap\n'
+            'class UserRow(type(hits[0])):\n    __repr__ = __len__ = __iter__ = items = trap\n'
+            'for value in (UserList([], "", False), UserRow()):\n'
+            '    hits.append(value)\n'
+            '    print(await repl.size(value), repl.preview(value)["unsupported"])\n'
+            'repl.preview(hits)', cwd=self.workspace,
+        )
+        self.assertEqual(result["status"], "ok", result)
+        self.assertEqual(result["stdout"], "UserList True\nUserRow True\n")
+        self.assertIn("<unsupported UserList>", result["result"])
+        self.assertIn("<unsupported UserRow>", result["result"])
+
     async def test_first_cell_uses_stdlib_without_adding_user_variables(self) -> None:
         manager = self.new_manager()
         cell = await manager.run_code(

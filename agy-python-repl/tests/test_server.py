@@ -229,7 +229,8 @@ class AgyPythonReplTests(unittest.IsolatedAsyncioTestCase):
 
         start = self.run_hook("SessionStart", {"conversationId": "new-review"})
         msg = start["injectSteps"][0]["systemMessage"]["systemMessage"]
-        for word in ("run_code", "source", "SKILL.md", "read_file", "follow-up"):
+        for word in (f"mcp_{SERVER_NAME}_run_code", f"mcp_{SERVER_NAME}_kernel_state",
+                     f"ServerName={SERVER_NAME}", "call_mcp_tool", "source", "SKILL.md", "read_file", "follow-up"):
             self.assertIn(word, msg)
         self.assertEqual(invocation("new-review", 0, 2, "Compare the three implementations."), {})
         self.assertEqual(invocation("new-review", 21, 51, "Compare the three implementations."), {})

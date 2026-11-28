@@ -1,16 +1,19 @@
 """Exercise the MCP App resource, its real kernel tools, and the iframe transport."""
 
+import asyncio
 import os
 import re
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from mcp.shared.memory import create_connected_server_and_client_session
 
+from agy_python_repl import manager as manager_module
 from agy_python_repl import server
 from agy_python_repl.manager import KernelManager
 
@@ -79,6 +82,52 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(checked["result"], str((True, "<mark> & text")))
                     await call("app_kernel_action", kernel="sample", action="reset")
                     self.assertEqual((await call("app_kernel_overview"))["kernels"], [])
+
+    async def test_history_times_queue_startup_snapshot_and_result_collection(self):
+        class Clock:
+            seconds = 0
+
+            def monotonic(self):
+                return self.seconds
+
+            def time(self):
+                return time.time()
+
+        clock = Clock()
+        with tempfile.TemporaryDirectory() as folder:
+            manager = KernelManager(data_dir=Path(folder), skill_roots=[], project_skill_roots=[])
+            original_ensure, original_save = manager._ensure_kernel, manager._save_snapshot
+            original_receipt = manager_module._output_receipt
+
+            async def start_kernel(*args, **kwargs):
+                kernel = await original_ensure(*args, **kwargs)
+                clock.seconds += 2
+                return kernel
+
+            async def save(*args):
+                saved = await original_save(*args)
+                clock.seconds += 3
+                return saved
+
+            def receipt(*args):
+                result = original_receipt(*args)
+                clock.seconds += 5
+                return result
+
+            lock = manager._locks.setdefault("default", asyncio.Lock())
+            try:
+                with (patch.object(manager_module, "time", clock), patch.object(manager, "_ensure_kernel", start_kernel),
+                      patch.object(manager, "_save_snapshot", save), patch.object(manager_module, "_output_receipt", receipt)):
+                    async with lock:
+                        running = asyncio.create_task(manager.run_code("sum([3, 5])", cwd=Path(folder)))
+                        await asyncio.sleep(0)  # Let run_code reach the occupied lock.
+                        clock.seconds += 7
+                    self.assertEqual((await running)["result"], "8")
+                    cell, = manager.get_overview()["history"]
+                    self.assertEqual(cell["duration_ms"], 0)
+                    self.assertEqual(cell["total_duration_ms"], 17_000)
+            finally:
+                await manager.shutdown_all()
 
     @unittest.skipUnless(shutil.which("node"), "Node.js runs the panel's kernel card renderer")
     def test_kernel_card_shows_loaded_skills_and_bounds_each_failure(self):

@@ -176,7 +176,15 @@ def render_run_code(receipt: dict[str, Any]) -> str:
         names = receipt.get("snapshot_skipped_names", [])
         notice = f"Variables skipped in snapshot: {skipped}"
         parts.append(f"{notice} ({', '.join(names)})" if names else notice)
-        if skipped > len(names) and (manifest := receipt.get("snapshot_manifest")):
+        example = receipt.get("snapshot_skipped_example")
+        if example:
+            parts.append(f"Skipped: {example['name']} ({example['reason']})")
+            if example["reason"].startswith("NameError: "):
+                parts.append("To keep this value, define or import the missing name in this kernel. "
+                             "If its import is under TYPE_CHECKING, run that import in a cell. "
+                             "Before restarting the kernel or service, use kernel_state(action='snapshot') "
+                             "to check that the variable was saved.")
+        if (example or skipped > len(names)) and (manifest := receipt.get("snapshot_manifest")):
             parts.append(f"Snapshot manifest: {manifest}")
 
     stdout = receipt.get("stdout")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import MemberDescriptorType
 from typing import Any
 
 _MAX_CHARS = 50_000
@@ -24,8 +25,9 @@ def _type_name(value: Any) -> str:
     return str.__getitem__(name, slice(_NAME_CHARS))
 
 
-def preview(value: Any, *, chars: int = 4000, items: int = 20,
-            depth: int = 8) -> dict[str, Any]:
+def preview(value: Any, *, chars: int = 4000, items: int = 20, depth: int = 8,
+            _list_view: tuple[type[list], MemberDescriptorType] | None = None,
+            _dict_type: type[dict] | None = None) -> dict[str, Any]:
     """Return a bounded JSON-compatible preview, without changing the value.
 
     ``chars`` bounds ``text`` including placeholders and ellipses, not metadata.
@@ -33,10 +35,12 @@ def preview(value: Any, *, chars: int = 4000, items: int = 20,
     of nonempty container levels to expand. All budgets must be exact, nonnegative
     ints within the hard caps (50,000 / 100 / 32); bool is not an integer budget.
     A separate fixed work budget applies regardless of the requested budgets.
+    A host can supply an exact list view type and its upstream-incomplete slot,
+    or an exact dict view type. Only built-in descriptors read their contents.
 
     ``unsupported`` describes only encountered values, not unvisited portions.
-    Even an untruncated preview is only of a value already in memory: it says
-    nothing about upstream pagination, clipping, failed reads or completeness.
+    A preview covers the value already in memory. Visiting an opted-in list
+    can report a known incomplete search. Other upstream coverage is unchecked.
     """
     for name, budget, maximum in (("chars", chars, _MAX_CHARS),
                                   ("items", items, _MAX_ITEMS),
@@ -51,6 +55,7 @@ def preview(value: Any, *, chars: int = 4000, items: int = 20,
     nodes = 0
     scalar_chars = 0
     unsupported = False
+    incomplete_source = False
     reasons: list[str] = []
 
     def mark(reason: str) -> None:
@@ -69,12 +74,18 @@ def preview(value: Any, *, chars: int = 4000, items: int = 20,
         used += len(text)
 
     def walk(item: Any, ancestors: tuple[int, ...] = ()) -> None:
-        nonlocal nodes, scalar_chars, unsupported
-        cls = type(item)
+        nonlocal nodes, scalar_chars, unsupported, incomplete_source
         if nodes >= _MAX_NODES:
             mark("work_limit")
             raise _StopPreview
         nodes += 1
+        cls = type(item)
+        if _list_view is not None and cls is _list_view[0]:
+            cls = list
+            if _list_view[1].__get__(item) is True:
+                incomplete_source = True
+        elif cls is _dict_type:
+            cls = dict
 
         if cls is str or cls is bytes or cls is bytearray:
             size = len(item)
@@ -109,7 +120,7 @@ def preview(value: Any, *, chars: int = 4000, items: int = 20,
                 mark("cycle")
                 add(f"<cycle {_type_name(item)}>")
                 return
-            size = len(item)
+            size = cls.__len__(item)
             if size and len(ancestors) >= depth:
                 mark("depth_limit")
                 add(f"<depth {_type_name(item)}>")
@@ -126,7 +137,7 @@ def preview(value: Any, *, chars: int = 4000, items: int = 20,
                 opening, closing = "{", "}"
             add(opening)
             ancestors = (*ancestors, identity)
-            iterator = iter(item.items() if cls is dict else item)
+            iterator = iter(dict.items(item)) if cls is dict else cls.__iter__(item)
             count = min(size, items)
             for index in range(count):
                 if used == chars:
@@ -181,7 +192,7 @@ def preview(value: Any, *, chars: int = 4000, items: int = 20,
         "type": _type_name(value),
         "budget": {"chars": chars, "items": items, "depth": depth},
         "scope": "in_memory_value",
-        "upstream_completeness": "not_checked",
+        "upstream_completeness": "incomplete" if incomplete_source else "not_checked",
         "note": "In-memory value preview only; does not prove upstream data completeness. "
                 "Unsupported reports only values encountered within the preview budgets.",
     }

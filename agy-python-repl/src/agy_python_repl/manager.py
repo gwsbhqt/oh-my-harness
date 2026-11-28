@@ -83,6 +83,8 @@ def _output_receipt(
         captures.append(("details", "json", _json_text(metadata)))
         metadata = metadata.copy()
         for key, value in metadata.items():
+            if key in {"snapshot_skipped_example", "snapshot_manifest"}:
+                continue  # The bounded example and the usable manifest path belong in the inline receipt.
             if isinstance(value, dict):
                 # Keep the error or restore outcome inline. The capture retains full diagnostics.
                 metadata[key] = {
@@ -204,6 +206,7 @@ class CellHistoryEntry:
     code_preview: str
     status: str
     duration_ms: int
+    total_duration_ms: int
     timestamp: float
     truncated: bool = False
 
@@ -223,8 +226,9 @@ class ManagedKernel:
     pending_state_loss: bool = False
     snapshot_protected: bool = False
     last_skipped_digest: bytes | None = None
+    reported_skip_reasons: set[str] = field(default_factory=set)
 
-    def auto_save_notice_changed(self, skipped: list[dict[str, str]]) -> bool:
+    def auto_save_notice(self, skipped: list[dict[str, str]], manifest: Path) -> dict[str, Any]:
         digest = None
         if skipped:
             # Snapshot records follow binding order. The same names and reasons are one notice in any order.
@@ -233,9 +237,25 @@ class ManagedKernel:
                 pair = json.dumps([item["name"], item["reason"]], ensure_ascii=False)
                 summary.update(pair.encode("utf-8", errors="surrogatepass"))
             digest = summary.digest()
-        changed = self.last_skipped_digest != digest
+        if self.last_skipped_digest == digest:
+            return {}
         self.last_skipped_digest = digest
-        return changed
+        self.reported_skip_reasons.intersection_update(item["reason"] for item in skipped)
+        notice: dict[str, Any] = {
+            "snapshot_skipped_count": len(skipped),
+            "snapshot_skipped_names": [bound_text(item["name"], max_chars=96).text for item in skipped[:3]],
+            "snapshot_manifest": str(manifest),
+        }
+        for item in skipped:
+            reason = item["reason"]
+            if reason not in self.reported_skip_reasons:
+                self.reported_skip_reasons.add(reason)
+                notice["snapshot_skipped_example"] = {
+                    "name": bound_text(item["name"], max_chars=96).text,
+                    "reason": bound_text(reason, max_chars=256).text,
+                }
+                break
+        return notice
 
     def apply_skill_retry(self, display: dict[str, Any]) -> None:
         update = display.get(SKILL_RETRY_MIME)
@@ -452,12 +472,13 @@ class KernelManager:
         timeout_seconds: float = 60.0,
         cwd: Path | None = None,
     ) -> dict[str, Any]:
+        service_started = time.monotonic()
         key, storage = self._kernel_identity(kernel)
         async with self._locks.setdefault(key, asyncio.Lock()):
             managed = await self._ensure_kernel(key, storage, cwd=cwd)
-            started = time.monotonic()
+            execution_started = time.monotonic()
             res: CellResult = await managed.client.execute(code, timeout_s=timeout_seconds)
-            elapsed_ms = int((time.monotonic() - started) * 1000)
+            elapsed_ms = int((time.monotonic() - execution_started) * 1000)
             managed.last_used_at = time.time()
 
             status = "timeout" if res.timed_out else res.status
@@ -477,13 +498,7 @@ class KernelManager:
                     if saved.get("status") != "ok":
                         out["snapshot_error"] = saved.get("reason") or "Kernel could not save the snapshot"
                     else:
-                        skipped = saved.get("skipped", [])
-                        if managed.auto_save_notice_changed(skipped):
-                            out["snapshot_skipped_count"] = len(skipped)
-                            out["snapshot_skipped_names"] = [
-                                bound_text(item["name"], max_chars=96).text for item in skipped[:3]
-                            ]
-                            out["snapshot_manifest"] = str(manifest)
+                        out.update(managed.auto_save_notice(saved.get("skipped", []), manifest))
             if managed.pending_restore_notice is not None:
                 out["restored"] = managed.pending_restore_notice
                 managed.pending_restore_notice = None
@@ -505,6 +520,7 @@ class KernelManager:
                 code_preview=code.strip().splitlines()[0][:120] if code.strip() else "",
                 status=status,
                 duration_ms=elapsed_ms,
+                total_duration_ms=int((time.monotonic() - service_started) * 1000),
                 timestamp=time.time(),
                 truncated=out.get("truncated", False),
             )
@@ -733,6 +749,7 @@ class KernelManager:
                     "code_preview": h.code_preview,
                     "status": h.status,
                     "duration_ms": h.duration_ms,
+                    "total_duration_ms": h.total_duration_ms,
                     "truncated": h.truncated,
                 }
                 for h in reversed(self._history[-20:])

@@ -13,19 +13,16 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 
+from agy_python_repl.session_routing import SERVER_NAME
+
+
 START_GUIDANCE = (
-    "Continue in the persistent Python run_code workbench. Reuse earlier variables and functions. Once repo "
-    "exists, use repo / 'tests'. Only if unsure, check 'repo' in globals(). read, write, edit, bash, glob and "
-    "grep are ready to use. Keep complete results in variables. For several named values use one print per "
-    "value, one labeled line each in the user's language. A single value can be the final expression. "
-    "For a source review, follow any required SKILL.md read_file, then narrow "
-    "the search and keep its results for follow-up. For a count or comparison, go straight from all inputs to "
-    "the aggregate in the same cell. Keep rows, validation tables and intermediate diagnostics in variables. "
-    "Validate inside the computing cell before printing. When the requested lines are on screen, answer "
-    "from them. Open another cell only for an unresolved problem. Keep samples and audit data in variables. "
-    "Pass Path objects straight to file helpers. If you need the layout, inspect column names alone. "
-    "Define repeated work once. For tests inspect exitCode "
-    "and return ok or the failing cases and errors. If run_code is deferred, call it via call_mcp_tool."
+    f"Use mcp_{SERVER_NAME}_run_code for Python cells and mcp_{SERVER_NAME}_kernel_state for recovery. "
+    f"For deferred tools, call_mcp_tool with ServerName={SERVER_NAME} and the requested ToolName. "
+    "Reuse the live repo, Path objects, functions and complete results for follow-up. "
+    "For source reviews, follow any required SKILL.md read_file and search only the relevant files. "
+    "Compute and check counts in one cell. Leave a single value last, or print one labeled line per named "
+    "value in the user's language. For tests check exitCode and show ok or the failing cases and errors."
 )
 
 
