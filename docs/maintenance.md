@@ -89,6 +89,8 @@ test -x "$AGY_DIR/skills/agy-use/scripts/agy-use"
 
 平台安装沿用现有入口。DSH：把入门页 profile 中的 `link:` 依赖改为指向已校验 `.tgz` 的绝对 `file:` 路径，保留组合包登记，再用 DSH 所配 pnpm 安装、运行启动检查并重启。Antigravity：执行 `agy plugin install "$AGY_DIR"`，再用 `agy plugin list --json` 核对。只做临时验收时，为 AGY 命令设置一个新的空 `HOME`；先确认 `plugin list --json` 为 `[]`，不要操作日常 App。
 
+宿主输入不能互换：DSH 的 `file:` 必须指向通过 `DSH-SHA256SUMS` 检查的 `.tgz`，不能指向 `$AGY_DIR`；Antigravity 必须安装通过上述目录清单检查的 `$AGY_DIR`，不能安装 `.tgz`。pnpm 能把本地目录安装成依赖并返回成功，但这不会产生可加载的 DSH 插件，所以安装命令退出 0 不能代替宿主输入检查。
+
 回退前保留上一组已校验成品和现有快照。DSH 把 `file:` 指回旧 `.tgz`，重新安装 profile 依赖、检查并重启。AGY 不先卸载：把上一已校验独立目录设为 `PREVIOUS_AGY_DIR`，直接执行 `agy plugin install "$PREVIOUS_AGY_DIR"`，避免停用窗口。随后用 `agy plugin list --json` 找到安装路径并设为 `AGY_INSTALLED`，执行 `diff -r "$PREVIOUS_AGY_DIR" "$AGY_INSTALLED"`；无输出且退出 0 才说明内容恢复，不要用相同的版本号判断。仍用源码 `link:` 的 DSH 安装则检出旧提交并重跑组件检查，不能把已改源码当成已回退的运行实例。
 
 ## 发布前检查
