@@ -6,6 +6,8 @@
 
 After installing the Antigravity workbench, open a new desktop conversation. In the first cell, define `samples = [3, 5, 8]` and run `len(samples)`. In the second, run only `sum(samples)`. Expand both `run_code` calls in that conversation. Both should have `status="ok"`, with results `3` and `16`. [Install the Antigravity workbench](../agy-python-repl/README.md#install)
 
+To upgrade the desktop workbench from source, build the standalone plugin directory, validate it, and install it. Close conversations running the old plugin and open a new one to verify the update. **Restart** in the Kernel Inspector restarts the current conversation’s Python process. An existing conversation may receive updated instructions once the app has loaded the new hooks.
+
 On first launch, uv prepares Python and the locked dependencies for the current OS user. On a new machine or with an empty cache, go online and run the two cells above until you see `3` and `16`. If the plugin is listed as enabled but the startup log reports missing Python or a package, restore download access and retry on the same machine as the same user.
 
 Once prepared, the local tool can restart with uv in offline mode (`UV_OFFLINE=1`). This setting controls dependency downloads. Desktop conversations using a cloud model still need a connection to the model service.
@@ -56,13 +58,17 @@ DSH calls a configuration set a profile. **Merge** the link dependency and bundl
 
 In that profile directory, install dependencies with the pnpm supplied by your DSH installation. Run DSH's startup check, restart the app, and open a new session. The bundle already registers its loader entry; do not add a second insert. See the [component installation guide](../dsh-python-repl/README.en.md#install-from-this-repository) for configuration and removal.
 
+**Restart** in the DSH kernel tab restarts the Python process for the current DSH conversation.
+
 ## 4. Verify that a variable survives
 
-Ask the agent in the new session to run two cells:
+Ask the agent to run both cells in the same new conversation.
 
 > In the first cell, create `samples = [3, 5, 8]` and return only its length. In the second, calculate `sum(samples)` without assigning it again. Report both results.
 
 The results should be `3` and `16`. This verifies variable reuse in the current session. It does not verify restart recovery, external service permissions, or real business outcomes.
+
+The kernel saves snapshots automatically. The original conversation can restore variables that were saved successfully before a restart. Each new conversation has its own kernel and snapshot, even if you choose the same kernel name in Antigravity. To continue the calculation there, save the numbers to a JSON file, then read the file in the new conversation and assign the result to `samples`.
 
 For a larger example, run the [fictional log measurement](../benchmarks/README.en.md) or read the [persistent kernel guide](dsh-python-repl.en.md).
 
@@ -82,6 +88,7 @@ Adding a Python skill to a trusted directory executes its code when imported. Se
 - **Build failure:** keep the complete exit status and error; check the component's environment requirements.
 - **No new capability in DSH:** check the active profile's link, bundle registration, and actual restart. Edited source does not replace a loaded module.
 - **Variable missing in the next cell:** check the session, kernel reset state, and any restore-loss report.
+- **To return to a working version**, reinstall the previously verified artifact for the host you use. [Rollback steps](maintenance.en.md)
 - **Uncertain external action:** inspect the original target and receipt before sending or clicking again.
 
 Use fictional reproductions in public issues. Report account data, real logs, or security findings [privately](../SECURITY.en.md).

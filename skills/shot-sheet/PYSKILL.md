@@ -5,7 +5,7 @@ description: 从 GIF 或视频按时间抽帧并拼图，也可拼多张截图�
 
 # shot-sheet
 
-有 Python 技能内核的 agent 读取 [PYSKILL.md](PYSKILL.md)，直接调用 `skills.shot_sheet` 完整下划线入口；无内核的 agent 读取 [SKILL.md](SKILL.md)，使用正式命令行入口。只有未提供 PYSKILL.md 时才读取 SKILL.md；读取、格式、导入或调用错误必须先报告并处理，不得换说明、shell、subprocess 或临时脚本绕过接口。两份说明属于同一正式技能，只在示例调用方式上不同。
+有 Python 技能内核的 agent 读取 [PYSKILL.md](PYSKILL.md)，直接调用 `skills.shot_sheet` 完整下划线入口；无内核的 agent 读取 [SKILL.md](SKILL.md)，使用正式命令行入口。只有未提供 PYSKILL.md 时才读取 SKILL.md；读取、格式、导入或调用错误必须先报告并处理，不得换说明、shell、subprocess 或临时脚本绕过接口。两份说明属于同一正式技能，只在示例调用方式上不同。`skills` 是内核里已绑定的对象，`skills.shot_sheet` 是它的属性；有内核时不要在代码里写 `import skills.shot_sheet`（技能不是 Python 包，会报 `ModuleNotFoundError: ... 'skills' is not a package`），直接在代码里用 `skills.shot_sheet.函数(...)` 调用。
 
 开始前阅读 [共用规则](references/common.md)。完整选项见 [命令参数参考](references/cli.md)，函数签名见 [函数参数参考](src/shot_sheet/__init__.py)。
 
