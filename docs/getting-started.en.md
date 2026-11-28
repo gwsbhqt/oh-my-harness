@@ -4,7 +4,11 @@
 
 [← Documentation](README.en.md) · [All components](components.en.md)
 
-Install `dsh-python-repl` first and try reusing data across cells. Add other components when needed. It works without the maintainer's dotfiles or private plugins.
+For the Antigravity desktop app, build and install the workbench. In a new conversation, ask for the length of `samples = [3, 5, 8]`, then ask for `sum(samples)` in a second cell. The results should be `3` and `16`. [Install the Antigravity workbench](../agy-python-repl/README.md#install)
+
+To try an independent CLI, make a contact sheet from two of your own images. [Standalone image examples](../skills/shot-sheet/README.en.md#common-operations)
+
+The steps below install persistent Python in DSH.
 
 ## 1. Prepare the environment
 

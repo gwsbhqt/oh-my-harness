@@ -17,6 +17,12 @@ uv tool install ./skills/shot-sheet
 shot-sheet --help
 ```
 
+If the shell cannot find `shot-sheet`, run it from uv’s tool directory.
+
+```sh
+"$(uv tool dir --bin)/shot-sheet" --help
+```
+
 To run from source, keep the sibling `skills/_shared` directory and use:
 
 ```sh

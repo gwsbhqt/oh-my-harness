@@ -1,6 +1,6 @@
 # oh-my-harness
 
-> Independent plugins and trusted Python skills for DeepSeek Harness: persistent Python, running-instance control, task-oriented browser/macOS/SSH operations, events, and context helpers. Not affiliated with DeepSeek. Trusted execution is not a sandbox.
+> Independently maintained extensions for DeepSeek Harness and Antigravity, plus standalone Python tools for browser, desktop, SSH and image work. The kernels run trusted code with the permissions of their host.
 
 The Chinese README is the primary, default documentation; the paired English documents cover the same behavior. Exact settings and platform constraints live in component READMEs. Complete values can remain in a session kernel while only evidence is displayed. Do not assume a short display proves a complete source or that an accepted request completed an external action.
 
@@ -8,7 +8,7 @@ The Chinese README is the primary, default documentation; the paired English doc
 
 - [Overview](README.en.md): Purpose, main capabilities, recorded example, and trust boundary.
 - [Documentation](docs/README.en.md): Scenario-based reading paths.
-- [Getting started](docs/getting-started.en.md): Build, link a profile, and verify variable reuse.
+- Follow the install path for your host or try an independent CLI. [Getting started](docs/getting-started.en.md)
 - [Component catalog](docs/components.en.md): All public components grouped by problem.
 - [Architecture](docs/architecture.en.md): Host, upstream kernel, extension responsibilities, and source map.
 - [Dotfiles integration](docs/dotfiles.en.md): Public code, private configuration, and optional integrations.
@@ -21,6 +21,7 @@ The Chinese README is the primary, default documentation; the paired English doc
 ## Capability guides
 
 - [Python kernel](docs/dsh-python-repl.en.md): Persistent cells, complete values, snapshots, and limits.
+- Install the desktop workbench and reuse variables across cells in an Antigravity conversation. [Antigravity workbench](agy-python-repl/README.md#install)
 - [Control and supervision](docs/dsh-use.en.md): Existing-instance access, receipts, settled state, and controller/worker workflow.
 - [Monitor](docs/dsh-monitor.en.md): Producer events, delivery modes, lifecycle, and gaps.
 - [Output guard](docs/dsh-output-guard.en.md): Model-stream detection and bounded retry.

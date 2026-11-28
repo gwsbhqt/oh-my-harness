@@ -66,7 +66,7 @@
 
 ## 从本仓库安装
 
-从 oh-my-harness 的源码目录构建。保留 `dsh-python-repl/` 及其相邻的 `tooling/`。共用的构建和内容清单工具都在 `tooling/` 中。不支持只复制一个插件目录来构建。
+用 Git 克隆 oh-my-harness，然后在仓库根目录运行下面的命令。保留根目录的 `.git`，以及并列的 `dsh-python-repl/`、`tooling/` 和 `python-repl-core/`。构建脚本通过 `.git` 定位仓库，用 `tooling/` 生成构建清单，并把 `python-repl-core/` 中的共享内核代码打进插件。
 
 ```sh
 cd dsh-python-repl
@@ -101,6 +101,18 @@ pnpm run check
 ```
 
 移除时禁用 `python-repl`，重新启用 `ptc-runtime`。如果还需要 TypeScript 工作流，也要重新启用宿主的工作流条目。
+
+## 升级已有源码副本
+
+在完整仓库副本拉取需要的版本，再重跑锁定依赖安装和组件检查：
+
+```sh
+git pull --ff-only
+pnpm --dir dsh-python-repl install --frozen-lockfile
+pnpm --dir dsh-python-repl run check
+```
+
+继续使用原 profile 的本地链接。若改过它的依赖清单，先安装 profile 依赖。通过宿主启动检查后重启 DSH，在新会话用两格验证变量复用。若要恢复旧会话的数据，须事先启用快照并成功保存需要的变量。Prime 内核随仓库锁定到具体提交。[更新记录](../CHANGELOG.md)
 
 ## 配置
 

@@ -66,7 +66,7 @@ The first kernel startup may download its Python version and install dependencie
 
 ## Install from this repository
 
-Build from the oh-my-harness checkout, retaining `dsh-python-repl/` and its adjacent `tooling/` directory. The shared build and content-manifest utilities live in `tooling/`. Building a copied plugin directory alone is not supported.
+Clone oh-my-harness with Git and run the commands below from the repository root. Keep the root `.git` entry and the sibling directories `dsh-python-repl/`, `tooling/`, and `python-repl-core/`. The build uses `.git` to locate the repository, generates its manifest with `tooling/`, and bundles the shared kernel code from `python-repl-core/`.
 
 ```sh
 cd dsh-python-repl
@@ -101,6 +101,18 @@ Merge these entries into the existing profile rather than replacing it. Install 
 ```
 
 For removal, disable `python-repl` and re-enable `ptc-runtime`. Re-enable the host workflow entries if you want TypeScript workflows again.
+
+## Upgrade an existing checkout
+
+In the full checkout, fetch the version you want, then repeat the locked install and component checks:
+
+```sh
+git pull --ff-only
+pnpm --dir dsh-python-repl install --frozen-lockfile
+pnpm --dir dsh-python-repl run check
+```
+
+Keep the local link in your Harness profile. If you changed its dependency manifest, install the profile dependencies. Run the Harness startup checks, restart Harness, then verify variable reuse in two cells of a new conversation. Recovering variables from an older session requires an enabled snapshot and a successful save. This repository pins the Prime kernel to a specific commit. [Changelog](../CHANGELOG.en.md)
 
 ## Configuration
 

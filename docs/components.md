@@ -4,13 +4,14 @@
 
 [← 首页](../README.md) · [文档导航](README.md) · [开始安装](getting-started.md)
 
-插件装进 DSH；技能提供 Agent 可调用的操作入口。每个部件的说明维护自己的安装方式、平台要求和限制。源码构建需要保留相邻的共享目录，见[仓库结构](architecture.md#目录为什么这样放)。
+DSH 和 Antigravity 各有配套插件。独立技能也可在命令行使用。各部件说明列出安装步骤与平台要求。[仓库结构](architecture.md#目录为什么这样放)
 
 ## 执行与协作
 
 | 部件 | 解决什么问题 | 接着读 |
 | --- | --- | --- |
 | [dsh-python-repl](../dsh-python-repl/README.md) | 在同一 Python 进程里连续调工具，保留结果、函数和可恢复的状态。 | [教程](dsh-python-repl.md) · [设计](design/python-data-locality.md) |
+| [Antigravity 工作台](../agy-python-repl/README.md) | 在同一桌面对话连续执行 Python，重启内核后可恢复已保存的变量。 | [打包和安装](../agy-python-repl/README.md#install) |
 | [dsh-use](../dsh-use/README.md) | 从 CLI、Python 或 MCP 接上正在运行的 DSH；派活、保留回执、等结果、发通知。 | [教程](dsh-use.md) · [协作技能](../dsh-use/skills/dsh-supervise/SKILL.md) |
 | [dsh-monitor](../dsh-monitor/README.md) | 把后台程序的事件送进会话，变化发生时再唤醒 Agent。 | [教程](dsh-monitor.md) |
 | [dsh-guard](../dsh-guard/README.md) | 发现复读、空输出等异常，限制重试，并帮助长期目标停止空转。 | [教程](dsh-output-guard.md) |

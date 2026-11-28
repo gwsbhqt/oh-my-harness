@@ -4,13 +4,14 @@
 
 [← Home](../README.en.md) · [Documentation](README.en.md) · [Installation](getting-started.en.md)
 
-Plugins load into DSH. Skills expose operations an agent can call. Each component owns its installation steps, platform requirements, and limits. Source builds need the adjacent shared directories; see the [repository layout](architecture.en.md#why-the-directories-look-this-way).
+DSH and Antigravity have separate plugins. The standalone skills also work from a terminal. Each component documents its install steps and platform requirements. [Repository layout](architecture.en.md)
 
 ## Execution and coordination
 
 | Component | What it solves | Read next |
 | --- | --- | --- |
 | [dsh-python-repl](../dsh-python-repl/README.en.md) | Call tools in a persistent Python process and keep results, functions, and recoverable state. | [Guide](dsh-python-repl.en.md) · [Design](design/python-data-locality.en.md) |
+| [Antigravity workbench](../agy-python-repl/README.md) | Run Python across cells in a desktop conversation and recover saved variables after a kernel restart. | [Build and install](../agy-python-repl/README.md#install) |
 | [dsh-use](../dsh-use/README.en.md) | Reach a running DSH through CLI, Python, or MCP; dispatch work, keep receipts, wait for results, and notify. | [Guide](dsh-use.en.md) · [Supervision skill](../dsh-use/skills/dsh-supervise/SKILL.md) |
 | [dsh-monitor](../dsh-monitor/README.en.md) | Deliver events from background commands and wake an agent when something changes. | [Guide](dsh-monitor.en.md) |
 | [dsh-guard](../dsh-guard/README.en.md) | Detect repetitive or empty output, bound retries, and help long-running goals stop spinning. | [Guide](dsh-output-guard.en.md) |

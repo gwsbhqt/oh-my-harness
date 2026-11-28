@@ -4,7 +4,7 @@
 
 **A toolbox for agents that keep working.**
 
-Persistent Python, session coordination, and computer tools for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH). Pick the parts you need, or explore how an agent keeps intermediate results, hands off tasks, waits for events, and comes back to check the outcome.
+Keep intermediate Python results in DeepSeek Harness or the Antigravity desktop app, and coordinate work across sessions. The browser, desktop, and image tools also have standalone command-line entry points.
 
 [![CI](https://github.com/gwsbhqt/oh-my-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/gwsbhqt/oh-my-harness/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -16,7 +16,7 @@ Persistent Python, session coordination, and computer tools for [DeepSeek Harnes
   <img src="docs/assets/overview.en.svg" alt="Three areas: keep data, share work, and reach computer tools. Concept diagram, not a runtime capture.">
 </picture>
 
-An independently maintained **collection of DSH extensions and a harness workshop**. A harness connects a model to tools and a working process. DSH provides the host; this repository explores and implements extensions. Primarily supported on macOS. Not affiliated with DeepSeek.
+This independently maintained project primarily supports macOS. Each host has its own plugin. [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) · [Antigravity workbench](agy-python-repl/README.md)
 
 <a id="components"></a>
 
@@ -24,7 +24,8 @@ An independently maintained **collection of DSH extensions and a harness worksho
 
 | What you want to do | Start here | What changes |
 | --- | --- | --- |
-| Analyze many files, logs, or tool results | [Persistent Python](dsh-python-repl/README.en.md) | Keep data in variables, reuse it in the next step, and display the evidence needed. |
+| Analyze files or logs in your host | [DSH persistent Python](dsh-python-repl/README.en.md) · [Antigravity workbench](agy-python-repl/README.md#install) | Read the files once and use the same variable to answer the next question. |
+| Make a contact sheet in a terminal | [Image tools](skills/shot-sheet/README.en.md) | Combine your own images with the standalone CLI. |
 | Share a long task across sessions | [Session control](dsh-use/README.en.md) | Dispatch with receipts, notify the lead when work settles, then review the result. |
 | Let an agent operate a computer | [Browser](skills/browser-use/README.en.md) · [Desktop](skills/computer-use/README.en.md) · [SSH](skills/remote-host/README.en.md) | Cra and Chrome share page and debugging APIs. Desktop actions target a window and SSH actions target a host. |
 

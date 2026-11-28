@@ -17,6 +17,12 @@ uv tool install ./skills/shot-sheet
 shot-sheet --help
 ```
 
+如果终端提示找不到 `shot-sheet`，可以直接从 uv 的安装目录运行。
+
+```sh
+"$(uv tool dir --bin)/shot-sheet" --help
+```
+
 只从源码运行时，保留相邻的 `skills/_shared` 目录，并执行：
 
 ```sh

@@ -4,7 +4,7 @@
 
 **让 Agent 连续做事的工具箱。**
 
-为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）补上持久 Python、多会话协作和电脑操作。按需装几个部件，也可以从源码研究：一个 Agent 怎样保存中间结果、交接任务、等待事件，再回来核对结果。
+在 DeepSeek Harness 或 Antigravity 桌面应用里用 Python 保留中间结果，在多个会话间交接任务。浏览器、桌面操作和截图拼图也各有独立的命令行入口。
 
 [![CI](https://github.com/gwsbhqt/oh-my-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/gwsbhqt/oh-my-harness/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -16,7 +16,7 @@
   <img src="docs/assets/overview.svg" alt="三个能力入口：保留数据、分派任务、操作电脑。结构示意，非运行截图。">
 </picture>
 
-这是一个独立维护的 **DSH 扩展集合与 harness 实验场**。Harness 是把模型、工具和工作过程接起来的运行环境；DSH 提供宿主，本仓库研究和实现它的扩展。当前主要支持 macOS，不属于 DeepSeek 官方项目。
+本项目独立维护，主要支持 macOS。两个宿主分别安装各自的插件。[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) · [Antigravity 工作台](agy-python-repl/README.md)
 
 <a id="由哪几块组成"></a>
 
@@ -24,7 +24,8 @@
 
 | 你想做什么 | 先看这里 | 能看到的变化 |
 | --- | --- | --- |
-| 分析大批文件、日志或工具结果 | [持久 Python](dsh-python-repl/README.md) | 数据留在变量里，下一步接着算，对话只放必要证据。 |
+| 在当前宿主分析文件或日志 | [DSH 持久 Python](dsh-python-repl/README.md) · [Antigravity 工作台](agy-python-repl/README.md#install) | 第一轮读文件，第二轮用同一个变量继续算。 |
+| 在命令行整理截图 | [截图拼图](skills/shot-sheet/README.md) | 将自己的图片拼成一张审查图，可独立于两个宿主使用。 |
 | 让多个会话分工做长任务 | [会话控制](dsh-use/README.md) | 派发有回执，完成后通知主控，主控再验收。 |
 | 让 Agent 动手操作电脑 | [浏览器](skills/browser-use/README.md) · [桌面](skills/computer-use/README.md) · [SSH](skills/remote-host/README.md) | Cra 和 Chrome 共用网页操作和调试接口。桌面操作选定窗口，SSH 操作选定主机。 |
 
