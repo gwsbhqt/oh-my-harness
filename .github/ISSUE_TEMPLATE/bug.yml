@@ -17,7 +17,7 @@ body:
     id: environment
     attributes:
       label: Relevant environment
-      description: Host/component versions, operating system, and relevant runtime versions. Remove machine identifiers and account information.
+      description: Name the app where you saw the problem and the app you installed the component into. Include component, app, OS, and runtime versions. Remove machine identifiers and account information.
     validations:
       required: true
   - type: textarea

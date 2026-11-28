@@ -528,6 +528,36 @@ class AppBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[0]["args"], ["send-message", "--title=sync", "--",
                                             "11112222-bbbb-0000-0000-000000000002", "-leading-dash prompt"])
 
+    async def test_sequential_identical_prompts_use_their_own_receipts(self) -> None:
+        await self._start_bridge()
+        target = "11112222-bbbb-0000-0000-000000000002"
+        prompt = "Review the latest draft"
+        first = await agy_use.send(target, prompt, wait=True, socket_path=self.sock_path)
+        self.assertTrue(first["ok"], first)
+
+        sent = await agy_use.send(target, prompt, socket_path=self.sock_path)
+        self.assertTrue(sent["ok"], sent)
+        receipt = sent["receipt"]
+        self.assertEqual(receipt["since_step"], first["reply_step_index"])
+        second = await agy_use.wait(
+            receipt["conversation_id"], since_step=receipt["since_step"],
+            expected_prompt=receipt["prompt"], timeout=3, socket_path=self.sock_path,
+        )
+        self.assertTrue(second["ok"], second)
+        self.assertLess(first["reply_step_index"], second["receipt_step_index"])
+        self.assertLess(second["receipt_step_index"], second["reply_step_index"])
+
+        history = await agy_use.wait(
+            target, since_step=first["receipt"]["since_step"], expected_prompt=prompt,
+            timeout=3, socket_path=self.sock_path,
+        )
+        self.assertEqual(history["error_code"], "ambiguous-reply")
+        self.assertEqual(
+            history["matching_receipt_steps"],
+            [first["receipt_step_index"], second["receipt_step_index"]],
+        )
+        self.assertEqual(len(self._agentapi_calls()), 2)
+
     async def test_send_wait_timeout_preserves_receipt_and_no_auto_retry(self) -> None:
         await self._start_bridge(extra_env={"FAKE_SEND_MODE": "stays_running"})
         res = await agy_use.send(

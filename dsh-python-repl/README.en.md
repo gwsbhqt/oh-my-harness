@@ -148,6 +148,8 @@ Runtime state lives below `DSH_HOME/plugins/python-repl/`. Each session has its 
 
 ## Python skills
 
+Project skills are selected when the session first starts its Python kernel. Changing the working directory moves where code runs. Restarting the kernel in the same session keeps the original project’s skills. To use skills from a different repository, start a new session in that repository’s directory. The `Project Python skill roots` line in the runtime context shows the directories selected for the session.
+
 Each trusted skill has a standard `SKILL.md` identity and a Python package under `src/<import_name>/`. When present, `PYSKILL.md` supplies Python instructions; otherwise `SKILL.md` is used. Invalid Python instructions are reported without silently switching documents. Import names replace hyphens with underscores. Skills are available through `skills.<import_name>`; use `await skills.list()` and `await skills.describe("demo_reader")` to discover their functions and instructions.
 
 When an import fails, the kernel panel shows the reason. After installing a missing dependency, call `await skills.retry("demo_reader")` with the Python module name shown in the failed entry. The current kernel keeps your analysis variables. The panel and subsequent model context show the outcome, including the latest reason if the import fails again.

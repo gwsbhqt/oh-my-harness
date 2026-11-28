@@ -163,6 +163,8 @@ print(receipt)
 
 ## Python 技能
 
+项目技能在会话第一次启动 Python 内核时确定。之后切换工作目录会改变代码的运行位置，同一会话重启内核仍会使用起初工程的技能。要使用另一个仓库的技能，请在那个仓库的目录新开会话。运行时提示中的 `Project Python skill roots` 列出该会话的项目技能目录。
+
 每个可信技能都有标准的 `SKILL.md` 身份说明，以及 `src/<import_name>/` 下的 Python 包。如果存在 `PYSKILL.md`，就用它提供 Python 使用说明；否则使用 `SKILL.md`。Python 说明无效时会报告错误，不会悄悄改读另一个文件。导入名中的连字符会换成下划线。通过 `skills.<import_name>` 使用技能；用 `await skills.list()` 和 `await skills.describe("demo_reader")` 查函数和说明。
 
 技能因导入出错时，内核页会显示原因。补齐缺失依赖后，在同一内核运行 `await skills.retry("demo_reader")`，参数用内核页上这条技能的「内核名称」。已有分析变量可以继续使用。内核页和后续模型提示都会显示这次重试的结果。再次失败会显示新的原因。
