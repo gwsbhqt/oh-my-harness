@@ -25,13 +25,25 @@ When you return to the same conversation and kernel, `await repl.list_copies()` 
 
 ## Install
 
-From this repository, build a standalone copy for Antigravity. The bundle includes the shared kernel, the skill and the plugin’s rules and hooks.
+### From a pre-built bundle
+
+Open a terminal in the unpacked bundle directory that contains `plugin.json`.
 
 ```sh
-bundle_dir="$(mktemp -d)"
-sh agy-python-repl/scripts/bundle.sh "$bundle_dir"
-agy plugin validate "$bundle_dir" --strict
-agy plugin install "$bundle_dir"
+agy plugin validate . --strict &&
+agy plugin install . &&
+agy plugin list --json
+```
+
+### From the source checkout
+
+From the repository root, build and install a standalone copy for Antigravity. The bundle includes the shared kernel, the skill and the plugin’s rules and hooks.
+
+```sh
+bundle_dir="$(mktemp -d)" &&
+sh agy-python-repl/scripts/bundle.sh "$bundle_dir" &&
+agy plugin validate "$bundle_dir" --strict &&
+agy plugin install "$bundle_dir" &&
 agy plugin list --json
 ```
 
