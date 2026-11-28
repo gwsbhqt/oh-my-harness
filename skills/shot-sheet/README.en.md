@@ -27,6 +27,8 @@ The [source launcher](scripts/shot-sheet) also runs with `uv run --script skills
 
 For an agent, expose this directory through the host's trusted skill search path. Python skill kernels read [PYSKILL.md](PYSKILL.md) and call `skills.shot_sheet`; other environments read [SKILL.md](SKILL.md). Source discovery does not install dependencies. Ordinary Python projects install this package and use `import shot_sheet`.
 
+Persistent Python kernels require Pillow 10 or later. If the first import reports a missing `PIL` module, install the dependency in that kernel and reload the skill. [Kernel recovery steps](PYSKILL.md)
+
 ## Common operations
 
 The caller supplies the input files. Input order determines panel order.

@@ -27,6 +27,8 @@ uv run --project skills/shot-sheet shot-sheet --help
 
 Agent 使用时，把本目录加入宿主的可信技能路径。有 Python 技能内核时阅读 [PYSKILL.md](PYSKILL.md)，直接调用 `skills.shot_sheet`；其他环境阅读 [SKILL.md](SKILL.md)。宿主发现源码不会自动安装依赖。普通 Python 项目安装本包后使用 `import shot_sheet`。
 
+持久 Python 内核需要 Pillow 10 或更高版本。首次导入时若提示缺少 `PIL`，可在当前内核补装依赖并重新加载技能。[内核恢复步骤](PYSKILL.md)
+
 ## 常用操作
 
 以下输入文件由调用者提供。图片顺序就是排版顺序。

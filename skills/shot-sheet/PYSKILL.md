@@ -9,6 +9,8 @@ description: 从 GIF 或视频按时间抽帧并拼图，也可拼多张截图�
 
 开始前阅读 [共用规则](references/common.md)。完整选项见 [命令参数参考](references/cli.md)，函数签名见 [函数参数参考](src/shot_sheet/__init__.py)。
 
+在持久 Python 内核中，导入时报 `ModuleNotFoundError: No module named 'PIL'` 时先运行 `await repl.install("pillow>=10")`。安装结果提示 `stale` 时重启当前内核，再用 `await skills.retry("shot-sheet")` 重新加载技能。
+
 一次看两张以上截图，先拼一张审查图再打开。先确认输入顺序、中文标题、输出路径，以及本次对比或标注的位置。生成与抽帧函数在进程内同步完成；函数调用不加 `await`。
 
 ## 动图与视频抽帧
