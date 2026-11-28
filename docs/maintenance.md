@@ -57,17 +57,29 @@ agy plugin validate "$AGY_DIR" --strict
 git rev-parse HEAD > "$OUT/SOURCE_COMMIT"
 set -- "$OUT"/*.tgz
 test -f "$1"
-tar -tzf "$1" package/lib/index.js package/lib/dsh-build.json package/vendor/PROVENANCE.md
+tar -tzf "$1" package/lib/index.js package/lib/dsh-build.json package/vendor/PROVENANCE.md package/vendor/prime/LICENSE package/LICENSE
 test -f "$AGY_DIR/_bundled/vendor/PROVENANCE.md"
+test -f "$AGY_DIR/_bundled/vendor/prime/LICENSE"
+test -f "$AGY_DIR/LICENSE"
+test -x "$AGY_DIR/scripts/start_mcp.sh"
+test -x "$AGY_DIR/skills/agy-use/scripts/agy-use"
 (cd "$OUT" && shasum -a 256 ./*.tgz > DSH-SHA256SUMS)
-(cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + > "$OUT/AGY-SHA256SUMS")
+(
+AGY_UNSORTED=$(mktemp "$OUT/.AGY-SHA256SUMS.XXXXXX")
+AGY_SORTED="$AGY_UNSORTED.sorted"
+trap 'rm -f "$AGY_UNSORTED" "$AGY_SORTED"' EXIT
+trap 'exit 1' HUP INT TERM
+(cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + > "$AGY_UNSORTED")
+LC_ALL=C sort "$AGY_UNSORTED" > "$AGY_SORTED"
+mv "$AGY_SORTED" "$OUT/AGY-SHA256SUMS"
+)
 ```
 
 若另行运行 AGY 的 Python 测试，macOS 可能因 Unix socket 路径过长报 `AF_UNIX path too long`；保留失败日志，改用更短的临时 `TMPDIR` 后重跑。
 
 DSH 成品是 `.tgz`，其中必须有 `lib/index.js`、构建清单和 Prime 来源清单；AGY 成品是通过严格校验的 `$AGY_DIR` 独立目录。交付时同时保留 `SOURCE_COMMIT`、两个 `SHA256SUMS` 和成品。文件名中的版本不能代替提交和哈希；哈希用于辨认与完整性检查，不等同签名。
 
-接收方在独立 shell 中先 `cd` 到含 `SOURCE_COMMIT` 的交付目录。`REV` 填维护者声明的完整提交；下面沿用示例提交。`shasum -c` 按名单逐个核对已列文件，DSH 验 `.tgz`，AGY 验独立目录中的文件：
+若收到 ZIP，先解压到一个新的空目录，再 `cd` 到实际含 `SOURCE_COMMIT` 的目录；不要覆盖已有解压目录，以免旧文件残留。`REV` 填维护者声明的完整提交；下面沿用示例提交。DSH 用 `shasum -c` 核对整个 `.tgz`；AGY 只去掉两边 `shasum` 行中摘要和模式分隔符后文件名开头可选的一个 `./`，再分别排序比较，因此接受两种正式前缀写法和早期未排序的完整清单，同时核对两个交付命令仍有执行权限：
 
 ```sh
 set -e
@@ -76,12 +88,27 @@ AGY_DIR="$OUT/agy-python-repl"
 REV=57cfccb03b4f39121facc575a91bcff055d59fed
 test "$(cat "$OUT/SOURCE_COMMIT")" = "$REV"
 (cd "$OUT" && shasum -a 256 -c DSH-SHA256SUMS)
-(cd "$AGY_DIR" && shasum -a 256 -c "$OUT/AGY-SHA256SUMS")
+test -x "$AGY_DIR/scripts/start_mcp.sh"
+test -x "$AGY_DIR/skills/agy-use/scripts/agy-use"
+(
+AGY_TMP=$(mktemp -d "${TMPDIR:-/tmp}/agy-verify.XXXXXX")
+trap 'rm -rf "$AGY_TMP"' EXIT
+trap 'exit 1' HUP INT TERM
+AGY_NORMALIZE='s/^([0-9a-f]{64} [ *])\.\//\1/'
+sed -E "$AGY_NORMALIZE" "$OUT/AGY-SHA256SUMS" > "$AGY_TMP/expected.unsorted"
+LC_ALL=C sort "$AGY_TMP/expected.unsorted" > "$AGY_TMP/expected"
+(cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + > "$AGY_TMP/current.raw")
+sed -E "$AGY_NORMALIZE" "$AGY_TMP/current.raw" > "$AGY_TMP/current.unsorted"
+LC_ALL=C sort "$AGY_TMP/current.unsorted" > "$AGY_TMP/current"
+diff -u "$AGY_TMP/expected" "$AGY_TMP/current"
+)
 ```
 
-这个检查按名单核对文件。若需要连额外文件也查出，可从同一提交构建一份干净的独立目录，将其路径设为 `CLEAN_AGY_DIR`，再用 `diff -r "$CLEAN_AGY_DIR" "$AGY_DIR"` 比较两份目录。
+这些检查不需要网络或源码。生成与接收都先完成扫描再排序，读取、规范化或排序失败会非零中止。生成在同目录写临时文件，成功后再改为正式名，不会留下部分正式结果或替换既有完整清单；接收只在新建的系统临时目录写临时文件，并在退出时清理，所以交付目录可以只读。比较不去重，也不清理路径其他部分。DSH 的单个归档哈希覆盖包内全部内容；AGY 的清单差异会指出普通文件的内容变化、额外文件和缺文件。AGY 清单不检查目录结构、符号链接或其他文件类型，权限检查也只覆盖上述两个命令。不再要求接收方为了发现额外文件而重新构建。
 
 平台安装沿用现有入口。DSH：把入门页 profile 中的 `link:` 依赖改为指向已校验 `.tgz` 的绝对 `file:` 路径，保留组合包登记，再用 DSH 所配 pnpm 安装、运行启动检查并重启。Antigravity：执行 `agy plugin install "$AGY_DIR"`，再用 `agy plugin list --json` 核对。只做临时验收时，为 AGY 命令设置一个新的空 `HOME`；先确认 `plugin list --json` 为 `[]`，不要操作日常 App。
+
+宿主输入不能互换：DSH 的 `file:` 必须指向通过 `DSH-SHA256SUMS` 检查的 `.tgz`，不能指向 `$AGY_DIR`；Antigravity 必须安装通过上述目录清单检查的 `$AGY_DIR`，不能安装 `.tgz`。pnpm 能把本地目录安装成依赖并返回成功，但这不会产生可加载的 DSH 插件，所以安装命令退出 0 不能代替宿主输入检查。
 
 回退前保留上一组已校验成品和现有快照。DSH 把 `file:` 指回旧 `.tgz`，重新安装 profile 依赖、检查并重启。AGY 不先卸载：把上一已校验独立目录设为 `PREVIOUS_AGY_DIR`，直接执行 `agy plugin install "$PREVIOUS_AGY_DIR"`，避免停用窗口。随后用 `agy plugin list --json` 找到安装路径并设为 `AGY_INSTALLED`，执行 `diff -r "$PREVIOUS_AGY_DIR" "$AGY_INSTALLED"`；无输出且退出 0 才说明内容恢复，不要用相同的版本号判断。仍用源码 `link:` 的 DSH 安装则检出旧提交并重跑组件检查，不能把已改源码当成已回退的运行实例。
 

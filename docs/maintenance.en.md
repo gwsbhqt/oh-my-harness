@@ -57,17 +57,29 @@ agy plugin validate "$AGY_DIR" --strict
 git rev-parse HEAD > "$OUT/SOURCE_COMMIT"
 set -- "$OUT"/*.tgz
 test -f "$1"
-tar -tzf "$1" package/lib/index.js package/lib/dsh-build.json package/vendor/PROVENANCE.md
+tar -tzf "$1" package/lib/index.js package/lib/dsh-build.json package/vendor/PROVENANCE.md package/vendor/prime/LICENSE package/LICENSE
 test -f "$AGY_DIR/_bundled/vendor/PROVENANCE.md"
+test -f "$AGY_DIR/_bundled/vendor/prime/LICENSE"
+test -f "$AGY_DIR/LICENSE"
+test -x "$AGY_DIR/scripts/start_mcp.sh"
+test -x "$AGY_DIR/skills/agy-use/scripts/agy-use"
 (cd "$OUT" && shasum -a 256 ./*.tgz > DSH-SHA256SUMS)
-(cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + > "$OUT/AGY-SHA256SUMS")
+(
+AGY_UNSORTED=$(mktemp "$OUT/.AGY-SHA256SUMS.XXXXXX")
+AGY_SORTED="$AGY_UNSORTED.sorted"
+trap 'rm -f "$AGY_UNSORTED" "$AGY_SORTED"' EXIT
+trap 'exit 1' HUP INT TERM
+(cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + > "$AGY_UNSORTED")
+LC_ALL=C sort "$AGY_UNSORTED" > "$AGY_SORTED"
+mv "$AGY_SORTED" "$OUT/AGY-SHA256SUMS"
+)
 ```
 
 If you also run AGY's Python tests on macOS, a long Unix socket path can fail with `AF_UNIX path too long`; keep the failure log and rerun with a shorter temporary `TMPDIR`.
 
 The DSH artifact is the `.tgz`, which must contain `lib/index.js`, the build manifest, and the Prime provenance manifest. The AGY artifact is the standalone `$AGY_DIR` directory that passed strict validation. Keep `SOURCE_COMMIT`, both `SHA256SUMS`, and the artifacts together. A version in a filename cannot replace the commit and hashes. Hashes provide identity and integrity checks, not a signature.
 
-In a separate shell, the recipient first changes into the delivered directory containing `SOURCE_COMMIT`. Set `REV` to the full commit declared by the maintainer; the example below reuses the commit above. `shasum -c` checks each listed file: the `.tgz` for DSH and the standalone directory's files for AGY.
+If the delivery is a ZIP, extract it into a new empty directory, then change into the directory that actually contains `SOURCE_COMMIT`; do not overwrite an existing extraction and leave stale files behind. Set `REV` to the full commit declared by the maintainer; the example below reuses the commit above. DSH uses `shasum -c` to check the whole `.tgz`. For AGY, remove only one optional leading `./` from the filename after the checksum and mode separator in each `shasum` line on both sides, then sort and compare them independently. This accepts both formal filename spellings and complete legacy unsorted manifests. Confirm that both delivered commands are still executable:
 
 ```sh
 set -e
@@ -76,12 +88,27 @@ AGY_DIR="$OUT/agy-python-repl"
 REV=57cfccb03b4f39121facc575a91bcff055d59fed
 test "$(cat "$OUT/SOURCE_COMMIT")" = "$REV"
 (cd "$OUT" && shasum -a 256 -c DSH-SHA256SUMS)
-(cd "$AGY_DIR" && shasum -a 256 -c "$OUT/AGY-SHA256SUMS")
+test -x "$AGY_DIR/scripts/start_mcp.sh"
+test -x "$AGY_DIR/skills/agy-use/scripts/agy-use"
+(
+AGY_TMP=$(mktemp -d "${TMPDIR:-/tmp}/agy-verify.XXXXXX")
+trap 'rm -rf "$AGY_TMP"' EXIT
+trap 'exit 1' HUP INT TERM
+AGY_NORMALIZE='s/^([0-9a-f]{64} [ *])\.\//\1/'
+sed -E "$AGY_NORMALIZE" "$OUT/AGY-SHA256SUMS" > "$AGY_TMP/expected.unsorted"
+LC_ALL=C sort "$AGY_TMP/expected.unsorted" > "$AGY_TMP/expected"
+(cd "$AGY_DIR" && find . -type f -exec shasum -a 256 {} + > "$AGY_TMP/current.raw")
+sed -E "$AGY_NORMALIZE" "$AGY_TMP/current.raw" > "$AGY_TMP/current.unsorted"
+LC_ALL=C sort "$AGY_TMP/current.unsorted" > "$AGY_TMP/current"
+diff -u "$AGY_TMP/expected" "$AGY_TMP/current"
+)
 ```
 
-The manifest covers the files it lists. To check for extra files as well, build a clean standalone directory from the same commit, set `CLEAN_AGY_DIR` to its path, and compare both directories with `diff -r "$CLEAN_AGY_DIR" "$AGY_DIR"`.
+These checks need neither network access nor source code. Generation and receipt both finish scanning before sorting, so a read, normalization, or sort failure returns non-zero. Generation writes temporary files in the output directory and renames the completed result into place, never leaving a partial official manifest or replacing an existing complete one after a failure. Receipt writes temporary files only in a newly created system temporary directory and removes them on exit, so the delivered directory can remain read-only. No other path cleanup or deduplication is performed. The single archive hash covers every file in the DSH package. For AGY, the manifest difference identifies changed content, extra regular files, and missing regular files. The AGY inventory does not check directory structure, symbolic links, or other file types, and the permission checks cover only the two commands above. Recipients no longer need another build just to detect extra files.
 
 Use the existing platform installation paths. For DSH, replace the getting-started profile's `link:` dependency with an absolute `file:` path to the verified `.tgz`, preserve the bundle registration, then install with Harness's pnpm, run its startup check, and restart. For Antigravity, run `agy plugin install "$AGY_DIR"`, then confirm with `agy plugin list --json`. For temporary acceptance only, give the AGY commands a new empty `HOME`; first confirm that `plugin list --json` returns `[]`, and do not touch the daily app.
+
+Host inputs are not interchangeable. DSH's `file:` must name the `.tgz` that passed `DSH-SHA256SUMS`, not `$AGY_DIR`; Antigravity must install the `$AGY_DIR` that passed the directory-inventory check above, not the `.tgz`. pnpm can successfully install a local directory as a dependency without producing a loadable DSH plugin, so an install command's zero exit status does not replace this host-input check.
 
 Keep the previous verified artifact set and existing snapshots for rollback. For DSH, point `file:` back to the old `.tgz`, reinstall the profile dependencies, check, and restart. For AGY, do not uninstall first: set `PREVIOUS_AGY_DIR` to the previous verified standalone directory and run `agy plugin install "$PREVIOUS_AGY_DIR"` directly, avoiding a disabled window. Then use the path returned by `agy plugin list --json` as `AGY_INSTALLED` and run `diff -r "$PREVIOUS_AGY_DIR" "$AGY_INSTALLED"`; no output and exit status 0 establish that the content was restored. Do not rely on the unchanged version number. A DSH installation still using a source `link:` must check out the old commit and rerun the component checks; edited source alone does not prove that the running instance rolled back.
 
