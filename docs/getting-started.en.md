@@ -6,6 +6,10 @@
 
 After installing the Antigravity workbench, open a new desktop conversation. In the first cell, define `samples = [3, 5, 8]` and run `len(samples)`. In the second, run only `sum(samples)`. Expand both `run_code` calls in that conversation. Both should have `status="ok"`, with results `3` and `16`. [Install the Antigravity workbench](../agy-python-repl/README.md#install)
 
+On first launch, uv prepares Python and the locked dependencies for the current OS user. On a new machine or with an empty cache, go online and run the two cells above until you see `3` and `16`. If the plugin is listed as enabled but the startup log reports missing Python or a package, restore download access and retry on the same machine as the same user.
+
+Once prepared, the local tool can restart with uv in offline mode (`UV_OFFLINE=1`). This setting controls dependency downloads. Desktop conversations using a cloud model still need a connection to the model service.
+
 To try an independent CLI, make a contact sheet from two of your own images. [Standalone image examples](../skills/shot-sheet/README.en.md#common-operations)
 
 The steps below install persistent Python in DSH.
