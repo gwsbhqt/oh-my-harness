@@ -31,11 +31,13 @@ If `new` fails, check how far the host got. JSON and Python results use the same
 
 | What happened | Recovery fields | What to do |
 |---|---|---|
-| The host attempted to send the first message. Delivery is unknown. | `send-unconfirmed` uses `error.details`. An exception during the send uses top-level `data`. Both contain `sessionId`, `since`, `requestId`, and `sent: null`. | Inspect the original session and continue waiting from `since`. If you have the original receipt event, match the full `requestId`. |
+| The host attempted to send the first message. Delivery is unknown. | `send-unconfirmed` uses `error.details`. An exception during the send uses top-level `data`. Both contain `sessionId`, `since`, `requestId`, and `sent: null`. | Run `dsh-use receipt <sessionId> <requestId>` with both full IDs. Once receipt is confirmed, wait from `since` for the reply. |
 | The session was created and setup failed before the first send. | Top-level `data` contains `created: true`, `sessionId`, and `sent: false`. | Run `dsh-use status <sessionId>` to inspect the existing session. The first message has not been sent. |
 | The host returned no usable session ID. | Top-level `data` contains `created: null` and `sent: false`. | Run `dsh-use sessions --include-blank` on the same host. Creation is still unconfirmed. |
 
 For an existing session, when `send` / `chat` hits an exception from the host before the reply (an inner failure while the outer response still returns), the top-level `data` of JSON and Python results carries `sessionId`, `since`, `requestId`, and `sent: null` (no `created`); the original error and its 500/400 class are unchanged, and `chat` does not auto-resend.
+
+Use `receipt` to see whether this request entered the inbox or became a user message, with the matching sequence numbers. Use `wait --since` for the reply. `request-not-found` means the session’s own records contain no matching receipt at the time of the lookup.
 
 Recovery depends on the running server. Older servers also return identifiers in `error.details` for `send-unconfirmed`, but return only the original error for an exception during the first send. If you receive no ID or lose the entire response, list recent sessions and inspect their history. A timestamp alone cannot identify your request. Repeating `new` can create a duplicate.
 

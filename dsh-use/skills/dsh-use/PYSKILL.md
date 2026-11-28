@@ -79,6 +79,8 @@ await skills.dsh_use.use()
 sent = await skills.dsh_use.send("会话编号", "任务目标、限制和验收标准", notify="self")
 if sent["exit_code"] == 0 and sent.get("ok"):
     receipt = sent["data"]          # sessionId、since、requestId、notify.watchId
+    # 之后凭这两个完整编号只查这次收件的元数据，不读正文、不解析其他会话：
+    delivery = await skills.dsh_use.receipt(receipt["sessionId"], receipt["requestId"])
 ```
 
 ```python

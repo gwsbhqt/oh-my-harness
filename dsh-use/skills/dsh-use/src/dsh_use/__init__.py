@@ -154,6 +154,10 @@ async def status(*args: _Any, host: str | None = None, local: bool = False, **op
     '一个会话的状态：在不在跑、模型、待办、排队、是否在等你回答（在等回答时退出码 10）。用法：status <会话>'
     return await run('status', *args, host=host, local=local, **options)
 
+async def receipt(*args: _Any, host: str | None = None, local: bool = False, **options: _Any) -> dict[str, _Any]:
+    '凭完整 sessionId 和完整 requestId 只查收件元数据，不含正文或继承事件。用法：receipt <完整 sessionId> <完整 requestId>'
+    return await run('receipt', *args, host=host, local=local, **options)
+
 async def cwd(*args: _Any, host: str | None = None, local: bool = False, **options: _Any) -> dict[str, _Any]:
     '看会话现在的工作目录；给了目录就换过去（模型之后在新目录干活，已经开着的终端和后台命令还在原目录）。用法：cwd <会话> [新目录，绝对路径或 ~/ 开头]'
     return await run('cwd', *args, host=host, local=local, **options)
@@ -351,4 +355,4 @@ async def help(*args: _Any, host: str | None = None, local: bool = False, **opti
     return await run('help', *args, host=host, local=local, **options)
 
 
-__all__ = ['run', 'health', 'workspaces', 'sessions', 'archive', 'unarchive', 'rename', 'fork', 'status', 'cwd', 'goal', 'schedule', 'last', 'read', 'send', 'queue', 'wait', 'new', 'notify', 'notice', 'wait_idle', 'quit_check', 'web_url', 'open', 'tunnel', 'restart_prepare', 'restart_abort', 'requeue_lost', 'kill_jobs', 'cancel', 'answer', 'quota', 'models', 'pick', 'model', 'plugins', 'plugin', 'config', 'api', 'use', 'pin', 'hosts', 'capabilities', 'chat', 'start', 'restart', 'upgrade', 'restart_watch', 'restart_status', 'doctor', 'version', 'help']
+__all__ = ['run', 'health', 'workspaces', 'sessions', 'archive', 'unarchive', 'rename', 'fork', 'status', 'receipt', 'cwd', 'goal', 'schedule', 'last', 'read', 'send', 'queue', 'wait', 'new', 'notify', 'notice', 'wait_idle', 'quit_check', 'web_url', 'open', 'tunnel', 'restart_prepare', 'restart_abort', 'requeue_lost', 'kill_jobs', 'cancel', 'answer', 'quota', 'models', 'pick', 'model', 'plugins', 'plugin', 'config', 'api', 'use', 'pin', 'hosts', 'capabilities', 'chat', 'start', 'restart', 'upgrade', 'restart_watch', 'restart_status', 'doctor', 'version', 'help']

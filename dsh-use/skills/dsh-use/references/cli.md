@@ -43,6 +43,7 @@ dsh-use use --clear         # 清除默认机器，恢复本机
 | 重命名 | `dsh-use rename <会话> "新标题"` |
 | 分叉 | `dsh-use fork <会话> [--at-seq N]`（默认复制到最近完成的一轮；指定序号则复制到该事件，含该事件；输出新会话 id，不会自动发消息，继续用 `send`） |
 | 一个会话的状态 | `dsh-use status <会话>`（在不在跑、模型、待办进度、排队消息、是否在等回答；在等回答时退出码 10） |
+| 一次请求的收件元数据 | `dsh-use receipt <完整 sessionId> <完整 requestId> [--json]`（只查这个目标，不含正文、标题、路径或继承事件；`state=enqueued` 是曾记录入队，`state=user-message` 是已成为用户消息，都不表示仍在队列、已回复或已完成） |
 | 工作目录 | `dsh-use cwd <会话>` 看现在的目录（中途换过会同时列起始目录）；`dsh-use cwd <会话> /绝对路径` 换过去，模型下一步就在新目录干活，已经开着的终端和后台命令还在原目录 |
 | 持续目标 | `dsh-use goal <会话>` 看；`goal <会话> pause|resume|clear` 暂停、恢复、清掉，等同用户在界面目标面板上点。模型自己恢复不了被暂停的目标，要靠这里或界面。会话正在跑时 `pause` 会中止这一轮；只想让它这轮做完后别再自动开下一轮，用 `goal <会话> hold`，恢复同样用 `resume` |
 | 定时提醒 | `dsh-use schedule [会话]` 列出（界面「自动化任务」那一页）；`schedule history <提醒>` 看发过几次；`schedule delete <提醒>` 删。提醒用列表每行开头的 8 位编号指。外部不能新建，要建就 `send` 让会话里的模型建 |
@@ -71,6 +72,10 @@ dsh-use use --clear         # 清除默认机器，恢复本机
 | 重启进度 | `dsh-use restart-status [--json]`：最近一次重启阶段、真实阻碍和结果；进程消失而无终态不是成功 |
 | 等会话停下 | `dsh-use wait-idle [会话] [--timeout 秒] [--slice 毫秒]`：指定会话或全部会话停下时返回；指定会话等回答退出 10，超时退出 124。没写 `--timeout` 时只等一段（默认 30 秒）；空闲是当下状态，不检查后台任务，也不代表任务成功 |
 | 兜底 | `dsh-use api list [ns]`、`dsh-use api describe ns/method`、`dsh-use api call ns/method '{"参数":值}'` |
+
+`receipt` 的 `requestId` 只接受完整小写 UUID；`sessionId` 只按精确键接受现有 `session-` 短编号和数字编号（包括 `session-1`），不能用前缀或标题找会话，也不会退回 `readSession`、会话列表或全量 `status/read`。入队证据只认 `agent/inbox/spliced` 的 `data.inserted[].source.rpcId`，且来源只接受 `user` 或旧 `remote-control`；`injected` 不算收件。`turn` 优先取 `user/message` 自身的 `data.turn`，没有时只按包住该消息的 `turn/start` / `turn/end` 边界归属，没有可靠边界就省略。
+
+`request-not-found` 表示已完整读取该会话自有日志但无记录；`session-not-found` 表示目标会话缺失，沿既有调用错误返回 HTTP 400 / CLI 退出 2；`exact-receipt-unavailable` 表示旧宿主没有无枚举精确观察能力；`receipt-read-failed` 表示读取、观察 getter 或释放失败。这些结果都不推断 ACL、从未送达或模型已回复，更不会自动重发；错误文本不回显上游内容或不可信任的长会话编号。
 
 `new`、`send`、`chat` 也支持 `--effort`，可与 `--model` 或 `--tier` 一起使用；可选值由所选模型目录决定，非法值会列出可选项。例：`dsh-use new example-workspace --model provider/model --effort high`。
 

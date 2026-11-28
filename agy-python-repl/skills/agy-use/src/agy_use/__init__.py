@@ -8,10 +8,12 @@ from typing import Any
 
 from ._client import (
     call_bridge,
+    diagnose_turn,
     has_truncated_fields,
     is_final_planner_response,
     is_input_or_receipt_step,
     last_model_response,
+    last_turn_segment,
     normalize_conversation,
     receipt_matches,
     resolve_conversation,
@@ -283,7 +285,12 @@ async def wait(
             return {}
         return {"receipt_confirmed": True, "receipt_step_index": receipt_idx, "since_step": since_step}
 
-    def _unanswered_payload() -> dict[str, Any]:
+    def _unanswered_payload(diag_steps: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        diag = diagnose_turn(
+            diag_steps if diag_steps is not None else last_events,
+            last_run_state,
+            has_receipt=receipt_idx is not None,
+        )
         return {
             "ok": False,
             "timed_out": False,
@@ -295,12 +302,13 @@ async def wait(
             "run_state": last_run_state,
             "update_time": last_update_time,
             "last_step_index": last_step_index,
+            "diagnosis": diag,
             "events": last_events,
             "conversation": normalize_conversation(last_conv),
             **_receipt_fields(),
         }
 
-    def _timeout_payload(err_msg: str | None = None) -> dict[str, Any]:
+    def _timeout_payload(err_msg: str | None = None, diag_steps: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         if receipt_only:
             return _compact_receipt_payload({
                 "ok": False,
@@ -312,6 +320,11 @@ async def wait(
                 "update_time": last_update_time,
                 "last_step_index": last_step_index,
             }, exact_id=exact_id, since_step=since_step)
+        diag = diagnose_turn(
+            diag_steps if diag_steps is not None else last_events,
+            last_run_state,
+            has_receipt=receipt_idx is not None,
+        )
         return {
             "ok": False,
             "timed_out": True,
@@ -323,16 +336,20 @@ async def wait(
             "run_state": last_run_state,
             "update_time": last_update_time,
             "last_step_index": last_step_index,
+            "diagnosis": diag,
             "events": last_events,
             "conversation": normalize_conversation(last_conv),
             **_receipt_fields(),
         }
 
-    async def _sleep_or_timeout(err_msg: str | None = None) -> dict[str, Any] | None:
+    async def _sleep_or_timeout(
+        err_msg: str | None = None,
+        diag_steps: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any] | None:
         if deadline is not None:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                return _timeout_payload(err_msg)
+                return _timeout_payload(err_msg, diag_steps=diag_steps)
             await asyncio.sleep(min(interval, remaining))
         else:
             await asyncio.sleep(interval)
@@ -397,6 +414,7 @@ async def wait(
                 return full_err
             new_steps = steps_after(steps, since_step)
             last_events = new_steps
+            diag_steps_cur = new_steps
 
             if expected_prompt is not None:
                 receipt_idx = None
@@ -484,8 +502,9 @@ async def wait(
 
                     finals = [s for s in segment if is_final_planner_response(s)]
                     non_empty = [s for s in finals if step_text(s).strip()]
+                    diag_seg = diagnose_turn(segment, last_run_state, has_receipt=True)
                     if last_run_state == "RUN_STATE_IDLE":
-                        if non_empty:
+                        if diag_seg["classification"] == "completed" and non_empty:
                             reply_step = non_empty[-1]
                             return {
                                 "ok": True,
@@ -498,11 +517,12 @@ async def wait(
                                 "last_step_index": last_step_index,
                                 "receipt_step_index": receipt_idx,
                                 "reply_step_index": reply_step.get("step_index"),
+                                "diagnosis": diag_seg,
                                 "events": new_steps,
                                 "response": step_text(reply_step),
                                 "conversation": normalize_conversation(last_conv),
                             }
-                        if finals:
+                        if diag_seg["classification"] == "empty_response":
                             return {
                                 "ok": False,
                                 "timed_out": False,
@@ -515,15 +535,21 @@ async def wait(
                                 "update_time": last_update_time,
                                 "last_step_index": last_step_index,
                                 "receipt_step_index": receipt_idx,
+                                "diagnosis": diag_seg,
                                 "events": new_steps,
                                 "conversation": normalize_conversation(last_conv),
                             }
-                        if idle_grace_used or bounded_by_next_input:
-                            return _unanswered_payload()
+                        if (
+                            idle_grace_used
+                            or bounded_by_next_input
+                            or diag_seg["classification"] in ("transport_error", "step_error", "user_cancelled")
+                        ):
+                            return _unanswered_payload(segment)
                         if seen_running or segment:
                             idle_grace_used = True
-                    elif bounded_by_next_input and not finals:
-                        return _unanswered_payload()
+                    elif bounded_by_next_input and diag_seg["classification"] != "completed":
+                        return _unanswered_payload(segment)
+                    diag_steps_cur = segment
             else:
                 segment = new_steps
                 bounded_by_next_input = False
@@ -541,9 +567,11 @@ async def wait(
                             break
                 finals = [s for s in segment if is_final_planner_response(s)]
                 non_empty = [s for s in finals if step_text(s).strip()]
+                diag_steps_cur = segment
+                diag_seg = diagnose_turn(segment, last_run_state)
                 if last_run_state == "RUN_STATE_IDLE":
                     if since_step is not None:
-                        if non_empty:
+                        if diag_seg["classification"] == "completed" and non_empty:
                             reply_step = non_empty[-1]
                             return {
                                 "ok": True,
@@ -555,11 +583,12 @@ async def wait(
                                 "update_time": last_update_time,
                                 "last_step_index": last_step_index,
                                 "reply_step_index": reply_step.get("step_index"),
+                                "diagnosis": diag_seg,
                                 "events": new_steps,
                                 "response": step_text(reply_step),
                                 "conversation": normalize_conversation(last_conv),
                             }
-                        if finals:
+                        if diag_seg["classification"] == "empty_response":
                             return {
                                 "ok": False,
                                 "timed_out": False,
@@ -571,16 +600,21 @@ async def wait(
                                 "run_state": last_run_state,
                                 "update_time": last_update_time,
                                 "last_step_index": last_step_index,
+                                "diagnosis": diag_seg,
                                 "events": new_steps,
                                 "conversation": normalize_conversation(last_conv),
                             }
-                        if bounded_by_next_input or (seen_running and idle_grace_used):
-                            return _unanswered_payload()
+                        if (
+                            bounded_by_next_input
+                            or (seen_running and idle_grace_used)
+                            or diag_seg["classification"] in ("transport_error", "step_error", "user_cancelled")
+                        ):
+                            return _unanswered_payload(segment)
                         if seen_running:
                             idle_grace_used = True
                     elif since_time is not None:
                         if (last_update_time > since_time) or seen_running:
-                            if non_empty:
+                            if diag_seg["classification"] == "completed" and non_empty:
                                 reply_step = non_empty[-1]
                                 return {
                                     "ok": True,
@@ -592,11 +626,12 @@ async def wait(
                                     "update_time": last_update_time,
                                     "last_step_index": last_step_index,
                                     "reply_step_index": reply_step.get("step_index"),
+                                    "diagnosis": diag_seg,
                                     "events": new_steps,
                                     "response": step_text(reply_step),
                                     "conversation": normalize_conversation(last_conv),
                                 }
-                            if finals:
+                            if diag_seg["classification"] == "empty_response":
                                 return {
                                     "ok": False,
                                     "timed_out": False,
@@ -608,11 +643,18 @@ async def wait(
                                     "run_state": last_run_state,
                                     "update_time": last_update_time,
                                     "last_step_index": last_step_index,
+                                    "diagnosis": diag_seg,
                                     "events": new_steps,
                                     "conversation": normalize_conversation(last_conv),
                                 }
+                            if diag_seg["classification"] in ("transport_error", "step_error", "user_cancelled"):
+                                return _unanswered_payload(segment)
                     else:
-                        reply_step = last_model_response(steps)
+                        last_seg = last_turn_segment(steps, exact_id)
+                        diag_last = diagnose_turn(last_seg, last_run_state)
+                        if diag_last["classification"] in ("transport_error", "step_error", "user_cancelled"):
+                            return _unanswered_payload(last_seg)
+                        reply_step = last_model_response(last_seg)
                         return {
                             "ok": True,
                             "timed_out": False,
@@ -622,12 +664,13 @@ async def wait(
                             "run_state": last_run_state,
                             "update_time": last_update_time,
                             "last_step_index": last_step_index,
+                            "diagnosis": diag_last,
                             "events": new_steps,
                             "response": step_text(reply_step) if reply_step else "",
                             "conversation": normalize_conversation(last_conv),
                         }
 
-            timed = await _sleep_or_timeout()
+            timed = await _sleep_or_timeout(diag_steps=diag_steps_cur)
             if timed is not None:
                 return timed
     except asyncio.CancelledError as cancelled:
@@ -939,18 +982,62 @@ async def read(
     if not transcript.get("ok"):
         return {**transcript, "conversation_id": exact_id}
 
+    conv_norm = normalize_conversation(resolved["conversation"])
+    steps = transcript["steps"]
+    last_idx = transcript.get("last_step_index")
+    total_steps = transcript.get("total_steps", 0)
+    has_more = bool(transcript["has_more"])
+    observed_from = steps[0].get("step_index") if steps else None
+    observed_to = steps[-1].get("step_index") if steps else None
+    observed_range = (
+        [observed_from, observed_to]
+        if isinstance(observed_from, int) and isinstance(observed_to, int)
+        else None
+    )
+    has_turn_start = any(is_input_or_receipt_step(s, exact_id) for s in steps)
+    missing_head = from_step > 0 and not has_turn_start
+    truncated_tail = has_more or (
+        isinstance(observed_to, int)
+        and isinstance(last_idx, int)
+        and observed_to < last_idx
+    )
+    if not steps:
+        observation_scope = "empty_window" if (from_step > 0 or total_steps > 0) else "full_transcript"
+        window_complete = observation_scope == "full_transcript"
+    elif missing_head and truncated_tail:
+        observation_scope = "partial_window_middle"
+        window_complete = False
+    elif truncated_tail:
+        observation_scope = "partial_window_truncated_tail"
+        window_complete = False
+    elif missing_head:
+        observation_scope = "tail_window_missing_head"
+        window_complete = False
+    else:
+        observation_scope = "full_turn"
+        window_complete = True
+
+    diag = diagnose_turn(
+        last_turn_segment(steps, exact_id),
+        conv_norm["run_state"],
+        window_complete=window_complete,
+        observation_scope=observation_scope,
+        observed_step_range=observed_range,
+        tail_truncated=truncated_tail,
+    )
     return {
         "ok": True,
         "timed_out": False,
         "socket": resolved.get("socket"),
         "conversation_id": exact_id,
-        "conversation": normalize_conversation(resolved["conversation"]),
+        "conversation": conv_norm,
         "transcript_path": transcript.get("path"),
         "exists": bool(transcript.get("exists", False)),
-        "total_steps": transcript.get("total_steps", 0),
-        "last_step_index": transcript.get("last_step_index"),
-        "has_more": transcript["has_more"],
-        "steps": transcript["steps"],
+        "total_steps": total_steps,
+        "last_step_index": last_idx,
+        "has_more": has_more,
+        "diagnosis": diag,
+        "steps": steps,
     }
 
 

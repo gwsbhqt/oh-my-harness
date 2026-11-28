@@ -58,8 +58,17 @@ export interface WorkspaceWire {
   sessionIds: string[]
 }
 
+export interface SessionObservationLike {
+  readonly header: { id: string }
+  readonly inheritedEventCount: number
+  readonly events: readonly RawEvent[]
+  [Symbol.dispose](): void
+}
+
 export interface SessionQueryLike {
   readSession(sessionId: string): Promise<{ session: { id: string; cwd?: string }; events: readonly RawEvent[] }>
+  /** Exact live/prepared observation without persistence.list(); old hosts only have readSession. */
+  observeSession?(sessionId: string, options: { projectionMode: 'none', signal?: AbortSignal }): Promise<SessionObservationLike>
 }
 
 export interface RestartRecoveryResult {
@@ -467,6 +476,115 @@ export class RemoteService {
     return { text: `已分叉会话 ${short(id)}，新会话 ${result.sessionId}；没有自动发消息。继续：dsh-use send ${result.sessionId} "<消息>"`, data: { sessionId: result.sessionId, sourceSessionId: id, ...(atSeq === undefined ? {} : { atSeq }) } }
   }
 
+  /** 只返回一个完整请求编号在本会话自有事件中的收件元数据；不读正文、不做模糊会话解析。 */
+  async receipt(sessionId: string, requestId: string, signal?: AbortSignal): Promise<CommandResult> {
+    if (!/^session-[A-Za-z0-9-]+$/.test(sessionId)) {
+      throw new UsageError('receipt 需要完整的 session- 会话编号；不能用作前缀、标题或其他会话查找')
+    }
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(requestId)) {
+      throw new UsageError('receipt 需要 new/send 返回的完整小写 requestId（36 字符 UUID），不能用前缀')
+    }
+    const readFailure = (error?: unknown): CommandFailure | UsageError => {
+      const code = typeof error === 'object' && error !== null && 'code' in error ? (error as { code?: unknown }).code : undefined
+      if (code === 'SESSION_QUERY_SESSION_NOT_FOUND') {
+        return new UsageError('目标会话不存在', 'session-not-found')
+      }
+      return new CommandFailure('目标会话精确读取失败；不能据此判断请求是否送达、是否有权限或是否曾入队', 'receipt-read-failed')
+    }
+    let observeSession: SessionQueryLike['observeSession']
+    try {
+      observeSession = this.deps.query.observeSession
+    } catch (error) {
+      throw readFailure(error)
+    }
+    if (observeSession === undefined) {
+      throw new CommandFailure('当前宿主没有无枚举的精确会话观察接口；不能改用 readSession 或列表扩大读取范围', 'exact-receipt-unavailable')
+    }
+    let observation: SessionObservationLike
+    try {
+      if (typeof observeSession !== 'function') throw new TypeError('observeSession is not callable')
+      observation = await observeSession.call(this.deps.query, sessionId, { projectionMode: 'none', ...(signal === undefined ? {} : { signal }) })
+    } catch (error) {
+      throw readFailure(error)
+    }
+    let dispose: () => void
+    try {
+      if ((typeof observation !== 'object' && typeof observation !== 'function') || observation === null) throw new TypeError('invalid observation')
+      const disposer = observation[Symbol.dispose]
+      if (typeof disposer !== 'function') throw new TypeError('observation is not disposable')
+      dispose = () => { disposer.call(observation) }
+    } catch (error) {
+      throw readFailure(error)
+    }
+    try {
+      const header = observation.header
+      const events = observation.events
+      const inheritedEventCount = observation.inheritedEventCount
+      if (header?.id !== sessionId || !Array.isArray(events)
+        || !Number.isSafeInteger(inheritedEventCount)
+        || inheritedEventCount < 0 || inheritedEventCount > events.length) {
+        throw new TypeError('invalid observation shape')
+      }
+      const record = (value: unknown): Record<string, unknown> | undefined => typeof value === 'object' && value !== null ? value as Record<string, unknown> : undefined
+      const turnOf = (data: Record<string, unknown> | undefined): number | undefined => typeof data?.turn === 'number' && Number.isSafeInteger(data.turn) ? data.turn : undefined
+      const isUserSource = (source: Record<string, unknown> | undefined): boolean => (source?.kind === 'user' || source?.kind === 'remote-control') && source.rpcId === requestId
+      let openTurn: number | undefined
+      let enqueued: RawEvent | undefined
+      let userMessage: RawEvent | undefined
+      let userMessageTurn: number | undefined
+      for (const event of events.slice(inheritedEventCount)) {
+        const data = record(event.data)
+        const eventTurn = turnOf(data)
+        if (event.type === 'turn/start') { openTurn = eventTurn; continue }
+        if (event.type === 'turn/end') { openTurn = undefined; continue }
+        if (event.type === 'agent/inbox/spliced' && enqueued === undefined && Array.isArray(data?.inserted)) {
+          for (const item of data.inserted) {
+            if (isUserSource(record(record(item)?.source))) { enqueued = event; break }
+          }
+        }
+        if (event.type === 'user/message' && userMessage === undefined && isUserSource(record(data?.source))) {
+          userMessage = event
+          userMessageTurn = eventTurn ?? openTurn
+        }
+      }
+      const seqOf = (event: RawEvent | undefined): number | undefined => typeof event?.seq === 'number' && Number.isSafeInteger(event.seq) ? event.seq : undefined
+      const enqueuedSeq = seqOf(enqueued)
+      if (userMessage !== undefined) {
+        const turn = userMessageTurn
+        const seq = seqOf(userMessage)
+        return {
+          text: `已成为用户消息${turn === undefined ? '' : `，轮次 ${turn}`}。只证明已形成用户消息，不表示已回复或任务完成。`,
+          data: {
+            sessionId, requestId, matched: true, state: 'user-message', asUserMessage: true,
+            enqueued: enqueued !== undefined,
+            ...(turn === undefined ? {} : { turn }),
+            ...(seq === undefined ? {} : { seq }),
+            ...(enqueuedSeq === undefined ? {} : { enqueuedSeq }),
+          },
+        }
+      }
+      if (enqueued !== undefined) {
+        return {
+          text: `曾记录入队${enqueuedSeq === undefined ? '' : `，事件 seq ${enqueuedSeq}`}。不表示现在仍在队列，也不表示已回复或任务完成。`,
+          data: {
+            sessionId, requestId, matched: true, state: 'enqueued', asUserMessage: false, enqueued: true,
+            ...(enqueuedSeq === undefined ? {} : { seq: enqueuedSeq }),
+          },
+        }
+      }
+      throw new CommandFailure('已完整读取目标会话的不含继承事件的日志，其中没有该请求；这不等于从未送达或没有权限', 'request-not-found')
+    } catch (error) {
+      if (error instanceof CommandFailure || error instanceof UsageError) throw error
+      throw readFailure(error)
+    } finally {
+      try {
+        dispose()
+      } catch (error) {
+        throw readFailure(error)
+      }
+    }
+  }
+
   async status(raw: string): Promise<CommandResult> {
     const { id, summary } = await this.resolve(raw)
     const t = await this.transcript(id)
@@ -673,7 +791,7 @@ export class RemoteService {
     const requestId = randomUUID()
     const code = requestId.replace(/-/g, '').slice(0, 8)
     const recovery = { sessionId: id, since, requestId, sent: null }
-    const recoveryText = `收件状态未知。请求 ${requestId}，起点 ${since}。请用 dsh-use status ${id} 查原会话。`
+    const recoveryText = `收件状态未知。请求 ${requestId}，起点 ${since}。请用 dsh-use receipt ${id} ${requestId} 核对。`
     let admitted: Json
     try {
       admitted = obj(await this.call('session/prompt', { request: { requestId, sessionId: id, mode, content: [{ type: 'text', text }], clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone } }))

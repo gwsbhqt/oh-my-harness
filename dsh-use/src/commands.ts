@@ -18,6 +18,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: 'rename', summary: '重命名会话', usage: 'rename <会话> <新标题>', writes: true },
   { name: 'fork', summary: '分叉会话；默认复制到最近完成的一轮，可用 --at-seq 指定事件边界，不会自动发消息', usage: 'fork <会话> [--at-seq N]', writes: true },
   { name: 'status', summary: '一个会话的状态：在不在跑、模型、待办、排队、是否在等你回答（在等回答时退出码 10）', usage: 'status <会话>', writes: false },
+  { name: 'receipt', summary: '凭完整会话编号和完整 requestId 只查这次收件的元数据；区分曾入队与已成为用户消息，不含正文或继承事件', usage: 'receipt <完整 sessionId> <完整 requestId>', writes: false },
   { name: 'cwd', summary: '看会话现在的工作目录；给了目录就换过去（模型之后在新目录干活，已经开着的终端和后台命令还在原目录）', usage: 'cwd <会话> [新目录，绝对路径或 ~/ 开头]', writes: true },
   { name: 'goal', summary: '看会话的持续目标；pause 暂停、resume 恢复、clear 清掉，等同在界面目标面板上点（模型自己恢复不了被暂停的目标；会话正在跑时 pause 会中止这一轮）；hold 只停自动续跑，这一轮照常跑完，用 resume 恢复', usage: 'goal <会话> [pause|resume|clear|hold]', writes: true },
   { name: 'schedule', summary: '定时提醒（界面「自动化任务」）：列出全部或某个会话的，看一条的发送记录，删掉一条。新建要在会话里让模型建，宿主没开放外部新建', usage: 'schedule [list] [会话] | schedule history <提醒> [--limit N] | schedule delete <提醒>', writes: true },
@@ -56,7 +57,7 @@ export const COMMANDS: CommandSpec[] = [
 export function validateCommand(command: string, args: string[], options: Record<string, unknown>): void {
   const specs: Record<string, [string, number]> = {
     health: ['', 0], workspaces: ['', 0], sessions: ['running all ungrouped include-blank workspace cwd query limit', 1],
-    archive: ['', 1], unarchive: ['', 1], cwd: ['', 2], goal: ['', 2], schedule: ['limit', 2], rename: ['', Infinity], fork: ['at-seq', 1], status: ['', 1],
+    archive: ['', 1], unarchive: ['', 1], cwd: ['', 2], goal: ['', 2], schedule: ['limit', 2], rename: ['', Infinity], fork: ['at-seq', 1], status: ['', 1], receipt: ['', 2],
     last: ['chars', 1], read: ['turn tools last chars max', 1], send: ['now steer interrupt tier model effort notify', Infinity],
     chat: ['now steer interrupt tier model effort timeout since slice notify settled', Infinity], queue: ['', Infinity],
     wait: ['since timeout slice settled', 1], new: ['tier model effort preset if-idle notify', Infinity], notice: ['summary quiet', Infinity], notify: ['title body sound no-title no-body no-sound', 1],
@@ -176,6 +177,7 @@ export async function runCommand(service: RemoteService, command: string, args: 
     case 'rename': return service.rename(need(args, 0, '会话', u), need(args, 1, '新标题', u) + (args.length > 2 ? ` ${args.slice(2).join(' ')}` : ''))
     case 'fork': return service.fork(need(args, 0, '会话', u), int(options, 'at-seq'))
     case 'status': return service.status(need(args, 0, '会话', u))
+    case 'receipt': return service.receipt(need(args, 0, '完整 sessionId', u), need(args, 1, '完整 requestId', u), signal)
     case 'last': {
       const chars = int(options, 'chars')
       return service.last(need(args, 0, '会话', u), chars === undefined ? {} : { chars })

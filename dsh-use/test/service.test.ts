@@ -1554,8 +1554,7 @@ test('send：session/prompt 内层抛错时保留已知 sessionId/since/requestI
       assert.equal(plain.code, exitCode)
       assert.ok(plain.err.includes(cause.message))
       const plainPrompt = promptCalls().at(-1)!.args.request as { requestId: string }
-      assert.ok(plain.out.includes('dsh-use status session-aaaa1111-0000'))
-      assert.ok(plain.out.includes(plainPrompt.requestId))
+      assert.ok(plain.out.includes(`dsh-use receipt session-aaaa1111-0000 ${plainPrompt.requestId}`))
       assert.equal(promptCalls().length - before, 3)
     }
     // chat：send 阶段抛错应直接失败、不进入等待、不重发（同一次输入只 1 次 session/prompt）

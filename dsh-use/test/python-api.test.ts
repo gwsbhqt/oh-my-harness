@@ -16,6 +16,7 @@ test('Python API 经真实启动器与 socket 保留 chat 失败回执、等待�
   const receipt = { sent: true, requestId: 'request-fixture', sessionId: 'session-fixture', since: 42 }
   const server = await startServer({ socketPath, commands: () => COMMANDS, info: () => ({}), log: () => {}, run: async (command, args, options) => {
     calls.push({ command, args, options })
+    if (command === 'receipt') return { text: '已成为用户消息', data: { sessionId: args[0], requestId: args[1], matched: true, state: 'user-message', asUserMessage: true, enqueued: true, turn: 2, seq: 2, enqueuedSeq: 1 } }
     if (command === 'send') return { text: '已发', data: receipt }
     if (command === 'wait') return { text: '任务失败', ok: false, status: 'failed', error: { code: 'task-failed', message: '中文失败' }, data: { turns: [{ ended: 'error', reply: '半段回复' }] } }
     if (command === 'status') return { text: '等回答', status: 'waiting-input', data: { sessionId: receipt.sessionId, questions: [{ id: 'q', question: '选什么？' }] } }
@@ -29,10 +30,11 @@ import dsh_use
 async def main():
     chat = await dsh_use.chat("session-fixture", "中文 空格 --host $HOME ;", local=True, timeout=1)
     status = await dsh_use.status("session-fixture", local=True)
+    receipt_meta = await dsh_use.receipt("session-fixture", "11111111-1111-4111-8111-000000000002", local=True)
     answer = await dsh_use.answer("session-fixture", local=True, json={"answers":[{"id":"q","custom":"中文 --json"}]})
     monitor = await dsh_use.monitor("session-original", local=True, command="fish -lc 'echo 中文 $HOME ;'", cwd="/repo/原目录", label="服务 原归属")
     help_result = await dsh_use.help(local=True)
-    print(json.dumps({"chat":chat,"status":status,"answer":answer,"help":help_result,"monitor":monitor}, ensure_ascii=False))
+    print(json.dumps({"chat":chat,"status":status,"receipt":receipt_meta,"answer":answer,"help":help_result,"monitor":monitor}, ensure_ascii=False))
 asyncio.run(main())`
   try {
     const output = await new Promise<{ code: number | null; out: string; err: string }>((resolve, reject) => {
@@ -46,11 +48,14 @@ asyncio.run(main())`
     const value = JSON.parse(output.out)
     assert.equal(value.chat.exit_code, 1)
     assert.equal(value.chat.ok, false)
-    assert.equal(value.chat.error.code, 'task-failed')
+    assert.equal(value.chat.error.code, 'task-failed', JSON.stringify(value) + output.err)
     assert.deepEqual(value.chat.receipt, receipt)
     assert.equal(value.chat.data.turns[0].reply, '半段回复')
     assert.equal(value.status.exit_code, 10)
     assert.equal(value.status.status, 'waiting-input')
+    assert.equal(value.receipt.exit_code, 0)
+    assert.deepEqual(value.receipt.data, { sessionId: 'session-fixture', requestId: '11111111-1111-4111-8111-000000000002', matched: true, state: 'user-message', asUserMessage: true, enqueued: true, turn: 2, seq: 2, enqueuedSeq: 1 })
+    assert.deepEqual(calls.find((c) => c.command === 'receipt')?.args, ['session-fixture', '11111111-1111-4111-8111-000000000002'])
     assert.equal(value.answer.exit_code, 0)
     assert.equal(value.help.exit_code, 0)
     assert.equal(value.monitor.exit_code, 0)

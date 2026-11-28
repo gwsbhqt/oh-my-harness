@@ -1447,6 +1447,327 @@ class AppBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sidecar["args"], ["bridge.py"])
         self.assertTrue((PLUGIN_ROOT / "sidecars" / "app-bridge" / "bridge.py").is_file())
 
+    async def test_turn_diagnosis_distinguishes_transport_error_cancel_running_and_safe_continuation(self) -> None:
+        target = "11112222-bbbb-0000-0000-000000000002"
+        sock = await self._start_bridge_with_new_socket("stays_running")
+
+        # 1. Still running with open tool call -> still_running, unsettled_tool_calls=True, wait_in_same_conversation_do_not_resend.
+        sent = await agy_use.send(target, "SIDE_EFFECT_TASK", wait_receipt=True, timeout=3, poll_interval=0.05, socket_path=sock)
+        self.assertTrue(sent["receipt_confirmed"])
+        tfile = self.app_data / "brain" / target / ".system_generated" / "logs" / "transcript.jsonl"
+        base_steps = [json.loads(line) for line in tfile.read_text(encoding="utf-8").splitlines() if line.strip()]
+        next_idx = base_steps[-1]["step_index"] + 1
+        tfile.write_text(
+            "\n".join([json.dumps(s) for s in base_steps] + [
+                json.dumps({"step_index": next_idx, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                            "tool_calls": [{"name": "write_file", "args": {"Path": "/Users/private/secret.txt"}}]}),
+                json.dumps({"step_index": next_idx + 1, "source": "MODEL", "type": "GENERIC", "status": "RUNNING", "content": ""}),
+            ]) + "\n",
+            encoding="utf-8",
+        )
+        running_read = await agy_use.read(target, socket_path=sock)
+        self.assertEqual(running_read["diagnosis"]["classification"], "still_running")
+        self.assertTrue(running_read["diagnosis"]["unsettled_tool_calls"])
+        self.assertFalse(running_read["diagnosis"]["can_continue_explicitly"])
+        self.assertEqual(running_read["diagnosis"]["next_action"], "wait_in_same_conversation_do_not_resend")
+        self.assertNotIn("safe_to_auto_resend", running_read["diagnosis"])
+        self.assertNotIn("/Users/private/secret.txt", json.dumps(running_read["diagnosis"]))
+
+        running_wait = await agy_use.wait(
+            target, since_step=sent["since_step"], expected_prompt="SIDE_EFFECT_TASK",
+            timeout=0.2, poll_interval=0.05, socket_path=sock,
+        )
+        self.assertEqual(running_wait["status"], "timeout")
+        self.assertEqual(running_wait["diagnosis"]["classification"], "still_running")
+        self.assertTrue(running_wait["diagnosis"]["unsettled_tool_calls"])
+        self.assertFalse(running_wait["diagnosis"]["can_continue_explicitly"])
+        self.assertNotIn("safe_to_auto_resend", running_wait["diagnosis"])
+
+        # 2. Simulate TRANSPORT/Connection error whose error text hides fictional secrets/paths/prompts:
+        # diagnosis must classify transport_error without leaking raw error text, paths, accounts, or args.
+        convs = json.loads(self.convs_file.read_text(encoding="utf-8"))
+        convs[target]["state"]["runState"] = "RUN_STATE_IDLE"
+        self.convs_file.write_text(json.dumps(convs), encoding="utf-8")
+        secret_err = (
+            "TRANSPORT/Connection error: sk-fictional-token-999 "
+            "/Users/private/secret_account.json prompt=SIDE_EFFECT_TASK"
+        )
+        tfile.write_text(
+            "\n".join([json.dumps(s) for s in base_steps] + [
+                json.dumps({"step_index": next_idx, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                            "tool_calls": [{"name": "write_file", "args": {"Path": "/Users/private/secret.txt"}}]}),
+                json.dumps({"step_index": next_idx + 1, "source": "MODEL", "type": "GENERIC", "status": "ERROR",
+                            "error": secret_err, "content": "SECRET_CONTENT_SHOULD_NOT_LEAK"}),
+            ]) + "\n",
+            encoding="utf-8",
+        )
+        err_wait = await agy_use.wait(
+            target, since_step=sent["since_step"], expected_prompt="SIDE_EFFECT_TASK",
+            timeout=1, poll_interval=0.05, socket_path=sock,
+        )
+        self.assertEqual(err_wait["status"], "unanswered")
+        self.assertEqual(err_wait["error_code"], "no-final-response")
+        self.assertTrue(err_wait["receipt_confirmed"])
+        diag_json = json.dumps(err_wait["diagnosis"], ensure_ascii=False)
+        self.assertEqual(err_wait["diagnosis"]["classification"], "transport_error")
+        self.assertTrue(err_wait["diagnosis"]["unsettled_tool_calls"])
+        self.assertEqual(err_wait["diagnosis"]["tool_names"], ["write_file"])
+        self.assertFalse(err_wait["diagnosis"]["can_continue_explicitly"])
+        self.assertEqual(err_wait["diagnosis"]["next_action"], "inspect_side_effects_before_explicit_follow_up")
+        self.assertEqual(err_wait["diagnosis"]["error_kinds"], ["transport_error"])
+        self.assertEqual(err_wait["diagnosis"]["error_step_indices"], [next_idx + 1])
+        self.assertNotIn("safe_to_auto_resend", err_wait["diagnosis"])
+        self.assertNotIn("errors", err_wait["diagnosis"])
+        for leaked in (
+            "sk-fictional-token-999",
+            "/Users/private/secret_account.json",
+            "/Users/private/secret.txt",
+            "SIDE_EFFECT_TASK",
+            "SECRET_CONTENT_SHOULD_NOT_LEAK",
+        ):
+            self.assertNotIn(leaked, diag_json)
+        self.assertEqual(len(self._agentapi_calls()), 1)
+
+        err_read = await agy_use.read(target, socket_path=sock)
+        self.assertEqual(err_read["diagnosis"]["classification"], "transport_error")
+        self.assertTrue(err_read["diagnosis"]["unsettled_tool_calls"])
+        self.assertNotIn("sk-fictional-token-999", json.dumps(err_read["diagnosis"]))
+
+        # Pure transport_error with zero tool calls -> can_continue_explicitly=True with explicit follow-up action.
+        tfile.write_text(
+            "\n".join([json.dumps(s) for s in base_steps] + [
+                json.dumps({"step_index": next_idx, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "ERROR",
+                            "error": secret_err, "content": ""}),
+            ]) + "\n",
+            encoding="utf-8",
+        )
+        pure_err = await agy_use.wait(
+            target, since_step=sent["since_step"], expected_prompt="SIDE_EFFECT_TASK",
+            timeout=1, poll_interval=0.05, socket_path=sock,
+        )
+        self.assertEqual(pure_err["diagnosis"]["classification"], "transport_error")
+        self.assertTrue(pure_err["diagnosis"]["can_continue_explicitly"])
+        self.assertEqual(pure_err["diagnosis"]["next_action"], "continue_explicitly_without_repeating_prompt")
+        self.assertNotIn("sk-fictional-token-999", json.dumps(pure_err["diagnosis"]))
+
+        # Receipt-only mode MUST still exclude diagnosis.
+        rec_only = await agy_use.wait(
+            target, since_step=sent["since_step"], expected_prompt="SIDE_EFFECT_TASK",
+            receipt_only=True, timeout=1, poll_interval=0.05, socket_path=sock,
+        )
+        self.assertTrue(rec_only["receipt_confirmed"])
+        self.assertNotIn("diagnosis", rec_only)
+
+        # 3. Cancelling / explicit user_cancelled must NEVER allow auto-continuation.
+        convs[target]["state"]["runState"] = "RUN_STATE_CANCELLING"
+        self.convs_file.write_text(json.dumps(convs), encoding="utf-8")
+        cancelling_read = await agy_use.read(target, socket_path=sock)
+        self.assertEqual(cancelling_read["diagnosis"]["classification"], "cancelling")
+        self.assertFalse(cancelling_read["diagnosis"]["can_continue_explicitly"])
+        self.assertEqual(cancelling_read["diagnosis"]["next_action"], "wait_for_cancel_then_confirm_with_user")
+
+        convs[target]["state"]["runState"] = "RUN_STATE_IDLE"
+        self.convs_file.write_text(json.dumps(convs), encoding="utf-8")
+        tfile.write_text(
+            "\n".join([json.dumps(s) for s in base_steps] + [
+                json.dumps({"step_index": next_idx, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "CANCELED", "content": ""}),
+            ]) + "\n",
+            encoding="utf-8",
+        )
+        cancelled_read = await agy_use.read(target, socket_path=sock)
+        self.assertEqual(cancelled_read["diagnosis"]["classification"], "user_cancelled")
+        self.assertFalse(cancelled_read["diagnosis"]["can_continue_explicitly"])
+        self.assertEqual(cancelled_read["diagnosis"]["next_action"], "do_not_auto_continue_user_cancelled")
+
+        # Ordinary reply mentioning TRANSPORT/Connection error must stay completed and never advise resend.
+        tfile.write_text(
+            "\n".join([json.dumps(s) for s in base_steps] + [
+                json.dumps({"step_index": next_idx, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                            "content": "Report: yesterday saw TRANSPORT/Connection error 502 upstream."}),
+            ]) + "\n",
+            encoding="utf-8",
+        )
+        completed_read = await agy_use.read(target, socket_path=sock)
+        self.assertEqual(completed_read["diagnosis"]["classification"], "completed")
+        self.assertFalse(completed_read["diagnosis"]["can_continue_explicitly"])
+        self.assertEqual(completed_read["diagnosis"]["next_action"], "do_not_resend_completed_turn")
+        self.assertNotIn("safe_to_auto_resend", completed_read["diagnosis"])
+
+        # Receipt-only idle timeout & idle after completed tool call without final reply -> unknown_idle.
+        tfile.write_text("\n".join(json.dumps(s) for s in base_steps) + "\n", encoding="utf-8")
+        unknown_timeout = await agy_use.wait(
+            target, since_step=sent["since_step"], expected_prompt="SIDE_EFFECT_TASK",
+            timeout=0.25, poll_interval=0.05, socket_path=sock,
+        )
+        self.assertEqual(unknown_timeout["status"], "timeout")
+        self.assertEqual(unknown_timeout["diagnosis"]["classification"], "unknown_idle")
+        self.assertEqual(unknown_timeout["diagnosis"]["tool_calls_observed"], 0)
+        self.assertFalse(unknown_timeout["diagnosis"]["can_continue_explicitly"])
+        self.assertEqual(unknown_timeout["diagnosis"]["next_action"], "inspect_conversation_then_decide_explicit_follow_up")
+
+        tfile.write_text(
+            "\n".join([json.dumps(s) for s in base_steps] + [
+                json.dumps({"step_index": next_idx, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                            "tool_calls": [{"name": "read_file", "args": {"Path": "/tmp/a"}}]}),
+                json.dumps({"step_index": next_idx + 1, "source": "MODEL", "type": "GENERIC", "status": "DONE", "content": "ok"}),
+            ]) + "\n",
+            encoding="utf-8",
+        )
+        unknown_unanswered = await agy_use.wait(
+            target, since_step=sent["since_step"], expected_prompt="SIDE_EFFECT_TASK",
+            timeout=1, poll_interval=0.05, socket_path=sock,
+        )
+        self.assertEqual(unknown_unanswered["status"], "unanswered")
+        self.assertEqual(unknown_unanswered["diagnosis"]["classification"], "unknown_idle")
+        self.assertEqual(unknown_unanswered["diagnosis"]["tool_calls_observed"], 1)
+        self.assertEqual(unknown_unanswered["diagnosis"]["completed_tool_steps"], 1)
+        self.assertFalse(unknown_unanswered["diagnosis"]["unsettled_tool_calls"])
+        self.assertFalse(unknown_unanswered["diagnosis"]["can_continue_explicitly"])
+        self.assertEqual(unknown_unanswered["diagnosis"]["next_action"], "inspect_side_effects_before_explicit_follow_up")
+
+        # 4. Explicit safe continuation on original conversation without re-sending original prompt,
+        # and completed wait() returns do_not_resend_completed_turn without auto-resend flag.
+        sock_fast = await self._start_bridge_with_new_socket("fast")
+        cont = await agy_use.send(
+            target,
+            "Inspect step result and continue only remaining read-only checks; do not repeat write_file.",
+            wait=True,
+            timeout=3,
+            poll_interval=0.05,
+            socket_path=sock_fast,
+        )
+        self.assertTrue(cont["ok"], cont)
+        self.assertEqual(cont["status"], "completed")
+        self.assertEqual(cont["diagnosis"]["classification"], "completed")
+        self.assertEqual(cont["diagnosis"]["next_action"], "do_not_resend_completed_turn")
+        self.assertFalse(cont["diagnosis"]["can_continue_explicitly"])
+        self.assertNotIn("safe_to_auto_resend", cont["diagnosis"])
+        self.assertIn("continue only remaining", cont["response"])
+        calls = self._agentapi_calls()
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0]["args"][-1], "SIDE_EFFECT_TASK")
+        self.assertIn("do not repeat write_file", calls[1]["args"][-1])
+
+    async def test_turn_sequence_counterexamples_and_paginated_read_window_scope(self) -> None:
+        target = "11112222-bbbb-0000-0000-000000000002"
+        sock = await self._start_bridge_with_new_socket("stays_running")
+        sent = await agy_use.send(target, "SEQ_ORDER_CHECK", wait_receipt=True, timeout=3, poll_interval=0.05, socket_path=sock)
+        tfile = self.app_data / "brain" / target / ".system_generated" / "logs" / "transcript.jsonl"
+        base_steps = [json.loads(line) for line in tfile.read_text(encoding="utf-8").splitlines() if line.strip()]
+        next_idx = base_steps[-1]["step_index"] + 1
+        convs = json.loads(self.convs_file.read_text(encoding="utf-8"))
+        convs[target]["state"]["runState"] = "RUN_STATE_IDLE"
+        self.convs_file.write_text(json.dumps(convs), encoding="utf-8")
+
+        # 1. Staged reply -> explicit cancel: neither read() nor wait() may report completed.
+        tfile.write_text(
+            "\n".join([json.dumps(s) for s in base_steps] + [
+                json.dumps({"step_index": next_idx, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                            "content": "Stage 1 complete, moving to stage 2"}),
+                json.dumps({"step_index": next_idx + 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "CANCELED",
+                            "content": ""}),
+            ]) + "\n",
+            encoding="utf-8",
+        )
+        r_stage_cancel = await agy_use.read(target, socket_path=sock)
+        self.assertEqual(r_stage_cancel["diagnosis"]["classification"], "user_cancelled")
+        self.assertEqual(r_stage_cancel["diagnosis"]["next_action"], "do_not_auto_continue_user_cancelled")
+        self.assertFalse(r_stage_cancel["diagnosis"]["can_continue_explicitly"])
+        self.assertEqual(r_stage_cancel["diagnosis"]["observation_scope"], "full_turn")
+        self.assertTrue(r_stage_cancel["diagnosis"]["window_complete"])
+
+        w_stage_cancel = await agy_use.wait(
+            target, since_step=sent["since_step"], expected_prompt="SEQ_ORDER_CHECK",
+            timeout=1, poll_interval=0.05, socket_path=sock,
+        )
+        self.assertFalse(w_stage_cancel["ok"])
+        self.assertEqual(w_stage_cancel["status"], "unanswered")
+        self.assertEqual(w_stage_cancel["diagnosis"]["classification"], "user_cancelled")
+        self.assertFalse(w_stage_cancel["diagnosis"]["can_continue_explicitly"])
+
+        # 2. Error -> explicit cancel: latest terminal state is user_cancelled, never can_continue_explicitly=True.
+        tfile.write_text(
+            "\n".join([json.dumps(s) for s in base_steps] + [
+                json.dumps({"step_index": next_idx, "source": "MODEL", "type": "GENERIC", "status": "ERROR",
+                            "error": "TRANSPORT/Connection error: reset before stop"}),
+                json.dumps({"step_index": next_idx + 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "CANCELED",
+                            "content": ""}),
+            ]) + "\n",
+            encoding="utf-8",
+        )
+        r_err_cancel = await agy_use.read(target, socket_path=sock)
+        self.assertEqual(r_err_cancel["diagnosis"]["classification"], "user_cancelled")
+        self.assertEqual(r_err_cancel["diagnosis"]["next_action"], "do_not_auto_continue_user_cancelled")
+        self.assertFalse(r_err_cancel["diagnosis"]["can_continue_explicitly"])
+
+        w_err_cancel = await agy_use.wait(
+            target, since_step=sent["since_step"], expected_prompt="SEQ_ORDER_CHECK",
+            timeout=1, poll_interval=0.05, socket_path=sock,
+        )
+        self.assertEqual(w_err_cancel["status"], "unanswered")
+        self.assertEqual(w_err_cancel["diagnosis"]["classification"], "user_cancelled")
+        self.assertFalse(w_err_cancel["diagnosis"]["can_continue_explicitly"])
+
+        # 3. Error -> later completed: latest outcome is completed, both read() and wait() agree.
+        tfile.write_text(
+            "\n".join([json.dumps(s) for s in base_steps] + [
+                json.dumps({"step_index": next_idx, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                            "tool_calls": [{"name": "read_file", "args": {"Path": "/tmp/a"}}]}),
+                json.dumps({"step_index": next_idx + 1, "source": "MODEL", "type": "GENERIC", "status": "ERROR",
+                            "error": "TRANSPORT/Connection error: transient retry"}),
+                json.dumps({"step_index": next_idx + 2, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                            "content": "Recovered and completed cleanly."}),
+            ]) + "\n",
+            encoding="utf-8",
+        )
+        r_err_ok = await agy_use.read(target, socket_path=sock)
+        self.assertEqual(r_err_ok["diagnosis"]["classification"], "completed")
+        self.assertEqual(r_err_ok["diagnosis"]["next_action"], "do_not_resend_completed_turn")
+        self.assertFalse(r_err_ok["diagnosis"]["can_continue_explicitly"])
+
+        w_err_ok = await agy_use.wait(
+            target, since_step=sent["since_step"], expected_prompt="SEQ_ORDER_CHECK",
+            timeout=1, poll_interval=0.05, socket_path=sock,
+        )
+        self.assertTrue(w_err_ok["ok"])
+        self.assertEqual(w_err_ok["status"], "completed")
+        self.assertEqual(w_err_ok["response"], "Recovered and completed cleanly.")
+        self.assertEqual(w_err_ok["diagnosis"]["classification"], "completed")
+        self.assertEqual(w_err_ok["diagnosis"]["next_action"], "do_not_resend_completed_turn")
+
+        # 4. Paginated read() windows MUST report partial observation scope and never claim full-turn completion.
+        # (a) Truncated tail window (limit=1, has_more=True)
+        head_only = await agy_use.read(target, from_step=sent["since_step"] + 1, limit=1, socket_path=sock)
+        self.assertTrue(head_only["has_more"])
+        self.assertEqual(head_only["diagnosis"]["classification"], "partial_window")
+        self.assertFalse(head_only["diagnosis"]["window_complete"])
+        self.assertEqual(head_only["diagnosis"]["observation_scope"], "partial_window_truncated_tail")
+        self.assertEqual(head_only["diagnosis"]["next_action"], "read_full_turn_before_acting")
+        self.assertEqual(head_only["diagnosis"]["observed_step_range"], [sent["since_step"] + 1, sent["since_step"] + 1])
+
+        # (b) Middle window (from_step after turn start, limit=1, has_more=True)
+        middle_win = await agy_use.read(target, from_step=next_idx + 1, limit=1, socket_path=sock)
+        self.assertTrue(middle_win["has_more"])
+        self.assertEqual(middle_win["diagnosis"]["classification"], "partial_window")
+        self.assertFalse(middle_win["diagnosis"]["window_complete"])
+        self.assertEqual(middle_win["diagnosis"]["observation_scope"], "partial_window_middle")
+        self.assertEqual(middle_win["diagnosis"]["observed_step_range"], [next_idx + 1, next_idx + 1])
+
+        # (c) Tail window missing turn start (from_step skips turn receipt, has_more=False)
+        tail_missing_head = await agy_use.read(target, from_step=next_idx + 2, limit=0, socket_path=sock)
+        self.assertFalse(tail_missing_head["has_more"])
+        self.assertEqual(tail_missing_head["diagnosis"]["classification"], "partial_window")
+        self.assertFalse(tail_missing_head["diagnosis"]["window_complete"])
+        self.assertEqual(tail_missing_head["diagnosis"]["observation_scope"], "tail_window_missing_head")
+        self.assertEqual(tail_missing_head["diagnosis"]["next_action"], "read_full_turn_before_acting")
+
+        # (d) Empty window past transcript end (total_steps > 0, steps=[])
+        past_end = await agy_use.read(target, from_step=next_idx + 100, limit=10, socket_path=sock)
+        self.assertEqual(past_end["diagnosis"]["classification"], "partial_window")
+        self.assertFalse(past_end["diagnosis"]["window_complete"])
+        self.assertEqual(past_end["diagnosis"]["observation_scope"], "empty_window")
+        self.assertIsNone(past_end["diagnosis"]["observed_step_range"])
+
 
 if __name__ == "__main__":
     unittest.main()

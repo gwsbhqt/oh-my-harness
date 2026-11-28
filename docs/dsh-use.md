@@ -31,11 +31,13 @@ dsh-use wait WORKER_SESSION --since RECEIPT_SEQUENCE --settled --json
 
 | 发生了什么 | 恢复信息 | 接下来怎么做 |
 |---|---|---|
-| 已尝试发送首问，收件未知 | `send-unconfirmed` 在 `error.details`，发送时抛出的异常在顶层 `data`。两者都带 `sessionId`、`since`、`requestId` 和 `sent: null` | 查原会话，从 `since` 继续等待。有原始收件记录时，用完整 `requestId` 核对。 |
+| 已尝试发送首问，收件未知 | `send-unconfirmed` 在 `error.details`，发送时抛出的异常在顶层 `data`。两者都带 `sessionId`、`since`、`requestId` 和 `sent: null` | 用两个完整编号运行 `dsh-use receipt <sessionId> <requestId>`。读到收件后，可从 `since` 等答复。 |
 | 已建会话，发送前准备失败 | 顶层 `data` 有 `created: true`、`sessionId`、`sent: false` | 用 `dsh-use status <sessionId>` 找回已有会话。首问尚未发出。 |
 | 宿主没返回可用的会话编号 | 顶层 `data` 有 `created: null` 和 `sent: false` | 用 `dsh-use sessions --include-blank` 检查同一目标的近期会话。创建结果仍待核对。 |
 
 对**已有会话**用 `send` / `chat` 时，若宿主在回包前抛出异常（内层失败、外层仍回包），JSON 和 Python 结果的顶层 `data` 带 `sessionId`、`since`、`requestId` 和 `sent: null`（不带 `created`），原错误与 500/400 分类不变；`chat` 不会因此自动重发。
+
+用 `receipt` 能看到这次请求已入队或已写为用户消息，以及对应序号。等待答复用 `wait --since`。返回 `request-not-found` 表示当前会话自己的记录里还没有这条凭据。
 
 恢复字段取决于正在运行的服务端。较早的服务端也会在 `send-unconfirmed` 的 `error.details` 返回编号，但在发送首问时抛出异常只返回原错误。若回执没有编号或整个回包丢失，先列出近期会话，再查候选会话的历史。仅凭时间不能确认是哪次派工，再次运行 `new` 可能重复创建会话。
 
